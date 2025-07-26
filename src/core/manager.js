@@ -76,7 +76,6 @@ export const APP = {
      * @function getContext
      * @description (!!!) 获取SillyTavern的全局上下文对象。这是访问所有运行时数据的入口。
      * @returns {object} 上下文对象，包含 chat, characters, settings, eventSource 等。
-     * @see https://docs.sillytavern.app/extensions/api/context/
      */
     getContext,
 
@@ -94,7 +93,6 @@ export const APP = {
     /**
      * @property {object} event_types
      * @description 一个包含所有可用事件名称的枚举对象。
-     * @see https://docs.sillytavern.app/extensions/api/events/
      */
     event_types,
 
