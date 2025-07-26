@@ -1,0 +1,56 @@
+<!-- assets/templates/settings.html -->
+<div class="extension_settings">
+    <div class="inline-drawer">
+        <!-- 抽屉的标题，点击这里可以展开/折叠 -->
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <span>Hevno Plugin</span>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+
+        <!-- 我们的设置内容放在这里，默认是隐藏的 -->
+        <div class="inline-drawer-content">
+            <div class="Hevno_settings_inner_container">
+                <div class="Hevno-setting-item">
+                    <div class="name">Enable Plugin</div>
+                    <div class="checkbox_outer">
+                        <input id="Hevno_enabled_switch" type="checkbox" class="Hevno-checkbox">
+                        <label for="Hevno_enabled_switch"></label>
+                    </div>
+                </div>
+    
+                <div class="Hevno-setting-item">
+                    <div class="name">Demo String</div>
+                    <input id="Hevno_demo_string_input" type="text" class="text_pole" placeholder="Enter the interception message">
+                </div>
+    
+                <div class="Hevno-setting-item description">
+                    <p>This is a foundational build. The interceptor is active. When enabled, it will prevent the normal AI generation and instead output the demo string above.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 将样式移到模板内部，确保它们能正确应用 -->
+<style>
+    .Hevno_settings_inner_container {
+        padding: 10px;
+    }
+    .Hevno-setting-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+    }
+    .Hevno-setting-item .name {
+        font-weight: bold;
+    }
+    .Hevno-setting-item .description p {
+        font-size: 0.9em;
+        color: var(--text_secondary);
+        margin-top: 15px;
+    }
+    .Hevno-checkbox {
+        margin: 0;
+    }
+</style>
