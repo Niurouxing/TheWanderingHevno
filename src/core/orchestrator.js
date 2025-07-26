@@ -1,5 +1,6 @@
-// src/core/orchestrator.js (V5 - 丰富上下文与增强格式化版)
+// src/core/orchestrator.js 
 
+import { dispatch as dispatchLLM } from './llm_dispatcher.js';
 import { APP } from './manager.js';
 
 /**
@@ -140,25 +141,19 @@ export class GenerationOrchestrator {
         console.log(`[Hevno Orchestrator] === START RENDERED PROMPT for ${module.id} ===\n${finalPrompt}\n=== END RENDERED PROMPT for ${module.id} ===`);
 
         // ======================= 【核心修改点】 =======================
-        // 创建一个“日志累加式”的模拟输出。
-        // 这个输出会清晰地标明是哪个模块生成的，并完整地包含该模块接收到的最终输入(prompt)。
-        // 这样，当模块之间相互引用时，输出会像滚雪球一样越来越大，
-        // 最终结果将展示出整个数据流的完整路径。
-
-        const result = `
-<<<<<<<<<< START: MOCK OUTPUT for "${module.name}" [${module.id}] >>>>>>>>>>
-
-[This module received the following prompt and produced this mock response based on it.]
-
---- [PROMPT FOR ${module.id}] ---
-${finalPrompt}
---- [END PROMPT FOR ${module.id}] ---
-
-<<<<<<<<<< END: MOCK OUTPUT for "${module.name}" [${module.id}] >>>>>>>>>>
-`;
+        // 移除了模拟逻辑，替换为真实的、可分派的LLM调用。
+        let result;
+        try {
+            toastr.info(`Running module: ${module.name}...`, "Hevno Pipeline");
+            result = await dispatchLLM(finalPrompt, module.llm);
+            toastr.success(`Module "${module.name}" completed!`, "Hevno Pipeline");
+        } catch (error) {
+            console.error(`[Hevno Orchestrator] Failed to execute module ${module.id}:`, error);
+            toastr.error(`Error in module "${module.name}": ${error.message}`, "Pipeline Error");
+            // 抛出错误以中止整个管线执行
+            throw error;
+        }
         // =============================================================
-
-        await new Promise(resolve => setTimeout(resolve, Math.random() * 100 + 50)); // 缩短延迟以加快调试
 
         console.log(`[Hevno Orchestrator] Finished module: ${module.id}. Result stored.`);
         this.initialContext.outputs[module.id] = result;
