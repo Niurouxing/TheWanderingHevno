@@ -30,6 +30,7 @@ import {
     selected_world_info,
     loadWorldInfo,
     world_names,
+    world_info, // 添加这个导入来访问世界书数据
 } from '/scripts/world-info.js';
 
 import { defaultSettings } from '../data/pluginSetting.js';
@@ -115,15 +116,15 @@ export const SYSTEM = {
      * 获取当前全局选择的世界书列表。
      * @returns {Array<string>}
      */
-    getSelectedWorldInfo: () => [...window.selected_world_info],
+    getSelectedWorldInfo: () => [...selected_world_info],
 
     /**
      * 临时设置SillyTavern全局选择的世界书列表。
      * @param {Array<string>} worlds - 世界书文件名列表。
      */
     setSelectedWorldInfo: (worlds) => {
-        window.selected_world_info.length = 0;
-        window.selected_world_info.push(...worlds);
+        selected_world_info.length = 0;
+        selected_world_info.push(...worlds);
     },
 
     /**
@@ -133,12 +134,48 @@ export const SYSTEM = {
      */
     loadWorldInfo: loadWorldInfo,
 
+    /**
+     * 【新增】清理世界书缓存和状态
+     */
+    clearWorldInfoCache: () => {
+        try {
+            // 清理world_info中的所有条目
+            if (world_info && typeof world_info === 'object') {
+                Object.keys(world_info).forEach(key => {
+                    delete world_info[key];
+                });
+            }
+            console.log('[SYSTEM] World info cache cleared');
+        } catch (error) {
+            console.warn('[SYSTEM] Failed to clear world info cache:', error);
+        }
+    },
+
+    /**
+     * 【新增】卸载所有已加载的世界书（但保留选择列表）
+     */
+    unloadAllWorldInfo: async () => {
+        try {
+            // 【修复】只清理世界书数据缓存，不清理选择列表
+            // 这样loadWorldInfo可以重新加载，但selected_world_info保持正确状态
+            if (world_info && typeof world_info === 'object') {
+                Object.keys(world_info).forEach(key => {
+                    delete world_info[key];
+                });
+            }
+            
+            console.log('[SYSTEM] World info data cleared (keeping selection)');
+        } catch (error) {
+            console.warn('[SYSTEM] Failed to unload world info:', error);
+        }
+    },
+
 
     /**
      * 【新增】获取所有已知的世界书文件名。
      * @returns {Array<string>}
      */
-    getWorldNames: () => [...window.world_names],
+    getWorldNames: () => [...world_names],
 
 
     /**
@@ -149,4 +186,51 @@ export const SYSTEM = {
         world_names.length = 0; // Clear the array
         Array.prototype.push.apply(world_names, newWorldNames); // Mutate it
     },
+
+    /**
+     * 获取角色数据
+     * @returns {Array}
+     */
+    getCharacters: () => getContext()?.characters || [],
+
+    /**
+     * 获取当前角色ID
+     * @returns {number}
+     */
+    getCurrentCharacterId: () => getContext()?.characterId || -1,
+
+    /**
+     * 获取聊天元数据
+     * @returns {object}
+     */
+    getChatMetadata: () => getContext()?.chat_metadata || {},
+
+    /**
+     * 设置聊天元数据
+     * @param {string} key
+     * @param {any} value
+     */
+    setChatMetadata: (key, value) => {
+        const context = getContext();
+        if (context?.chat_metadata) {
+            context.chat_metadata[key] = value;
+        }
+    },
+
+    /**
+     * 获取power_user对象
+     * @returns {object}
+     */
+    getPowerUser: () => getContext()?.power_user || {},
+
+    /**
+     * METADATA_KEY常量
+     */
+    METADATA_KEY: 'world_info',
+
+    /**
+     * 获取世界书数据对象
+     * @returns {object}
+     */
+    getWorldInfoData: () => world_info,
 };

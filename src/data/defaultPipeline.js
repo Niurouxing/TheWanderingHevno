@@ -9,8 +9,8 @@ export const defaultPipeline = [
         "name": "1. 故事生成器",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.8 },
-        "worldInfo": ["world_info.json"], // 假设这是一个包含角色背景的世界书
+        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.8 },
+        "worldInfo": ["world_info"], // 使用正确的世界书名称（不带.json扩展名）
         "promptSlots": [{
             "enabled": true,
             "content": "你是一位富有想象力的小说家。请根据用户的请求，创作一个包含多个角色的、戏剧性的中世纪奇幻小说。场景描述需要生动，并明确介绍至少两名出场角色的名字和简要特征，为后续情节发展埋下伏笔。\n\n用户请求:\n{{sillyTavern.userInput}}\n\n# 世界信息:{{module.worldInfo}}\n\n你的输出必须是一段200字以上的流畅的故事，不能包含任何控制文本或者指令。"
@@ -23,7 +23,7 @@ export const defaultPipeline = [
         "name": "2. LLM识别角色",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.1 },
+        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.1 },
         "promptSlots": [{
             "enabled": true,
             "content": "分析工具：严格按照 'Characters: 角色A, 角色B, 角色C' 的格式，从以下文本中提取所有被命名的角色。如果一个角色都没有，必须输出 'Characters: None'。不要添加任何其他解释或前言。\n\n文本：\n{{outputs.story_generator}}"
@@ -57,8 +57,8 @@ export const defaultPipeline = [
             "id": "character_action_template", // 临时ID
             "name": "角色行动分析模板",
             "type": "llm",
-            "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.7 },
-            "worldInfo": ["character_info.json"], // 假设这是一个包含角色背景的世界书
+            "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.7 },
+            "worldInfo": ["character_info"], // 使用正确的世界书名称（不带.json扩展名）
             "promptSlots": [{
                 "enabled": true,
                 "content": "当前场景中有一位名叫 '{{item}}' 的角色。基于TA的背景故事和当前场景，设想TA接下来最可能的一个具体行动和一段内心独白。以第三人称小说风格进行描述。\n\n# 角色 '{{item}}' 的背景\n{{module.worldInfo}}\n\n# 当前场景\n{{outputs.story_generator}}"
@@ -92,7 +92,7 @@ export const defaultPipeline = [
         "name": "6. LLM检查战斗可能性",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.0 }, // temperature=0.0 使输出更稳定
+        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.0 }, // temperature=0.0 使输出更稳定
         "promptSlots": [{
             "enabled": true,
             "content": "分析以下场景描述中是否隐含了即将发生的物理冲突或战斗意图。你的回答只能是 'Yes' 或 'No'，不要包含任何其他字符或解释。\n\n场景:\n{{outputs.aggregate_character_actions}}"
@@ -135,7 +135,7 @@ export const defaultPipeline = [
         "name": "9a. 战斗流程",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.9 },
+        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.9 },
         "promptSlots": [{ "enabled": true, "content": "续写下面的故事，引入一场激烈的战斗。详细描写战斗的起因和最初的几个回合。\n\n故事背景：\n{{outputs.aggregate_character_actions}}" }]
     },
     {
@@ -143,7 +143,7 @@ export const defaultPipeline = [
         "name": "9b. 和平流程",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.6 },
+        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.6 },
         "promptSlots": [{ "enabled": true, "content": "续写下面的故事，展开一段充满紧张感的对话或非暴力冲突。聚焦于角色的心理博弈和潜台词。\n\n故事背景：\n{{outputs.aggregate_character_actions}}" }]
     },
 
@@ -157,7 +157,7 @@ export const defaultPipeline = [
         "name": "10. 最终整合器",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.5 },
+        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.5 },
         "promptSlots": [{
             "enabled": true,
             // 这个 prompt 现在可以安全地处理空输入了，因为 {{outputs.combat_module}} 或 {{outputs.peaceful_module}}
