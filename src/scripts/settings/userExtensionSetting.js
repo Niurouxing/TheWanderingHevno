@@ -93,7 +93,7 @@ function handleImportPipeline(event) {
 /**
  * 渲染设置界面的当前值
  */
-function renderSettings() {
+export function renderSettings() {
     $('#Hevno_enabled_switch').prop('checked', USER.settings.isEnabled);
     $('#Hevno_demo_string_input').val(USER.settings.demoString);
 
