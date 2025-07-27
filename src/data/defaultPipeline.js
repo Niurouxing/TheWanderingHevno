@@ -10,9 +10,10 @@ export const defaultPipeline = [
         "enabled": true,
         "type": "llm",
         "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.8 },
+        "worldInfo": ["world_info.json"], // 假设这是一个包含角色背景的世界书
         "promptSlots": [{
             "enabled": true,
-            "content": "你是一位富有想象力的小说家。请根据用户的请求，创作一个包含多个角色的、戏剧性的中世纪奇幻小说。场景描述需要生动，并明确介绍至少两名出场角色的名字和简要特征，为后续情节发展埋下伏笔。\n\n用户请求:\n{{sillyTavern.userInput}}\n\n你的输出必须是一段200字以上的流畅的故事，不能包含任何控制文本或者指令。"
+            "content": "你是一位富有想象力的小说家。请根据用户的请求，创作一个包含多个角色的、戏剧性的中世纪奇幻小说。场景描述需要生动，并明确介绍至少两名出场角色的名字和简要特征，为后续情节发展埋下伏笔。\n\n用户请求:\n{{sillyTavern.userInput}}\n\n# 世界信息:{{module.worldInfo}}\n\n你的输出必须是一段200字以上的流畅的故事，不能包含任何控制文本或者指令。"
         }]
     },
     
@@ -57,7 +58,7 @@ export const defaultPipeline = [
             "name": "角色行动分析模板",
             "type": "llm",
             "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.7 },
-            "worldInfo": ["Character-Backstory.json"], // 假设这是一个包含角色背景的世界书
+            "worldInfo": ["character_info.json"], // 假设这是一个包含角色背景的世界书
             "promptSlots": [{
                 "enabled": true,
                 "content": "当前场景中有一位名叫 '{{item}}' 的角色。基于TA的背景故事和当前场景，设想TA接下来最可能的一个具体行动和一段内心独白。以第三人称小说风格进行描述。\n\n# 角色 '{{item}}' 的背景\n{{module.worldInfo}}\n\n# 当前场景\n{{outputs.story_generator}}"
