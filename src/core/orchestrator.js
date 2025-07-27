@@ -1,83 +1,41 @@
-// src/core/orchestrator.js 
+// src/core/orchestrator.js
 
 import { dispatch as dispatchLLM } from './llm_dispatcher.js';
-import { APP } from './manager.js';
+import { APP, SYSTEM } from './manager.js';
 
 /**
  * @class GenerationOrchestrator
  * @description 模块化生成流程的编排与执行引擎。
- *              通过解析prompt中的 {{outputs.*}} 占位符自动推断模块依赖，并支持丰富的SillyTavern上下文变量。
  */
 export class GenerationOrchestrator {
-    /**
-     * @param {Array<object>} pipelineDefinition - 包含所有模块定义的数组。
-     * @param {object} initialSillyTavernContext - 从 `APP.getContext()` 获取的原始上下文。
-     */
     constructor(pipelineDefinition, initialSillyTavernContext) {
         this.pipeline = pipelineDefinition.filter(m => m.enabled);
-        
-        const context = initialSillyTavernContext;
-        const mainCharacter = (context.characterId !== -1 && context.characters && context.characters[context.characterId]) 
-                              ? context.characters[context.characterId] 
-                              : null;
+        this.rawContext = initialSillyTavernContext;
 
-        // 【增强点】构建一个更丰富的初始上下文，包含SillyTavern的常用数据
-        this.initialContext = {
+        this.context = {
             sillyTavern: {
-                chat: context.chat,
-                character: mainCharacter,
-                userInput: context.chat.slice(-1)[0]?.mes || '',
-                userName: context.name1,
-                // 新增：直接暴露更多有用信息
-                worldInfo: context.worldInfo,
-                authorsNote: context.authorsNote,
-                charGreeting: mainCharacter?.first_mes || '',
+                character: this.rawContext.characters[this.rawContext.characterId],
+                userInput: this.rawContext.chat.slice(-1)[0]?.mes || '',
+                userName: this.rawContext.name1,
+                chat: this.rawContext.chat,
             },
-            // 用于存储各个模块的输出
-            outputs: {}, 
+            outputs: {},
+            module: {},
         };
 
-        console.log('[DEBUG] Orchestrator constructed its enriched initialContext:', this.initialContext);
-        
-        // 【可配置】指定哪个模块的输出是整个管线的最终结果
-        this.finalOutputModuleId = 'final_formatter'; 
+        this.finalOutputModuleId = 'final_formatter';
     }
 
-    /**
-     * 将聊天历史数组格式化为LLM可读的文本。
-     * @param {Array<object>} chatArray - SillyTavern的聊天对象数组。
-     * @returns {string} 格式化后的对话字符串。
-     */
     _formatChatHistory(chatArray) {
         if (!Array.isArray(chatArray)) return '';
         return chatArray.map(message => {
-            const prefix = message.is_user 
-                ? (this.initialContext.sillyTavern.userName || 'User') 
-                : (this.initialContext.sillyTavern.character?.name || 'Assistant');
+            const prefix = message.is_user ? (this.context.sillyTavern.userName || 'User') : (this.context.sillyTavern.character?.name || 'Assistant');
             return `${prefix}: ${message.mes}`;
         }).join('\n');
     }
 
-    /**
-     * 【新增】格式化世界信息（World Info），使其更适合注入Prompt。
-     * @param {Array<object>} worldInfoArray - SillyTavern的世界信息数组。
-     * @returns {string} 格式化后的世界信息字符串。
-     */
-    _formatWorldInfo(worldInfoArray) {
-        if (!Array.isArray(worldInfoArray)) return '';
-        return worldInfoArray
-            .filter(entry => entry.enabled) // 只使用启用的条目
-            .map(entry => `[关键字: ${entry.key}]\n${entry.content}`)
-            .join('\n\n---\n\n');
-    }
-
-    /**
-     * 根据路径从上下文中解析模板变量的值。
-     * @param {string} path - 点分隔的路径，例如 'sillyTavern.character.name'。
-     * @returns {*} 解析出的值，如果路径无效则返回undefined。
-     */
-    _resolvePath(path) {
-        let current = this.initialContext;
+    _resolvePath(path, contextObject) {
+        let current = contextObject;
         const parts = path.split('.');
         for (let i = 0; i < parts.length; i++) {
             const part = parts[i];
@@ -88,39 +46,135 @@ export class GenerationOrchestrator {
                 return undefined;
             }
         }
-        console.log(`[DEBUG] _resolvePath: Resolved "${path}" successfully.`);
         return current;
     }
 
     /**
-     * 渲染一个模块的prompt模板。
-     * @param {object} module - 模块定义。
-     * @returns {string} 渲染后的完整prompt字符串。
+     * This is the definitive solution. It works by creating a "bubble universe"
+     * for the WI calculation by snapshotting and hijacking ALL relevant global states
+     * that SillyTavern's `getSortedEntries` function and its children directly access.
+     * This prevents any other WI source (character, chat, persona) from polluting
+     * the calculation for our specific module.
+     *
+     * @param {object} module - The current module definition.
+     * @param {string} preRenderedPrompt - The pre-rendered prompt for WI context.
+     * @returns {Promise<string>} The activated World Info string for this module.
      */
+    async _calculateModuleWorldInfo(module, preRenderedPrompt) {
+        if (!module.worldInfo || !Array.isArray(module.worldInfo) || module.worldInfo.length === 0) {
+            return '';
+        }
+
+        try {
+            // 使用已导入的SYSTEM对象来获取世界书函数
+            if (typeof SYSTEM.getWorldInfoPrompt !== 'function' || typeof SYSTEM.loadWorldInfo !== 'function') {
+                console.error('[Orchestrator] World info functions not available in SYSTEM object');
+                console.log('[Orchestrator] Available SYSTEM methods:', Object.keys(SYSTEM));
+                return '';
+            }
+
+            // 备份原始状态
+            const originalState = {
+                selected_world_info: window.selected_world_info ? [...window.selected_world_info] : [],
+                characters: window.characters ? [...window.characters] : [],
+                chat_metadata: window.chat_metadata ? JSON.parse(JSON.stringify(window.chat_metadata)) : {},
+                power_user_lorebook: window.power_user?.persona_description_lorebook
+            };
+
+            console.log(`[Orchestrator] Setting module WI: [${module.worldInfo.join(', ')}]`);
+
+            // 初始化全局变量（如果不存在）
+            if (!window.selected_world_info) {
+                window.selected_world_info = [];
+            }
+            if (!window.characters) {
+                window.characters = [];
+            }
+            if (!window.chat_metadata) {
+                window.chat_metadata = {};
+            }
+            if (!window.power_user) {
+                window.power_user = {};
+            }
+
+            // 设置模块的世界书为唯一选择
+            window.selected_world_info.length = 0;
+            window.selected_world_info.push(...module.worldInfo);
+
+            // 清空其他世界书源
+            window.characters.length = 0;
+            Object.keys(window.chat_metadata).forEach(key => {
+                delete window.chat_metadata[key];
+            });
+
+            window.power_user.persona_description_lorebook = undefined;
+
+            // 预加载世界书缓存
+            const loadPromises = module.worldInfo.map(worldName => SYSTEM.loadWorldInfo(worldName));
+            await Promise.all(loadPromises);
+
+            // 准备聊天上下文
+            const chatMessages = this.rawContext.chat
+                .filter(m => !m.is_system)
+                .map(m => m.mes)
+                .reverse();
+
+            const maxContextSize = this.rawContext.max_context || 4096;
+
+            // 准备全局扫描数据
+            const globalScanData = {
+                personaDescription: '',
+                characterDescription: '',
+                characterPersonality: '',
+                characterDepthPrompt: '',
+                scenario: '',
+                creatorNotes: ''
+            };
+
+            console.log(`[Orchestrator] Calling getWorldInfoPrompt with ${chatMessages.length} messages, maxContext: ${maxContextSize}`);
+
+            // 执行世界书计算
+            const wiResult = await SYSTEM.getWorldInfoPrompt(chatMessages, maxContextSize, true, globalScanData);
+
+            const moduleWiString = (wiResult?.worldInfoString || wiResult || '').toString().trim();
+            console.log(`[Orchestrator] WI calculated. Length: ${moduleWiString.length}`);
+
+            // 恢复原始状态
+            window.selected_world_info.length = 0;
+            window.selected_world_info.push(...originalState.selected_world_info);
+
+            window.characters.length = 0;
+            window.characters.push(...originalState.characters);
+
+            Object.keys(window.chat_metadata).forEach(key => {
+                delete window.chat_metadata[key];
+            });
+            Object.assign(window.chat_metadata, originalState.chat_metadata);
+
+            if (originalState.power_user_lorebook !== undefined) {
+                window.power_user.persona_description_lorebook = originalState.power_user_lorebook;
+            }
+
+            console.log('[Orchestrator] Original state restored.');
+            return moduleWiString;
+
+        } catch (error) {
+            console.error(`[Orchestrator] Error calculating WI:`, error);
+            console.error('[Orchestrator] Error stack:', error.stack);
+            return '';
+        }
+    }
+
+
     _renderPrompt(module) {
         let fullPrompt = '';
         for (const slot of module.promptSlots) {
             if (slot.enabled) {
                 const renderedContent = slot.content.replace(/{{(.*?)}}/g, (match, path) => {
-                    const trimmedPath = path.trim();
-                    const value = this._resolvePath(trimmedPath);
-
-                    if (value === undefined || value === null) {
-                        console.warn(`[Orchestrator] Template variable "{{${trimmedPath}}}" resolved to undefined/null. Keeping original placeholder.`);
-                        return match; 
-                    }
-                    
-                    // 【增强点】使用专门的格式化函数处理特定数据类型
-                    if (trimmedPath === 'sillyTavern.chat') {
-                        return this._formatChatHistory(value);
-                    }
-                    if (trimmedPath === 'sillyTavern.worldInfo') {
-                        return this._formatWorldInfo(value);
-                    }
-                    
-                    if (typeof value === 'object' && !Array.isArray(value)) {
-                        return JSON.stringify(value, null, 2);
-                    }
+                    const value = this._resolvePath(path.trim(), this.context);
+                    if (value === undefined || value === null) return match;
+                    if (path.trim() === 'sillyTavern.chat') return this._formatChatHistory(value);
+                    if (typeof value === 'object') return JSON.stringify(value, null, 2);
                     return String(value);
                 });
                 fullPrompt += renderedContent + '\n';
@@ -128,36 +182,24 @@ export class GenerationOrchestrator {
         }
         return fullPrompt.trim();
     }
-    
-    /**
-     * 执行单个模块的逻辑。
-     * @param {object} module - 要执行的模块定义。
-     * @returns {Promise<{id: string, result: string}>} 包含模块ID和结果的对象。
-     */
+
     async _executeModule(module) {
         console.log(`[Hevno Orchestrator] Executing module: ${module.id} (${module.name})`);
-        const finalPrompt = this._renderPrompt(module);
-        
-        console.log(`[Hevno Orchestrator] === START RENDERED PROMPT for ${module.id} ===\n${finalPrompt}\n=== END RENDERED PROMPT for ${module.id} ===`);
 
-        // ======================= 【核心修改点】 =======================
-        // 移除了模拟逻辑，替换为真实的、可分派的LLM调用。
-        let result;
+        this.context.module = { worldInfo: '' };
+        const promptForWiScan = this._renderPrompt(module);
+        this.context.module.worldInfo = await this._calculateModuleWorldInfo(module, promptForWiScan);
+        const finalPrompt = this._renderPrompt(module);
+        console.log(`[Hevno Orchestrator] === START FINAL RENDERED PROMPT for ${module.id} ===\n${finalPrompt}\n=== END FINAL RENDERED PROMPT for ${module.id} ===`);
+
         try {
-            toastr.info(`Running module: ${module.name}...`, "Hevno Pipeline");
-            result = await dispatchLLM(finalPrompt, module.llm);
-            toastr.success(`Module "${module.name}" completed!`, "Hevno Pipeline");
+            const result = await dispatchLLM(finalPrompt, module.llm);
+            this.context.outputs[module.id] = result;
+            return { id: module.id, result };
         } catch (error) {
             console.error(`[Hevno Orchestrator] Failed to execute module ${module.id}:`, error);
-            toastr.error(`Error in module "${module.name}": ${error.message}`, "Pipeline Error");
-            // 抛出错误以中止整个管线执行
             throw error;
         }
-        // =============================================================
-
-        console.log(`[Hevno Orchestrator] Finished module: ${module.id}. Result stored.`);
-        this.initialContext.outputs[module.id] = result;
-        return { id: module.id, result };
     }
 
     _extractDependencies(module) {
@@ -184,9 +226,7 @@ export class GenerationOrchestrator {
             const dependencies = this._extractDependencies(module);
             dependencyGraph.set(module.id, dependencies);
             inDegree.set(module.id, dependencies.size);
-            if (!reverseDependencyGraph.has(module.id)) {
-                reverseDependencyGraph.set(module.id, new Set());
-            }
+            if (!reverseDependencyGraph.has(module.id)) reverseDependencyGraph.set(module.id, new Set());
             for (const dep of dependencies) {
                 if (!reverseDependencyGraph.has(dep)) reverseDependencyGraph.set(dep, new Set());
                 reverseDependencyGraph.get(dep).add(module.id);
@@ -194,6 +234,7 @@ export class GenerationOrchestrator {
         }
 
         let executionQueue = this.pipeline.filter(m => inDegree.get(m.id) === 0);
+
         while (executionQueue.length > 0) {
             console.log(`[Hevno Orchestrator] Executing parallel batch of ${executionQueue.length} modules:`, executionQueue.map(m => m.id));
             const promises = executionQueue.map(module => this._executeModule(module));
@@ -212,22 +253,14 @@ export class GenerationOrchestrator {
             executionQueue = nextExecutionQueue;
         }
 
-        const unexecutedModules = this.pipeline.filter(m => !(m.id in this.initialContext.outputs));
+        const unexecutedModules = this.pipeline.filter(m => !(m.id in this.context.outputs));
         if (unexecutedModules.length > 0) {
             const unexecutedIds = unexecutedModules.map(m => m.id).join(', ');
             throw new Error(`Execution failed. A circular dependency may exist. Unexecuted modules: ${unexecutedIds}`);
         }
-        
-        console.log("[Hevno Orchestrator] Pipeline finished. All outputs:", this.initialContext.outputs);
 
-        // 【改进点】返回指定最终模块的真实（模拟）输出
-        const finalOutput = this.initialContext.outputs[this.finalOutputModuleId];
-        if (finalOutput) {
-            console.log(`[Hevno Orchestrator] Returning final output from module: ${this.finalOutputModuleId}`);
-            return finalOutput;
-        }
-
-        console.warn(`[Hevno Orchestrator] Pipeline completed, but the designated final output module "${this.finalOutputModuleId}" did not produce a result.`);
-        return "Pipeline completed, but no final output was designated.";
+        console.log("[Hevno Orchestrator] Pipeline finished. All outputs:", this.context.outputs);
+        const finalOutput = this.context.outputs[this.finalOutputModuleId];
+        return finalOutput || "Pipeline completed, but no final output was designated.";
     }
 }

@@ -229,215 +229,70 @@ export async function dispatch(prompt, llmConfig) {
 
 ### core/manager.js
 ```
-// src/core/manager.js (附有详细注释文档)
+// src/core/manager.js
 
 /**
  * @file manager.js
  * @description 插件的核心管理器和API抽象层。
- * @version 1.1.0
- *
- * @see README.md - 插件的整体架构设计。
- *
- * @summary
- * 这个文件是插件与SillyTavern进行交互的唯一桥梁。它将SillyTavern复杂、有时甚至是全局的API
- * 封装成一组逻辑清晰、易于管理的单例对象（APP, USER, EDITOR, SYSTEM）。
- *
- * 【新开发者必读】
- * 任何与SillyTavern的直接交互（如调用函数、获取数据）都应该首先在这里进行封装。
- * 插件的其他部分（如index.js）应优先调用这里的管理器，而不是直接触碰SillyTavern的API。
- * 这种设计模式（称为“外观模式”或“适配器模式”）有以下好处：
- * 1.  **解耦**: 插件的业务逻辑与SillyTavern的实现细节分离。
- * 2.  **可维护性**: 如果SillyTavern未来更新了API，我们只需要修改这个文件，而不用改动整个插件。
- * 3.  **清晰性**: 提供了清晰的API边界，新开发者能快速了解插件可用的所有SillyTavern功能。
  */
 
-// ===================================================================================
 // I. 导入SillyTavern的核心功能
-// ===================================================================================
-// 注意: 导入路径是相对于SillyTavern的 /public/ 目录的。
-
-// 从 /script.js 导入SillyTavern的核心功能函数。
-// 这些函数大多是经过 `export` 关键字明确导出的“公共API”。
 import {
-    // 事件系统
     eventSource,
     event_types,
-    // 设置与持久化
     saveSettingsDebounced,
-    // 核心消息处理 (!!!)
     saveReply,
     saveChatConditional,
     activateSendButtons,
-    // 其他常用工具
     addOneMessage,
     deleteLastMessage,
     generateRaw,
     reloadCurrentChat,
     sendSystemMessage,
     substituteParams,
-    
 } from '/script.js';
-
-import {getTokenCountAsync} from '/scripts/tokenizers.js'; // 异步计算token数量的函数
-
-// 从 /scripts/extensions.js 导入专门为插件提供的功能。
+import { getTokenCountAsync } from '/scripts/tokenizers.js';
 import { getContext, extension_settings, renderExtensionTemplateAsync } from '/scripts/extensions.js';
-// 从 /scripts/popup.js 导入UI组件。
 import { Popup, POPUP_TYPE, callGenericPopup } from '/scripts/popup.js';
 
-// 导入插件自身的默认设置，作为回退方案。
+// 【修改】导入正确的、高层的API和可写变量
+import {
+    getWorldInfoPrompt,
+    selected_world_info,
+    loadWorldInfo,
+    world_names,
+} from '/scripts/world-info.js';
+
 import { defaultSettings } from '../data/pluginSetting.js';
 
-
-// ===================================================================================
 // II. 定义和导出管理器
-// ===================================================================================
 
 /**
  * @namespace APP
- * @description 应用管理器 (APP): 封装与SillyTavern应用本身交互的核心API。
- *              这是最常用的管理器，提供了对SillyTavern状态和核心流程的访问。
+ * @description 应用管理器 (APP)
  */
 export const APP = {
-    // -----------------------------------------------------------------------------
-    // 核心上下文与数据 API
-    // -----------------------------------------------------------------------------
-
-    /**
-     * @function getContext
-     * @description (!!!) 获取SillyTavern的全局上下文对象。这是访问所有运行时数据的入口。
-     * @returns {object} 上下文对象，包含 chat, characters, settings, eventSource 等。
-     * @see https://docs.sillytavern.app/extensions/api/context/
-     */
     getContext,
-
-    // -----------------------------------------------------------------------------
-    // 事件系统 API
-    // -----------------------------------------------------------------------------
-
-    /**
-     * @property {EventEmitter} eventSource
-     * @description SillyTavern的事件发射器，用于监听应用内的各种事件。
-     * @example APP.eventSource.on(APP.event_types.MESSAGE_RECEIVED, (messageId) => { ... });
-     */
     eventSource,
-
-    /**
-     * @property {object} event_types
-     * @description 一个包含所有可用事件名称的枚举对象。
-     * @see https://docs.sillytavern.app/extensions/api/events/
-     */
     event_types,
-
-    // -----------------------------------------------------------------------------
-    // 消息处理与生成流程控制 API
-    // -----------------------------------------------------------------------------
-
-    /**
-     * @function saveReply
-     * @description (!!!) 【推荐】将一个字符串作为AI回复注入SillyTavern的完整消息处理流程。
-     *              这是实现“喂回”机制的核心，比 addOneMessage 更健壮。
-     * @param {object} options - 包含回复信息的对象。
-     * @example await APP.saveReply({ type: 'normal', getMessage: '你好！' });
-     */
     saveReply,
-
-    /**
-     * @function activateSendButtons
-     * @description (!!!) 【关键】解锁UI，重新启用发送按钮。在拦截并中止生成后，必须在finally块中调用此函数。
-     *              这是 unblockGeneration 的安全、公共的替代品。
-     */
     unblockGeneration: activateSendButtons,
-
-    /**
-     * @function generateRaw
-     * @description 【未来可用】在后台静默发起一次LLM调用，不影响当前聊天界面。
-     *              对于需要LLM进行数据处理的复杂插件（如摘要、翻译）非常有用。
-     * @param {string} prompt - 要发送给LLM的提示。
-     * @returns {Promise<string>} LLM生成的文本。
-     */
     generateRaw,
-
-    // -----------------------------------------------------------------------------
-    // 聊天记录操作 API
-    // -----------------------------------------------------------------------------
-
-    /**
-     * @function addOneMessage
-     * @description 【未来可用】将一个标准格式的消息对象直接渲染到聊天界面。
-     *              主要用于添加非AI生成的、系统性的消息。对于AI回复，应优先使用 saveReply。
-     * @param {object} messageObject - 符合SillyTavern格式的消息对象。
-     */
     addOneMessage,
-
-    /**
-     * @function sendSystemMessage
-     * @description 【未来可用】一个更高级的函数，用于方便地发送格式化的系统消息。
-     * @param {string} type - 系统消息类型, e.g., 'generic', 'comment'。
-     * @param {string} text - 消息内容。
-     */
     sendSystemMessage,
-
-    /**
-     * @function deleteLastMessage
-     * @description 【未来可用】删除聊天记录中的最后一条消息。
-     */
     deleteLastMessage,
-
-    /**
-     * @function reloadCurrentChat
-     * @description 【未来可用】强制重新加载和渲染整个聊天界面。
-     *              在你对聊天状态做了大量底层修改后，可以使用此函数来确保UI同步。
-     */
     reloadCurrentChat,
-
-    // -----------------------------------------------------------------------------
-    // 持久化 API
-    // -----------------------------------------------------------------------------
-
-    /**
-     * @function saveChatConditional
-     * @description (!!!) 保存当前的聊天记录到文件。
-     */
     saveChatConditional,
-
-    // -----------------------------------------------------------------------------
-    // 模板与工具 API
-    // -----------------------------------------------------------------------------
-
-    /**
-     * @function renderExtensionTemplateAsync
-     * @description 【UI】异步加载并渲染插件的HTML模板文件。
-     */
     renderExtensionTemplateAsync,
-
-    /**
-     * @function substituteParams
-     * @description 【未来可用】替换字符串中的宏，如 {{user}}, {{char}}。
-     */
     substituteParams,
-
-    /**
-     * @function getTokenCountAsync
-     * @description 【未来可用】异步计算给定字符串的token数量。对于需要管理上下文长度的插件至关重要。
-     */
     getTokenCountAsync,
 };
 
-
 /**
  * @namespace USER
- * @description 用户数据管理器 (USER): 专门处理本插件的设置，提供优雅的读取和保存接口。
+ * @description 用户数据管理器 (USER)
  */
 export const USER = {
-    /**
-     * @property {object} settings
-     * @description 一个Proxy对象，用于访问插件设置。
-     *              它会自动处理从SillyTavern的`extension_settings`中读取数据，
-     *              并在找不到值时回退到`defaultSettings`。
-     * @example const isEnabled = USER.settings.isEnabled;
-     * @example USER.settings.demoString = "New value"; // 这会自动触发保存
-     */
     settings: new Proxy({}, {
         get(_, property) {
             const settings = extension_settings.Hevno_settings;
@@ -455,18 +310,12 @@ export const USER = {
             return true;
         },
     }),
-
-    /**
-     * @function saveSettings
-     * @description 手动触发一次设置保存（带防抖）。通常不需要手动调用，因为`USER.settings`的set操作会自动保存。
-     */
     saveSettings: saveSettingsDebounced,
 };
 
-
 /**
  * @namespace EDITOR
- * @description 编辑器/UI管理器 (EDITOR): 封装与SillyTavern UI组件的交互，如弹窗。
+ * @description 编辑器/UI管理器 (EDITOR)
  */
 export const EDITOR = {
     Popup,
@@ -474,23 +323,62 @@ export const EDITOR = {
     callGenericPopup,
 };
 
-
 /**
  * @namespace SYSTEM
- * @description 系统工具管理器 (SYSTEM): 封装插件的系统级操作，主要是资源加载。
+ * @description 系统工具管理器 (SYSTEM)
  */
 export const SYSTEM = {
-    /**
-     * @function getTemplate
-     * @description 加载位于插件 `assets/templates` 目录下的HTML模板。
-     * @param {string} name - HTML文件名（不含.html后缀）。
-     * @returns {Promise<string>} HTML内容的字符串。
-     * @example const settingsHtml = await SYSTEM.getTemplate('settings');
-     */
     getTemplate: (name) => {
-        // 注意：这里的路径是相对于 /public/extensions/ 目录的。
-        // 如果你的插件文件夹是 Hevno，并且位于 third-party 子目录，路径就是 'third-party/Hevno/...'
         return APP.renderExtensionTemplateAsync('third-party/Hevno/assets/templates', name);
+    },
+
+    /**
+     * 【最终版】封装 SillyTavern 的顶层 World Info 获取函数。
+     * @param {Array<string>} chat - 聊天消息文本数组
+     * @param {number} maxContext - 最大上下文大小
+     * @param {boolean} isDryRun - 是否为演练模式
+     * @param {object} globalScanData - 角色、场景等附加扫描数据
+     * @returns {Promise<object>} 返回一个包含 .worldInfoString 的对象
+     */
+    getWorldInfoPrompt: getWorldInfoPrompt,
+
+    /**
+     * 获取当前全局选择的世界书列表。
+     * @returns {Array<string>}
+     */
+    getSelectedWorldInfo: () => [...window.selected_world_info],
+
+    /**
+     * 临时设置SillyTavern全局选择的世界书列表。
+     * @param {Array<string>} worlds - 世界书文件名列表。
+     */
+    setSelectedWorldInfo: (worlds) => {
+        window.selected_world_info.length = 0;
+        window.selected_world_info.push(...worlds);
+    },
+
+    /**
+     * 【新增】直接暴露SillyTavern的WI文件加载函数。
+     * @param {string} worldName - 要加载的世界书文件名。
+     * @returns {Promise<object|null>} 加载的数据或null。
+     */
+    loadWorldInfo: loadWorldInfo,
+
+
+    /**
+     * 【新增】获取所有已知的世界书文件名。
+     * @returns {Array<string>}
+     */
+    getWorldNames: () => [...window.world_names],
+
+
+    /**
+     * 【新增】临时设置所有已知的世界书文件名。
+     * @param {Array<string>} newWorldNames - 新的世界书文件名列表。
+     */
+    setWorldNames: (newWorldNames) => {
+        world_names.length = 0; // Clear the array
+        Array.prototype.push.apply(world_names, newWorldNames); // Mutate it
     },
 };
 ```
@@ -564,86 +452,44 @@ export const apiKeyManager = new ApiKeyManager();
 
 ### core/orchestrator.js
 ```
-// src/core/orchestrator.js 
+// src/core/orchestrator.js
 
 import { dispatch as dispatchLLM } from './llm_dispatcher.js';
-import { APP } from './manager.js';
+import { APP, SYSTEM } from './manager.js';
 
 /**
  * @class GenerationOrchestrator
  * @description 模块化生成流程的编排与执行引擎。
- *              通过解析prompt中的 {{outputs.*}} 占位符自动推断模块依赖，并支持丰富的SillyTavern上下文变量。
  */
 export class GenerationOrchestrator {
-    /**
-     * @param {Array<object>} pipelineDefinition - 包含所有模块定义的数组。
-     * @param {object} initialSillyTavernContext - 从 `APP.getContext()` 获取的原始上下文。
-     */
     constructor(pipelineDefinition, initialSillyTavernContext) {
         this.pipeline = pipelineDefinition.filter(m => m.enabled);
-        
-        const context = initialSillyTavernContext;
-        const mainCharacter = (context.characterId !== -1 && context.characters && context.characters[context.characterId]) 
-                              ? context.characters[context.characterId] 
-                              : null;
+        this.rawContext = initialSillyTavernContext;
 
-        // 【增强点】构建一个更丰富的初始上下文，包含SillyTavern的常用数据
-        this.initialContext = {
+        this.context = {
             sillyTavern: {
-                chat: context.chat,
-                character: mainCharacter,
-                userInput: context.chat.slice(-1)[0]?.mes || '',
-                userName: context.name1,
-                // 新增：直接暴露更多有用信息
-                worldInfo: context.worldInfo,
-                authorsNote: context.authorsNote,
-                charGreeting: mainCharacter?.first_mes || '',
+                character: this.rawContext.characters[this.rawContext.characterId],
+                userInput: this.rawContext.chat.slice(-1)[0]?.mes || '',
+                userName: this.rawContext.name1,
+                chat: this.rawContext.chat,
             },
-            // 用于存储各个模块的输出
-            outputs: {}, 
+            outputs: {},
+            module: {},
         };
 
-        console.log('[DEBUG] Orchestrator constructed its enriched initialContext:', this.initialContext);
-        
-        // 【可配置】指定哪个模块的输出是整个管线的最终结果
-        this.finalOutputModuleId = 'final_formatter'; 
+        this.finalOutputModuleId = 'final_formatter';
     }
 
-    /**
-     * 将聊天历史数组格式化为LLM可读的文本。
-     * @param {Array<object>} chatArray - SillyTavern的聊天对象数组。
-     * @returns {string} 格式化后的对话字符串。
-     */
     _formatChatHistory(chatArray) {
         if (!Array.isArray(chatArray)) return '';
         return chatArray.map(message => {
-            const prefix = message.is_user 
-                ? (this.initialContext.sillyTavern.userName || 'User') 
-                : (this.initialContext.sillyTavern.character?.name || 'Assistant');
+            const prefix = message.is_user ? (this.context.sillyTavern.userName || 'User') : (this.context.sillyTavern.character?.name || 'Assistant');
             return `${prefix}: ${message.mes}`;
         }).join('\n');
     }
 
-    /**
-     * 【新增】格式化世界信息（World Info），使其更适合注入Prompt。
-     * @param {Array<object>} worldInfoArray - SillyTavern的世界信息数组。
-     * @returns {string} 格式化后的世界信息字符串。
-     */
-    _formatWorldInfo(worldInfoArray) {
-        if (!Array.isArray(worldInfoArray)) return '';
-        return worldInfoArray
-            .filter(entry => entry.enabled) // 只使用启用的条目
-            .map(entry => `[关键字: ${entry.key}]\n${entry.content}`)
-            .join('\n\n---\n\n');
-    }
-
-    /**
-     * 根据路径从上下文中解析模板变量的值。
-     * @param {string} path - 点分隔的路径，例如 'sillyTavern.character.name'。
-     * @returns {*} 解析出的值，如果路径无效则返回undefined。
-     */
-    _resolvePath(path) {
-        let current = this.initialContext;
+    _resolvePath(path, contextObject) {
+        let current = contextObject;
         const parts = path.split('.');
         for (let i = 0; i < parts.length; i++) {
             const part = parts[i];
@@ -654,39 +500,135 @@ export class GenerationOrchestrator {
                 return undefined;
             }
         }
-        console.log(`[DEBUG] _resolvePath: Resolved "${path}" successfully.`);
         return current;
     }
 
     /**
-     * 渲染一个模块的prompt模板。
-     * @param {object} module - 模块定义。
-     * @returns {string} 渲染后的完整prompt字符串。
+     * This is the definitive solution. It works by creating a "bubble universe"
+     * for the WI calculation by snapshotting and hijacking ALL relevant global states
+     * that SillyTavern's `getSortedEntries` function and its children directly access.
+     * This prevents any other WI source (character, chat, persona) from polluting
+     * the calculation for our specific module.
+     *
+     * @param {object} module - The current module definition.
+     * @param {string} preRenderedPrompt - The pre-rendered prompt for WI context.
+     * @returns {Promise<string>} The activated World Info string for this module.
      */
+    async _calculateModuleWorldInfo(module, preRenderedPrompt) {
+        if (!module.worldInfo || !Array.isArray(module.worldInfo) || module.worldInfo.length === 0) {
+            return '';
+        }
+
+        try {
+            // 使用已导入的SYSTEM对象来获取世界书函数
+            if (typeof SYSTEM.getWorldInfoPrompt !== 'function' || typeof SYSTEM.loadWorldInfo !== 'function') {
+                console.error('[Orchestrator] World info functions not available in SYSTEM object');
+                console.log('[Orchestrator] Available SYSTEM methods:', Object.keys(SYSTEM));
+                return '';
+            }
+
+            // 备份原始状态
+            const originalState = {
+                selected_world_info: window.selected_world_info ? [...window.selected_world_info] : [],
+                characters: window.characters ? [...window.characters] : [],
+                chat_metadata: window.chat_metadata ? JSON.parse(JSON.stringify(window.chat_metadata)) : {},
+                power_user_lorebook: window.power_user?.persona_description_lorebook
+            };
+
+            console.log(`[Orchestrator] Setting module WI: [${module.worldInfo.join(', ')}]`);
+
+            // 初始化全局变量（如果不存在）
+            if (!window.selected_world_info) {
+                window.selected_world_info = [];
+            }
+            if (!window.characters) {
+                window.characters = [];
+            }
+            if (!window.chat_metadata) {
+                window.chat_metadata = {};
+            }
+            if (!window.power_user) {
+                window.power_user = {};
+            }
+
+            // 设置模块的世界书为唯一选择
+            window.selected_world_info.length = 0;
+            window.selected_world_info.push(...module.worldInfo);
+
+            // 清空其他世界书源
+            window.characters.length = 0;
+            Object.keys(window.chat_metadata).forEach(key => {
+                delete window.chat_metadata[key];
+            });
+
+            window.power_user.persona_description_lorebook = undefined;
+
+            // 预加载世界书缓存
+            const loadPromises = module.worldInfo.map(worldName => SYSTEM.loadWorldInfo(worldName));
+            await Promise.all(loadPromises);
+
+            // 准备聊天上下文
+            const chatMessages = this.rawContext.chat
+                .filter(m => !m.is_system)
+                .map(m => m.mes)
+                .reverse();
+
+            const maxContextSize = this.rawContext.max_context || 4096;
+
+            // 准备全局扫描数据
+            const globalScanData = {
+                personaDescription: '',
+                characterDescription: '',
+                characterPersonality: '',
+                characterDepthPrompt: '',
+                scenario: '',
+                creatorNotes: ''
+            };
+
+            console.log(`[Orchestrator] Calling getWorldInfoPrompt with ${chatMessages.length} messages, maxContext: ${maxContextSize}`);
+
+            // 执行世界书计算
+            const wiResult = await SYSTEM.getWorldInfoPrompt(chatMessages, maxContextSize, true, globalScanData);
+
+            const moduleWiString = (wiResult?.worldInfoString || wiResult || '').toString().trim();
+            console.log(`[Orchestrator] WI calculated. Length: ${moduleWiString.length}`);
+
+            // 恢复原始状态
+            window.selected_world_info.length = 0;
+            window.selected_world_info.push(...originalState.selected_world_info);
+
+            window.characters.length = 0;
+            window.characters.push(...originalState.characters);
+
+            Object.keys(window.chat_metadata).forEach(key => {
+                delete window.chat_metadata[key];
+            });
+            Object.assign(window.chat_metadata, originalState.chat_metadata);
+
+            if (originalState.power_user_lorebook !== undefined) {
+                window.power_user.persona_description_lorebook = originalState.power_user_lorebook;
+            }
+
+            console.log('[Orchestrator] Original state restored.');
+            return moduleWiString;
+
+        } catch (error) {
+            console.error(`[Orchestrator] Error calculating WI:`, error);
+            console.error('[Orchestrator] Error stack:', error.stack);
+            return '';
+        }
+    }
+
+
     _renderPrompt(module) {
         let fullPrompt = '';
         for (const slot of module.promptSlots) {
             if (slot.enabled) {
                 const renderedContent = slot.content.replace(/{{(.*?)}}/g, (match, path) => {
-                    const trimmedPath = path.trim();
-                    const value = this._resolvePath(trimmedPath);
-
-                    if (value === undefined || value === null) {
-                        console.warn(`[Orchestrator] Template variable "{{${trimmedPath}}}" resolved to undefined/null. Keeping original placeholder.`);
-                        return match; 
-                    }
-                    
-                    // 【增强点】使用专门的格式化函数处理特定数据类型
-                    if (trimmedPath === 'sillyTavern.chat') {
-                        return this._formatChatHistory(value);
-                    }
-                    if (trimmedPath === 'sillyTavern.worldInfo') {
-                        return this._formatWorldInfo(value);
-                    }
-                    
-                    if (typeof value === 'object' && !Array.isArray(value)) {
-                        return JSON.stringify(value, null, 2);
-                    }
+                    const value = this._resolvePath(path.trim(), this.context);
+                    if (value === undefined || value === null) return match;
+                    if (path.trim() === 'sillyTavern.chat') return this._formatChatHistory(value);
+                    if (typeof value === 'object') return JSON.stringify(value, null, 2);
                     return String(value);
                 });
                 fullPrompt += renderedContent + '\n';
@@ -694,36 +636,24 @@ export class GenerationOrchestrator {
         }
         return fullPrompt.trim();
     }
-    
-    /**
-     * 执行单个模块的逻辑。
-     * @param {object} module - 要执行的模块定义。
-     * @returns {Promise<{id: string, result: string}>} 包含模块ID和结果的对象。
-     */
+
     async _executeModule(module) {
         console.log(`[Hevno Orchestrator] Executing module: ${module.id} (${module.name})`);
-        const finalPrompt = this._renderPrompt(module);
-        
-        console.log(`[Hevno Orchestrator] === START RENDERED PROMPT for ${module.id} ===\n${finalPrompt}\n=== END RENDERED PROMPT for ${module.id} ===`);
 
-        // ======================= 【核心修改点】 =======================
-        // 移除了模拟逻辑，替换为真实的、可分派的LLM调用。
-        let result;
+        this.context.module = { worldInfo: '' };
+        const promptForWiScan = this._renderPrompt(module);
+        this.context.module.worldInfo = await this._calculateModuleWorldInfo(module, promptForWiScan);
+        const finalPrompt = this._renderPrompt(module);
+        console.log(`[Hevno Orchestrator] === START FINAL RENDERED PROMPT for ${module.id} ===\n${finalPrompt}\n=== END FINAL RENDERED PROMPT for ${module.id} ===`);
+
         try {
-            toastr.info(`Running module: ${module.name}...`, "Hevno Pipeline");
-            result = await dispatchLLM(finalPrompt, module.llm);
-            toastr.success(`Module "${module.name}" completed!`, "Hevno Pipeline");
+            const result = await dispatchLLM(finalPrompt, module.llm);
+            this.context.outputs[module.id] = result;
+            return { id: module.id, result };
         } catch (error) {
             console.error(`[Hevno Orchestrator] Failed to execute module ${module.id}:`, error);
-            toastr.error(`Error in module "${module.name}": ${error.message}`, "Pipeline Error");
-            // 抛出错误以中止整个管线执行
             throw error;
         }
-        // =============================================================
-
-        console.log(`[Hevno Orchestrator] Finished module: ${module.id}. Result stored.`);
-        this.initialContext.outputs[module.id] = result;
-        return { id: module.id, result };
     }
 
     _extractDependencies(module) {
@@ -750,9 +680,7 @@ export class GenerationOrchestrator {
             const dependencies = this._extractDependencies(module);
             dependencyGraph.set(module.id, dependencies);
             inDegree.set(module.id, dependencies.size);
-            if (!reverseDependencyGraph.has(module.id)) {
-                reverseDependencyGraph.set(module.id, new Set());
-            }
+            if (!reverseDependencyGraph.has(module.id)) reverseDependencyGraph.set(module.id, new Set());
             for (const dep of dependencies) {
                 if (!reverseDependencyGraph.has(dep)) reverseDependencyGraph.set(dep, new Set());
                 reverseDependencyGraph.get(dep).add(module.id);
@@ -760,6 +688,7 @@ export class GenerationOrchestrator {
         }
 
         let executionQueue = this.pipeline.filter(m => inDegree.get(m.id) === 0);
+
         while (executionQueue.length > 0) {
             console.log(`[Hevno Orchestrator] Executing parallel batch of ${executionQueue.length} modules:`, executionQueue.map(m => m.id));
             const promises = executionQueue.map(module => this._executeModule(module));
@@ -778,195 +707,129 @@ export class GenerationOrchestrator {
             executionQueue = nextExecutionQueue;
         }
 
-        const unexecutedModules = this.pipeline.filter(m => !(m.id in this.initialContext.outputs));
+        const unexecutedModules = this.pipeline.filter(m => !(m.id in this.context.outputs));
         if (unexecutedModules.length > 0) {
             const unexecutedIds = unexecutedModules.map(m => m.id).join(', ');
             throw new Error(`Execution failed. A circular dependency may exist. Unexecuted modules: ${unexecutedIds}`);
         }
-        
-        console.log("[Hevno Orchestrator] Pipeline finished. All outputs:", this.initialContext.outputs);
 
-        // 【改进点】返回指定最终模块的真实（模拟）输出
-        const finalOutput = this.initialContext.outputs[this.finalOutputModuleId];
-        if (finalOutput) {
-            console.log(`[Hevno Orchestrator] Returning final output from module: ${this.finalOutputModuleId}`);
-            return finalOutput;
-        }
-
-        console.warn(`[Hevno Orchestrator] Pipeline completed, but the designated final output module "${this.finalOutputModuleId}" did not produce a result.`);
-        return "Pipeline completed, but no final output was designated.";
+        console.log("[Hevno Orchestrator] Pipeline finished. All outputs:", this.context.outputs);
+        const finalOutput = this.context.outputs[this.finalOutputModuleId];
+        return finalOutput || "Pipeline completed, but no final output was designated.";
     }
 }
 ```
 
 ### data/defaultPipeline.js
 ```
-// src/data/defaultPipeline.js (已更新以适配新的LLM调度器)
+// src/data/defaultPipeline.js
 
 export const defaultPipeline = [
     {
-        "id": "stage_setter",
-        "name": "场景与背景设定器",
+        "id": "scene_setter",
+        "name": "1. 场景设定器",
         "enabled": true,
         "llm": {
             "provider": "gemini",
             "model": "gemini-2.5-flash",
-            "temperature": 0.8,
-            "maxOutputTokens": 1024
+            "temperature": 0.7
         },
+        "worldInfo": [
+            // 这个模块只应该知道城市和魔法的信息
+            "City-Details.json",
+            "Magic-System.json"
+        ],
         "promptSlots": [
             {
-                "id": "task_description",
-                "enabled": true,
-                "content": "你是一个场景导演。根据以下信息，生成一段充满氛围的开场白，为接下来的故事奠定基调。"
-            },
-            {
-                "id": "character_info",
+                "id": "task",
+                "role": "system",
                 "enabled": true,
                 "content": `
-# 角色核心设定
-{{sillyTavern.character.description}}
+你是一个场景导演。你的任务是为一个奇幻故事写一个简短而富有氛围的开头段落。
+用户将提供一个简单的起始提示。使用提供的相关背景知识来丰富场景。
 
-# 角色性格
-{{sillyTavern.character.personality}}
-
-# 作者笔记/全局指令
-{{sillyTavern.authorsNote}}
-                `
+# 相关背景知识
+{{module.worldInfo}}
+`
             },
             {
-                "id": "world_info",
+                "id": "user_input_for_scene",
+                "role": "user",
+                "enabled": true,
+                "content": "故事开始于埃塞尔堡城，有人即将施展一个法术。"
+            }
+        ]
+    },
+    {
+        "id": "character_action_generator",
+        "name": "2. 角色行动生成器",
+        "enabled": true,
+        "llm": {
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+            "temperature": 0.85
+        },
+        "worldInfo": [
+            // 这个模块只应该知道角色背景和魔法系统
+            "Character-Backstory.json",
+            "Magic-System.json"
+        ],
+        "promptSlots": [
+            {
+                "id": "task",
+                "role": "system",
                 "enabled": true,
                 "content": `
-# 世界观与关键信息
-{{sillyTavern.worldInfo}}
-                `
-            }
-        ]
-    },
-    {
-        "id": "history_summarizer",
-        "name": "历史摘要器",
-        "enabled": true,
-        "llm": {
-            "provider": "gemini",
-            "model": "gemini-2.5-flash",
-            "temperature": 0.3,
-            "maxOutputTokens": 512
-        },
-        "promptSlots": [
-            {
-                "id": "summarize_task",
-                "enabled": true,
-                "content": "将以下对话历史浓缩成一段简洁的摘要，不超过200字，捕捉核心情节和人物情绪。"
+你是一个角色行动生成器。基于已确立的场景，描述主角的行动和想法。
+使用相关的角色和魔法知识。不要重复场景描述。
+
+# 相关背景知识
+{{module.worldInfo}}
+`
             },
             {
-                "id": "chat_history",
-                "enabled": true,
-                "content": "{{sillyTavern.chat}}"
-            }
-        ]
-    },
-    {
-        "id": "main_story_generator",
-        "name": "主故事生成器",
-        "enabled": true,
-        "llm": {
-            "provider": "gemini",
-            "model": "gemini-2.5-flash",
-            "temperature": 0.9,
-            "maxOutputTokens": 2048
-        },
-        "promptSlots": [
-            {
-                "id": "combined_context",
+                "id": "scene_context",
+                "role": "user",
                 "enabled": true,
                 "content": `
-# 场景与基调
-{{outputs.stage_setter}}
+这是当前场景：
+{{outputs.scene_setter}}
 
-# 历史回顾
-{{outputs.history_summarizer}}
-
-请基于以上背景，并以前次对话的风格，继续下面的故事。
-                `
-            },
-            {
-                "id": "user_latest_input",
-                "enabled": true,
-                "content": "{{sillyTavern.userInput}}"
+现在，描述名叫索恩的盗贼在做什么。他正在准备施展一个法术。
+`
             }
         ]
     },
     {
-        "id": "style_enhancer",
-        "name": "文笔润色器",
+        "id": "final_formatter", // This is our final output module
+        "name": "3. 最终故事整合器",
         "enabled": true,
         "llm": {
             "provider": "gemini",
             "model": "gemini-2.5-flash",
-            "temperature": 0.7,
-            "maxOutputTokens": 2048
+            "temperature": 0.5
         },
+        "worldInfo": [
+            // 这个模块不加载任何世界书，以证明模块可以独立运作
+        ],
         "promptSlots": [
             {
-                "id": "style_task",
+                "id": "task",
+                "role": "system",
                 "enabled": true,
-                "content": "你是一位文学大师。请将以下文本用更具诗意和表现力的语言重写，但保持原意不变。"
+                "content": "你是一个故事编辑。将场景和角色的行动合并成一个连贯的叙述段落。使其流畅自然。"
             },
             {
-                "id": "original_text",
-                "enabled": true,
-                "content": "{{outputs.main_story_generator}}"
-            }
-        ]
-    },
-    {
-        "id": "emotion_detector",
-        "name": "情绪分析器",
-        "enabled": true,
-        "llm": {
-            "provider": "gemini",
-            "model": "gemini-2.5-flash",
-            "temperature": 0.1,
-            "maxOutputTokens": 64
-        },
-        "promptSlots": [
-            {
-                "id": "emotion_task",
-                "enabled": true,
-                "content": "分析以下文本中表达的主要情绪。用一个词回答，例如：喜悦、悲伤、愤怒、惊讶、平静。"
-            },
-            {
-                "id": "text_to_analyze",
-                "enabled": true,
-                "content": "{{outputs.main_story_generator}}"
-            }
-        ]
-    },
-    {
-        "id": "final_formatter",
-        "name": "最终格式化模块",
-        "enabled": true,
-        "llm": {
-            "provider": "gemini",
-            "model": "gemini-2.5-flash",
-            "temperature": 0.1,
-            "maxOutputTokens": 4096 // 留有足够空间组合所有内容
-        },
-        "promptSlots": [
-            {
-                "id": "format_task",
-                "enabled": true,
-                "content": "你是一个格式化助手。将主文本和情绪标签组合成最终的输出。格式如下：\n[角色当前情绪：<情绪标签>]\n\n<主文本>"
-            },
-            {
-                "id": "final_content",
+                "id": "full_context",
+                "role": "user",
                 "enabled": true,
                 "content": `
-情绪标签：{{outputs.emotion_detector}}
-主文本：{{outputs.style_enhancer}}
-                `
+场景描述：
+{{outputs.scene_setter}}
+
+角色行动：
+{{outputs.character_action_generator}}
+`
             }
         ]
     }
