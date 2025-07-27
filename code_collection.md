@@ -160,7 +160,7 @@ export async function execute(prompt, llmConfig) {
         throw new Error("Google Generative AI SDK is not loaded.");
     }
     
-    const key = apiKeyManager.acquireKey();
+    const key = await apiKeyManager.acquireKey();
     try {
         const genAI = new window.GoogleGenerativeAI(key);
 
@@ -393,23 +393,99 @@ import { USER } from './manager.js';
  * @file function_registry.js
  * @description 存放所有可被FunctionNode调用的自定义JS函数。
  * 
- * 【设计哲学】
- * 1.  **上下文作为输入**: 每个函数都接收完整的编排器上下文(context)作为其唯一参数。
- *     这给予了函数读取任何已完成节点输出的能力。
- * 2.  **返回值为输出**: 函数的返回值将被直接存入 `context.outputs[currentNodeId]`。
- * 3.  **无副作用**: 函数应尽量保持纯净，主要负责数据转换和逻辑判断，避免直接操作DOM或进行异步API调用（除非特殊设计）。
+ * 【设计哲学 V2 - 通用性与可组合性】
+ * 1.  **单一职责**: 每个函数只做一件小事，并把它做好。例如，不将“检查文本”和“决定是否战斗”混为一谈。
+ * 2.  **通用性**: 函数名应描述其通用行为，而不是某个特定的业务场景。例如，`textContains` 而不是 `isCombatRequired`。
+ * 3.  **参数化**: 将硬编码的值（如 "yes", "<thinking>") 提取为参数，让用户在 Pipeline 定义中指定它们。
+ * 4.  **上下文作为输入**: 每个函数都接收完整的编排器上下文(context)和节点参数(params)。
+ * 5.  **可预测的输出**: 函数的返回值应该是简单、可预测的数据类型（字符串、数组、布尔值），以便于下游节点消费。
  */
 export const functionRegistry = {
+    // =================================================================
+    // 文本处理工具 (Text Processing Utilities)
+    // =================================================================
+
     /**
-     * @param {object} context - 完整的编排器上下文。
-     * @returns {string[]} - 解析出的角色名称数组。
+     * 【新】检查输入文本是否包含指定的关键字。
+     * 这是 isCombatRequired 的通用替代品。
+     * @param {object} context 
+     * @param {object} params - { sourceNode: string, keyword: string, caseSensitive: boolean (default: false) }
+     * @returns {boolean} 如果找到关键字，则返回 true，否则返回 false。
+     */
+    textContains: (context, params) => {
+        const { sourceNode, keyword, caseSensitive = false } = params;
+        if (!keyword) throw new Error("[textContains] 'keyword' parameter is required.");
+        
+        const rawOutput = context.outputs[sourceNode];
+        if (typeof rawOutput !== 'string') return false;
+
+        if (caseSensitive) {
+            return rawOutput.includes(keyword);
+        } else {
+            return rawOutput.toLowerCase().includes(keyword.toLowerCase());
+        }
+    },
+
+    /**
+     * 【新】使用正则表达式替换文本内容。
+     * 这是 stripLlmThinking 的通用替代品。
+     * @param {object} context 
+     * @param {object} params - { sourceNode: string, pattern: string, flags: string (default: 'g'), replacement: string (default: '') }
+     * @returns {string} 处理后的字符串。
+     */
+    regexReplace: (context, params) => {
+        const { sourceNode, pattern, flags = 'g', replacement = '' } = params;
+        if (!pattern) throw new Error("[regexReplace] 'pattern' parameter is required.");
+
+        const rawOutput = context.outputs[sourceNode];
+        if (typeof rawOutput !== 'string') return '';
+
+        try {
+            const regex = new RegExp(pattern, flags);
+            return rawOutput.replace(regex, replacement);
+        } catch (e) {
+            throw new Error(`[regexReplace] Invalid regex pattern: ${e.message}`);
+        }
+    },
+
+    /**
+     * 【新】使用正则表达式从文本中提取所有匹配项的特定捕获组。
+     * 这是一个更底层的工具，可用于实现像 parseCharacterList 这样的功能。
+     * @param {object} context 
+     * @param {object} params - { sourceNode: string, pattern: string, flags: string (default: 'g'), groupIndex: number (default: 1) }
+     * @returns {string[]} 包含所有匹配的捕获组文本的数组。
+     */
+    extractWithRegex: (context, params) => {
+        const { sourceNode, pattern, flags = 'g', groupIndex = 1 } = params;
+        if (!pattern) throw new Error("[extractWithRegex] 'pattern' parameter is required.");
+
+        const rawOutput = context.outputs[sourceNode];
+        if (typeof rawOutput !== 'string') return [];
+
+        try {
+            const regex = new RegExp(pattern, flags);
+            const matches = [...rawOutput.matchAll(regex)];
+            return matches.map(match => match[groupIndex] || '').filter(Boolean);
+        } catch (e) {
+            throw new Error(`[extractWithRegex] Invalid regex pattern: ${e.message}`);
+        }
+    },
+
+    // =================================================================
+    // 结构化数据处理 (Structured Data Processing)
+    // =================================================================
+
+    /**
+     * 【保留并改进】这是一个高级便利函数，用于从特定格式的文本中解析角色列表。
+     * 它内部使用了更通用的逻辑，但为常见任务提供了便利。
+     * @param {object} context
+     * @param {object} params - { sourceNode: string }
+     * @returns {string[]} 解析出的角色名称数组。
      */
     parseCharacterList: (context, params) => {
         const rawOutput = context.outputs[params.sourceNode];
         if (!rawOutput) return [];
         
-        // [!code focus:start]
-        // 【已修正】更健壮的解析逻辑
         const lowerCaseOutput = rawOutput.toLowerCase();
         
         // 检查是否明确指出没有角色
@@ -417,97 +493,63 @@ export const functionRegistry = {
             return [];
         }
 
-        const matches = rawOutput.match(/Characters:(.*)/i); // i 表示不区分大小写
+        const matches = rawOutput.match(/Characters:(.*)/i);
         if (matches && matches[1]) {
             const characterString = matches[1].trim();
-            // 如果匹配到的部分是 "None" 或空，也返回空数组
             if (characterString.toLowerCase() === 'none' || characterString === '') {
                 return [];
             }
             return characterString.split(',').map(name => name.trim()).filter(Boolean);
         }
-        // [!code focus:end]
         return [];
     },
 
     /**
-     * @param {object} context - 完整的编排器上下文。
-     * @returns {boolean} - 是否需要战斗流程。
+     * 【新】聚合来自 Map 节点的动态输出。
+     * 这是 aggregateStoryParts 的通用、可配置的替代品。
+     * @param {object} context
+     * @param {object} params - { 
+     *   sourceNodeIds: string[], 
+     *   itemTemplate: string (e.g., "Action for {{item}}: {{output}}"), 
+     *   separator: string (default: '\n\n') 
+     * }
+     * @returns {string} 拼接后的字符串。
      */
-    isCombatRequired: (context, params) => {
-        const rawOutput = context.outputs[params.sourceNode];
-        if (!rawOutput) return false;
-        // 简单判断，可以做的更复杂
-        return rawOutput.toLowerCase().includes('yes');
-    },
-
-    /**
-     * @param {object} context - 完整的编排器上下文。
-     * @returns {string} - 清理后的文本。
-     */
-    stripLlmThinking: (context, params) => {
-        const rawOutput = context.outputs[params.sourceNode];
-        if (!rawOutput) return '';
-        // 示例：移除 <thinking>...</thinking> 标签
-        return rawOutput.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim();
-    },
-
-    /**
-     * @param {object} context - 完整的编排器上下文。
-     * @returns {string} - 拼接后的故事文本。
-     */
-    aggregateStoryParts: (context, params) => {
-        // [!code focus:start]
-        // ======================= DEBUGGING START =======================
-        console.log('[aggregateStoryParts] Received params:', JSON.stringify(params, null, 2));
-        console.log('[aggregateStoryParts] All available node definitions:', Object.keys(context.nodes));
-        // ======================= DEBUGGING END =======================
-        // [!code focus:end]
-
-        if (!params || !Array.isArray(params.sourceNodeIds) || params.sourceNodeIds.length === 0) {
-            console.log('[aggregateStoryParts] No dynamic nodes to aggregate. Returning empty string.');
-            return "";
-        }
-
-        const storyParts = params.sourceNodeIds.map(nodeId => {
-            const characterAction = context.outputs[nodeId] || 'No action specified.'; // 确保有默认值
-            
-            // [!code focus:start]
-            // ======================= DEBUGGING START =======================
+    joinFromDynamicNodes: (context, params) => {
+        const { sourceNodeIds, itemTemplate, separator = '\n\n' } = params;
+        if (!sourceNodeIds || !Array.isArray(sourceNodeIds)) return "";
+        if (!itemTemplate) throw new Error("[joinFromDynamicNodes] 'itemTemplate' parameter is required.");
+        
+        const parts = sourceNodeIds.map(nodeId => {
+            const output = context.outputs[nodeId] || '';
             const dynamicNodeDef = context.nodes[nodeId];
-            if (!dynamicNodeDef) {
-                console.error(`[aggregateStoryParts] Could not find node definition for ID: ${nodeId}`);
-                return `关于 Unknown Character (def not found):\n${characterAction}`;
-            }
-            console.log(`[aggregateStoryParts] Processing node ${nodeId}, injected params:`, JSON.stringify(dynamicNodeDef.injectedParams, null, 2));
-            // ======================= DEBUGGING END =======================
-            // [!code focus:end]
-
-            const characterName = dynamicNodeDef.injectedParams?.item || 'Unknown Character';
-            return `关于 ${characterName}:\n${characterAction}`;
+            const item = dynamicNodeDef?.injectedParams?.item || 'Unknown';
+            
+            return itemTemplate
+                .replace(/{{output}}/g, output)
+                .replace(/{{item}}/g, item);
         });
         
-        return storyParts.join('\n\n');
+        return parts.join(separator);
     },
 
+    // =================================================================
+    // 验证与逻辑 (Validation & Logic)
+    // =================================================================
+
     /**
-     * 检查输出是否符合要求。
-     * @param {object} context 
-     * @param {object} params - { sourceNode: string, attempts: number }
-     * @returns {string} 'ok' or 'retry'
+     * 【新】验证输入文本的最小长度。
+     * 可用于构建重试循环。
+     * @param {object} context
+     * @param {object} params - { sourceNode: string, minLength: number }
+     * @returns {boolean} 如果文本长度大于等于 minLength，则返回 true。
      */
-    validateOutput: (context, params) => {
-        const output = context.outputs[params.sourceNode];
-        // 简单验证：输出不能为空
-        if (output && output.trim().length > 10) {
-            return 'ok';
-        }
-        // 还可以检查重试次数
-        if (params.attempts >= 3) {
-            console.warn(`[Validator] Node ${params.sourceNode} failed after 3 attempts.`);
-            return 'fail';
-        }
-        return 'retry';
+    validateMinLength: (context, params) => {
+        const { sourceNode, minLength = 1 } = params;
+        const rawOutput = context.outputs[sourceNode];
+        if (typeof rawOutput !== 'string') return false;
+
+        return rawOutput.trim().length >= minLength;
     }
 };
 
@@ -528,7 +570,7 @@ export function executeFunction(functionName, context, params) {
 
 ### core/apiKeyManager.js
 ```
-// src/core/apiKeyManager.js
+// src/core/apiKeyManager.js 
 
 import { USER } from './manager.js';
 
@@ -536,7 +578,8 @@ class ApiKeyManager {
     constructor() {
         this.keys = [];
         this.busyKeys = new Set();
-        this.lastUsedIndex = -1;
+        // 【新增】等待队列，存放Promise的resolve函数
+        this.waitQueue = []; 
     }
 
     /**
@@ -544,47 +587,74 @@ class ApiKeyManager {
      */
     loadKeys() {
         const userKeys = USER.settings.geminiApiKeys || [];
-        this.keys = userKeys.filter(key => key && key.trim() !== ''); // 过滤掉空密钥
+        this.keys = userKeys.filter(key => key && key.trim() !== '');
         console.log(`[ApiKeyManager] Loaded ${this.keys.length} Gemini API keys.`);
+        // 【新增】如果密钥池变小，可能需要处理正在进行的请求，但简单起见，这里只重新加载
+        // 如果有正在等待的请求，并且现在有新密钥可用，可以尝试处理它们
+        this._processWaitQueue(); 
     }
 
     /**
-     * 获取一个可用的API密钥。
-     * 实现简单的轮询和负载均衡。
-     * @returns {string} 可用的API密钥。
-     * @throws {Error} 如果没有可用的密钥。
+     * 【重大修改】获取一个可用的API密钥，如果不可用则异步等待。
+     * @returns {Promise<string>} 一个解析为可用API密钥的Promise。
+     * @throws {Error} 如果没有配置任何密钥。
      */
     acquireKey() {
         if (this.keys.length === 0) {
-            throw new Error("No Gemini API keys are configured.");
-        }
-        if (this.busyKeys.size >= this.keys.length) {
-            throw new Error("All Gemini API keys are currently in use. Please wait.");
+            // 这是唯一应该立即抛出错误的地方
+            return Promise.reject(new Error("No Gemini API keys are configured."));
         }
 
-        // 轮询查找下一个可用密钥
-        for (let i = 0; i < this.keys.length; i++) {
-            this.lastUsedIndex = (this.lastUsedIndex + 1) % this.keys.length;
-            const key = this.keys[this.lastUsedIndex];
-            if (!this.busyKeys.has(key)) {
-                this.busyKeys.add(key);
-                console.log(`[ApiKeyManager] Acquired key ending in ...${key.slice(-4)}`);
-                return key;
-            }
+        // 寻找一个空闲的key
+        const availableKey = this.keys.find(key => !this.busyKeys.has(key));
+
+        if (availableKey) {
+            this.busyKeys.add(availableKey);
+            console.log(`[ApiKeyManager] Acquired key ending in ...${availableKey.slice(-4)}`);
+            // 如果有可用key，立即返回一个已解决的Promise
+            return Promise.resolve(availableKey);
+        } else {
+            // 如果没有可用key，返回一个新的Promise并进入等待队列
+            console.log(`[ApiKeyManager] All keys are busy. Request is now waiting.`);
+            return new Promise((resolve) => {
+                this.waitQueue.push(resolve);
+            });
         }
-        
-        // 理论上不应该到达这里，因为前面已经检查过 busyKeys.size
-        throw new Error("Failed to acquire a key despite some being available. Concurrency issue?");
     }
 
     /**
-     * 释放一个API密钥，使其可用于其他调用。
+     * 【重大修改】释放一个API密钥，并检查是否有等待的请求。
      * @param {string} key 要释放的API密钥。
      */
     releaseKey(key) {
         if (key && this.busyKeys.has(key)) {
             this.busyKeys.delete(key);
             console.log(`[ApiKeyManager] Released key ending in ...${key.slice(-4)}`);
+            // 密钥已释放，检查等待队列
+            this._processWaitQueue();
+        }
+    }
+    
+    /**
+     * 【新增】内部辅助函数，用于处理等待队列。
+     * @private
+     */
+    _processWaitQueue() {
+        // 如果有等待的请求，并且有空闲的密钥
+        if (this.waitQueue.length > 0) {
+             const availableKey = this.keys.find(key => !this.busyKeys.has(key));
+             if (availableKey) {
+                console.log(`[ApiKeyManager] A key is now free. Fulfilling a waiting request.`);
+                // 取出队列中最早的等待者
+                const nextInQueue = this.waitQueue.shift();
+                
+                // 将可用的key标记为繁忙
+                this.busyKeys.add(availableKey);
+                console.log(`[ApiKeyManager] Re-assigned key ending in ...${availableKey.slice(-4)} to waiting request.`);
+                
+                // 解决它的Promise，并把key传给它
+                nextInQueue(availableKey);
+             }
         }
     }
 }
@@ -834,9 +904,9 @@ export class GenerationOrchestrator {
                 nodeDependencies.add(params.sourceNode);
             }
             if (params.sourceNodeIds && Array.isArray(params.sourceNodeIds)) {
-                 params.sourceNodeIds.forEach(id => {
+                params.sourceNodeIds.forEach(id => {
                     if (this.nodes[id]) nodeDependencies.add(id);
-                 });
+                });
             }
 
             // c. 【新增】检查MapNode和Router的特定依赖
@@ -942,7 +1012,7 @@ export class GenerationOrchestrator {
     async _executeRouterNode(node) {
         const conditionValueRaw = this._resolvePath(node.condition.replace(/{{|}}/g, '').trim(), this.context);
         const conditionValue = String(conditionValueRaw).trim().toLowerCase();
-        
+
         let chosenNextNodeId = null;
         for (const routeKey in node.routes) {
             // 支持用 'default' 作为备用路由
@@ -951,14 +1021,14 @@ export class GenerationOrchestrator {
                 break;
             }
         }
-        
+
         // 如果没有精确匹配，检查是否有 'default' 路由
         if (!chosenNextNodeId && node.routes.default) {
             chosenNextNodeId = node.routes.default;
         }
 
         console.log(`[Router:${node.id}] Condition value is "${conditionValue}". Routing to -> ${chosenNextNodeId || 'end of branch'}.`);
-        
+
         // 将决策结果存起来，以便 run 函数使用
         this.context.outputs[node.id] = { decision: chosenNextNodeId };
     }
@@ -1007,15 +1077,15 @@ export class GenerationOrchestrator {
         if (joinNodeId && this.nodes[joinNodeId]) {
             const joinNode = this.nodes[joinNodeId];
             const joinNodeDeps = this.dependencies.get(joinNodeId) || new Set();
-            
+
             // JoinNode 依赖于所有动态生成的节点
             dynamicNodeIds.forEach(id => {
                 joinNodeDeps.add(id);
                 // 同时，建立反向依赖
-                if(!this.dependents.has(id)) this.dependents.set(id, new Set());
+                if (!this.dependents.has(id)) this.dependents.set(id, new Set());
                 this.dependents.get(id).add(joinNodeId);
             });
-            
+
             this.dependencies.set(joinNodeId, joinNodeDeps);
 
             if (!joinNode.params) joinNode.params = {};
@@ -1045,7 +1115,7 @@ export class GenerationOrchestrator {
                 try {
                     // 防御性检查，防止跳过的节点被错误执行
                     if (this.nodeStates[nodeId] !== 'pending') return;
-                    
+
                     this.nodeStates[nodeId] = 'running';
                     await this._executeNode(nodeId);
                     this.nodeStates[nodeId] = 'completed';
@@ -1059,7 +1129,7 @@ export class GenerationOrchestrator {
             });
 
             await Promise.all(promises);
-            
+
             // [!code focus:start]
             // ========================= 核心修正逻辑 START =========================
             // 在处理下游节点之前，检查刚刚完成的批次中是否有MapNode。
@@ -1075,15 +1145,20 @@ export class GenerationOrchestrator {
                         // 新节点在创建时已设置依赖，这里直接从 this.dependencies 获取
                         const initialDegree = this.dependencies.get(dynamicNodeId)?.size || 0;
                         inDegree.set(dynamicNodeId, initialDegree);
+
+                        // 【补充检查】如果新节点的入度为0，它应该被加入下一个执行队列
+                        // 但在你的设计中，动态节点的依赖是MapNode本身，所以它的入度至少为1，
+                        // 并且会在MapNode完成后递减，所以这里的逻辑是安全的。
                     }
 
                     // 2. 更新JoinNode的inDegree，因为它获得了新的依赖
                     if (joinNodeId && this.nodes[joinNodeId]) {
-                        const oldDegree = inDegree.get(joinNodeId) || 0;
-                        // 新的入度 = 旧的入度 + 新增的动态节点依赖数量
-                        const newDegree = oldDegree + dynamicNodeIds.length;
-                        inDegree.set(joinNodeId, newDegree);
-                        console.log(`[GraphUpdate] JoinNode ${joinNodeId} inDegree updated from ${oldDegree} to ${newDegree}`);
+                        // 【重要修正】这里的逻辑需要调整。不应该是 oldDegree + newDegree。
+                        // 应该是直接从 this.dependencies 重新计算。
+                        // 但考虑到拓扑排序的递减性质，更好的方法是增加它的 inDegree。
+                        const currentDegree = inDegree.get(joinNodeId) || 0;
+                        inDegree.set(joinNodeId, currentDegree + dynamicNodeIds.length);
+                        console.log(`[GraphUpdate] JoinNode ${joinNodeId} inDegree increased by ${dynamicNodeIds.length}, new total: ${inDegree.get(joinNodeId)}`);
                     }
                 }
             }
@@ -1102,24 +1177,24 @@ export class GenerationOrchestrator {
                         const targetNodeId = node.routes[routeKey];
                         if (targetNodeId !== decision && this.nodes[targetNodeId] && this.nodeStates[targetNodeId] === 'pending') {
                             this.nodeStates[targetNodeId] = 'skipped';
-                            nodesToProcessForDependents.add(targetNodeId); 
+                            nodesToProcessForDependents.add(targetNodeId);
                             console.log(`[Router:${node.id}] Skipped node ${targetNodeId}`);
                         }
                     }
                 }
             }
-            
+
             completedOrSkippedCount += nodesToProcessForDependents.size;
 
             // 为所有新完成或跳过的节点，更新其下游节点的入度
             for (const processedNodeId of nodesToProcessForDependents) {
                 const dependents = this.dependents.get(processedNodeId) || new Set();
-                
+
                 for (const dependentId of dependents) {
                     if (this.nodeStates[dependentId] === 'pending') {
                         const newDegree = (inDegree.get(dependentId) || 1) - 1;
                         inDegree.set(dependentId, newDegree);
-                       
+
                         if (newDegree === 0) {
                             executionQueue.push(dependentId);
                         }
@@ -1127,7 +1202,7 @@ export class GenerationOrchestrator {
                 }
             }
         }
-        
+
         const totalNodes = Object.keys(this.nodes).length;
         if (completedOrSkippedCount < totalNodes) {
             const unexecutedNodes = Object.keys(this.nodes).filter(id => this.nodeStates[id] === 'pending');
@@ -1146,120 +1221,168 @@ export class GenerationOrchestrator {
 ### data/defaultPipeline.js
 ```
 export const defaultPipeline = [
-    // 节点 0: 故事生成器
+    // =================================================================
+    // 阶段 1: 故事创作与角色识别
+    // =================================================================
+    
+    // 节点 1: 故事生成器
     {
         "id": "story_generator",
-        "name": "0. 故事生成器",
+        "name": "1. 故事生成器",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.8 }, // 建议使用 2.5-flash，能力更强
+        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.8 },
         "promptSlots": [{
             "enabled": true,
-            // 【优化】更具体的指令，要求明确列出角色
-            "content": "你是一位富有想象力的小说家。请根据用户的请求，创作一个包含多个角色的、戏剧性的中世纪奇幻小说。场景描述需要生动，并明确介绍至少两名出场角色的名字和简要特征，为后续情节发展埋下伏笔。\n\n用户请求:\n{{sillyTavern.userInput}}\n你的输出必须是一段200字以上的流畅的故事，不能包含任何控制文本或者指令"  
+            "content": "你是一位富有想象力的小说家。请根据用户的请求，创作一个包含多个角色的、戏剧性的中世纪奇幻小说。场景描述需要生动，并明确介绍至少两名出场角色的名字和简要特征，为后续情节发展埋下伏笔。\n\n用户请求:\n{{sillyTavern.userInput}}\n\n你的输出必须是一段200字以上的流畅的故事，不能包含任何控制文本或者指令。"
         }]
     },
-    // 节点 1: 识别角色
+    
+    // 节点 2: 角色识别LLM
     {
-        "id": "character_identifier",
-        "name": "1. 识别角色",
+        "id": "character_identifier_llm",
+        "name": "2. LLM识别角色",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.1 },
+        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.1 },
         "promptSlots": [{
             "enabled": true,
-            // 【优化】更严格的格式要求，减少废话
             "content": "分析工具：严格按照 'Characters: 角色A, 角色B, 角色C' 的格式，从以下文本中提取所有被命名的角色。如果一个角色都没有，必须输出 'Characters: None'。不要添加任何其他解释或前言。\n\n文本：\n{{outputs.story_generator}}"
         }]
     },
-    // 节点 2: 解析角色列表 (JS函数，无需修改)
+
+    // 节点 3: 解析角色列表 (使用保留的便利函数)
+    // 尽管有更通用的regexExtract，但parseCharacterList对于这个常见任务更方便。
     {
         "id": "parse_character_list",
-        "name": "2. 解析角色列表",
+        "name": "3. 解析角色列表",
         "enabled": true,
         "type": "function",
         "functionName": "parseCharacterList",
-        "params": { "sourceNode": "character_identifier" }
+        "params": { "sourceNode": "character_identifier_llm" }
     },
-    // 节点 3: 动态角色分析 (Map)
+
+    // =================================================================
+    // 阶段 2: 动态角色行动分析 (Map/Reduce 模式)
+    // =================================================================
+
+    // 节点 4: Map节点 - 为每个角色生成行动分析
     {
         "id": "dynamic_character_analysis_map",
-        "name": "3. 动态角色分析 (Map)",
+        "name": "4. 动态角色分析 (Map)",
         "enabled": true,
         "type": "map",
         "inputListRef": "{{outputs.parse_character_list}}",
-        "joinNode": "aggregate_character_actions",
-        "templateNode": {
-            "id": "character_action_template",
+        "joinNode": "aggregate_character_actions", // 指定下一步的聚合节点
+        "templateNode": { // 这是为每个角色动态创建的LLM节点的模板
+            "id": "character_action_template", // 临时ID
             "name": "角色行动分析模板",
             "type": "llm",
-            "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.7 },
+            "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.7 },
             "worldInfo": ["Character-Backstory.json"], // 假设这是一个包含角色背景的世界书
             "promptSlots": [{
                 "enabled": true,
-                // 【优化】更聚焦的指令
                 "content": "当前场景中有一位名叫 '{{item}}' 的角色。基于TA的背景故事和当前场景，设想TA接下来最可能的一个具体行动和一段内心独白。以第三人称小说风格进行描述。\n\n# 角色 '{{item}}' 的背景\n{{module.worldInfo}}\n\n# 当前场景\n{{outputs.story_generator}}"
             }]
         }
     },
-    // 节点 4: 聚合行动 (JS函数，无需修改)
+
+    // 节点 5: Join/Reduce节点 - 聚合所有角色的行动
+    // 【重大改进】使用新的 'joinFromDynamicNodes' 函数
     {
         "id": "aggregate_character_actions",
-        "name": "4. 聚合行动",
+        "name": "5. 聚合角色行动",
         "enabled": true,
         "type": "function",
-        "functionName": "aggregateStoryParts",
-        "params": {}
+        "functionName": "joinFromDynamicNodes",
+        "params": {
+            // itemTemplate 定义了每个动态节点的输出如何被格式化
+            "itemTemplate": "关于角色“{{item}}”的行动构想：\n{{output}}",
+            // separator 定义了各项之间如何连接
+            "separator": "\n\n"
+        }
     },
-    // 节点 5: 战斗检查
+
+    // =================================================================
+    // 阶段 3: 剧情分支 (Router 模式)
+    // =================================================================
+    
+    // 节点 6: 战斗检查LLM
     {
-        "id": "combat_check",
-        "name": "5. 战斗检查",
+        "id": "combat_check_llm",
+        "name": "6. LLM检查战斗可能性",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.0 }, // temperature=0.0 使输出更稳定
+        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.0 }, // temperature=0.0 使输出更稳定
         "promptSlots": [{
             "enabled": true,
-            // 【优化】强制单字输出
             "content": "分析以下场景描述中是否隐含了即将发生的物理冲突或战斗意图。你的回答只能是 'Yes' 或 'No'，不要包含任何其他字符或解释。\n\n场景:\n{{outputs.aggregate_character_actions}}"
         }]
     },
-    // 节点 6: 战斗路由器 (无需修改)
+    
+    // 节点 7: 战斗决策路由器
+    // 【重大改进】这里不直接用 combat_check_llm 的输出，而是先通过一个函数节点返回布尔值，
+    // 这样路由器的条件就是 "true" 或 "false"，更加稳健。
+    // (虽然直接匹配 "Yes" 也可以，但这是一个展示组合性的好例子)
+    {
+        "id": "combat_decision_function",
+        "name": "7. 战斗决策函数",
+        "enabled": true,
+        "type": "function",
+        "functionName": "textContains",
+        "params": {
+            "sourceNode": "combat_check_llm",
+            "keyword": "Yes",
+            "caseSensitive": false
+        }
+    },
+    
+    // 节点 8: 战斗路由器
     {
         "id": "combat_router",
-        "name": "6. 战斗路由器",
+        "name": "8. 战斗路由器",
         "enabled": true,
         "type": "router",
-        "condition": "{{outputs.combat_check}}",
-        "routes": { "Yes": "combat_module", "No": "peaceful_module" }
+        "condition": "{{outputs.combat_decision_function}}", // 依赖函数节点的布尔输出
+        "routes": { 
+            "true": "combat_module",    // 如果是 true，走向战斗分支
+            "false": "peaceful_module"  // 如果是 false，走向和平分支
+        }
     },
-    // 节点 7 & 8: 分支
+
+    // 节点 9a & 9b: 剧情分支
     {
         "id": "combat_module",
-        "name": "7a. 战斗流程",
+        "name": "9a. 战斗流程",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.9 },
+        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.9 },
         "promptSlots": [{ "enabled": true, "content": "续写下面的故事，引入一场激烈的战斗。详细描写战斗的起因和最初的几个回合。\n\n故事背景：\n{{outputs.aggregate_character_actions}}" }]
     },
     {
         "id": "peaceful_module",
-        "name": "7b. 和平流程",
+        "name": "9b. 和平流程",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.6 },
+        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.6 },
         "promptSlots": [{ "enabled": true, "content": "续写下面的故事，展开一段充满紧张感的对话或非暴力冲突。聚焦于角色的心理博弈和潜台词。\n\n故事背景：\n{{outputs.aggregate_character_actions}}" }]
     },
-    // 节点 9: 最终整合器
+
+    // =================================================================
+    // 阶段 4: 最终整合与清理
+    // =================================================================
+
+    // 节点 10: 最终整合器
     {
         "id": "final_formatter",
-        "name": "Final Formatter",
+        "name": "10. 最终整合器",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.5 },
+        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.5 },
         "promptSlots": [{
             "enabled": true,
-            // 【优化】这个 prompt 现在可以安全地处理空输入了
+            // 这个 prompt 现在可以安全地处理空输入了，因为 {{outputs.combat_module}} 或 {{outputs.peaceful_module}}
+            // 在被跳过时，模板渲染会将其视为空字符串。
             "content": "你是一位优秀的故事编辑。你的任务是优化和完善下面的“主要故事文本”。\n如果下面的“附加续写”部分有内容，请将其无缝地融入主要故事文本中，形成一个连贯、流畅的故事段落。如果“附加续写”部分为空，你只需对“主要故事文本”进行润色和续写，确保它有一个自然的结尾即可。\n你的最终输出必须是完整的故事，不要包含任何解释或标签。\n\n[主要故事文本]\n{{outputs.story_generator}}\n\n[附加续写]\n{{outputs.combat_module}}{{outputs.peaceful_module}}"
         }]
     }

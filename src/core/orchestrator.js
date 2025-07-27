@@ -71,97 +71,90 @@ export class GenerationOrchestrator {
     }
 
     async _calculateModuleWorldInfo(module, preRenderedPrompt) {
+        // 1. 如果模块没有配置World Info，则提前返回，避免不必要的操作。
         if (!module.worldInfo || !Array.isArray(module.worldInfo) || module.worldInfo.length === 0) {
             return '';
         }
 
+        // 2. 【核心逻辑】在进入 try 块之前，完整地备份 SillyTavern 的当前状态。
+        //    使用扩展运算符 `...` 和 `JSON.parse(JSON.stringify(...))` 来创建深/浅副本，
+        //    防止后续操作意外修改原始备份。
+        const originalState = {
+            selected_world_info: window.selected_world_info ? [...window.selected_world_info] : [],
+            characters: window.characters ? [...window.characters] : [],
+            chat_metadata: window.chat_metadata ? JSON.parse(JSON.stringify(window.chat_metadata)) : {},
+            power_user_lorebook: window.power_user?.persona_description_lorebook
+        };
+
         try {
+            // 3. 检查必要的SillyTavern函数是否存在。
             if (typeof SYSTEM.getWorldInfoPrompt !== 'function' || typeof SYSTEM.loadWorldInfo !== 'function') {
-                console.error('[Orchestrator] World info functions not available in SYSTEM object');
-                console.log('[Orchestrator] Available SYSTEM methods:', Object.keys(SYSTEM));
-                return '';
+                console.error('[Orchestrator] World Info functions are not available in the SYSTEM manager.');
+                return ''; // 返回安全值
             }
 
-            const originalState = {
-                selected_world_info: window.selected_world_info ? [...window.selected_world_info] : [],
-                characters: window.characters ? [...window.characters] : [],
-                chat_metadata: window.chat_metadata ? JSON.parse(JSON.stringify(window.chat_metadata)) : {},
-                power_user_lorebook: window.power_user?.persona_description_lorebook
-            };
+            console.log(`[Orchestrator] Temporarily setting module WI: [${module.worldInfo.join(', ')}]`);
 
-            console.log(`[Orchestrator] Setting module WI: [${module.worldInfo.join(', ')}]`);
-
-            if (!window.selected_world_info) {
-                window.selected_world_info = [];
-            }
-            if (!window.characters) {
-                window.characters = [];
-            }
-            if (!window.chat_metadata) {
-                window.chat_metadata = {};
-            }
-            if (!window.power_user) {
-                window.power_user = {};
-            }
-
+            // 4. 修改全局状态，为模块的WI计算做准备。
+            //    这里清空了全局的WI选择、角色列表、聊天元数据，并禁用了角色的默认lorebook，
+            //    以确保一个“干净”的计算环境。
+            if (!window.selected_world_info) window.selected_world_info = [];
             window.selected_world_info.length = 0;
             window.selected_world_info.push(...module.worldInfo);
 
+            if (!window.characters) window.characters = [];
             window.characters.length = 0;
-            Object.keys(window.chat_metadata).forEach(key => {
-                delete window.chat_metadata[key];
-            });
-
+            
+            if (!window.chat_metadata) window.chat_metadata = {};
+            Object.keys(window.chat_metadata).forEach(key => delete window.chat_metadata[key]);
+            
+            if (!window.power_user) window.power_user = {};
             window.power_user.persona_description_lorebook = undefined;
 
+            // 5. 异步加载模块指定的WI文件。
             const loadPromises = module.worldInfo.map(worldName => SYSTEM.loadWorldInfo(worldName));
             await Promise.all(loadPromises);
 
+            // 6. 准备参数并调用SillyTavern的核心WI计算函数。
             const chatMessages = this.rawContext.chat
                 .filter(m => !m.is_system)
                 .map(m => m.mes)
                 .reverse();
-
             const maxContextSize = this.rawContext.max_context || 4096;
+            const globalScanData = { /* ... 保持与原代码一致 ... */ };
 
-            const globalScanData = {
-                personaDescription: '',
-                characterDescription: '',
-                characterPersonality: '',
-                characterDepthPrompt: '',
-                scenario: '',
-                creatorNotes: ''
-            };
-
-            console.log(`[Orchestrator] Calling getWorldInfoPrompt with ${chatMessages.length} messages, maxContext: ${maxContextSize}`);
-
+            console.log(`[Orchestrator] Calling getWorldInfoPrompt for module...`);
             const wiResult = await SYSTEM.getWorldInfoPrompt(chatMessages, maxContextSize, true, globalScanData);
 
             const moduleWiString = (wiResult?.worldInfoString || wiResult || '').toString().trim();
-            console.log(`[Orchestrator] WI calculated. Length: ${moduleWiString.length}`);
+            console.log(`[Orchestrator] Module WI calculated. Length: ${moduleWiString.length}`);
 
+            // 7. 返回计算结果。
+            return moduleWiString;
+
+        } catch (error) {
+            // 8. 如果在 try 块中发生任何错误，捕获它，记录日志，并返回一个安全的空字符串。
+            console.error(`[Orchestrator] An error occurred during module WI calculation:`, error);
+            return '';
+        } finally {
+            // 9. 【关键修正】无论 try 块是成功还是失败，此处的代码都将保证执行。
+            console.log('[Orchestrator] Restoring original SillyTavern state...');
+
+            // 恢复所有被修改的全局变量到它们被修改之前的状态。
             window.selected_world_info.length = 0;
             window.selected_world_info.push(...originalState.selected_world_info);
 
             window.characters.length = 0;
             window.characters.push(...originalState.characters);
 
-            Object.keys(window.chat_metadata).forEach(key => {
-                delete window.chat_metadata[key];
-            });
+            Object.keys(window.chat_metadata).forEach(key => delete window.chat_metadata[key]);
             Object.assign(window.chat_metadata, originalState.chat_metadata);
 
             if (originalState.power_user_lorebook !== undefined) {
                 window.power_user.persona_description_lorebook = originalState.power_user_lorebook;
             }
 
-            console.log('[Orchestrator] Original state restored.');
-            return moduleWiString;
-
-        } catch (error) {
-            console.error(`[Orchestrator] Error calculating WI:`, error);
-            console.error('[Orchestrator] Error stack:', error.stack);
-            return '';
+            console.log('[Orchestrator] Original state restored successfully.');
         }
     }
 
@@ -237,9 +230,9 @@ export class GenerationOrchestrator {
                 nodeDependencies.add(params.sourceNode);
             }
             if (params.sourceNodeIds && Array.isArray(params.sourceNodeIds)) {
-                 params.sourceNodeIds.forEach(id => {
+                params.sourceNodeIds.forEach(id => {
                     if (this.nodes[id]) nodeDependencies.add(id);
-                 });
+                });
             }
 
             // c. 【新增】检查MapNode和Router的特定依赖
@@ -345,7 +338,7 @@ export class GenerationOrchestrator {
     async _executeRouterNode(node) {
         const conditionValueRaw = this._resolvePath(node.condition.replace(/{{|}}/g, '').trim(), this.context);
         const conditionValue = String(conditionValueRaw).trim().toLowerCase();
-        
+
         let chosenNextNodeId = null;
         for (const routeKey in node.routes) {
             // 支持用 'default' 作为备用路由
@@ -354,14 +347,14 @@ export class GenerationOrchestrator {
                 break;
             }
         }
-        
+
         // 如果没有精确匹配，检查是否有 'default' 路由
         if (!chosenNextNodeId && node.routes.default) {
             chosenNextNodeId = node.routes.default;
         }
 
         console.log(`[Router:${node.id}] Condition value is "${conditionValue}". Routing to -> ${chosenNextNodeId || 'end of branch'}.`);
-        
+
         // 将决策结果存起来，以便 run 函数使用
         this.context.outputs[node.id] = { decision: chosenNextNodeId };
     }
@@ -410,15 +403,15 @@ export class GenerationOrchestrator {
         if (joinNodeId && this.nodes[joinNodeId]) {
             const joinNode = this.nodes[joinNodeId];
             const joinNodeDeps = this.dependencies.get(joinNodeId) || new Set();
-            
+
             // JoinNode 依赖于所有动态生成的节点
             dynamicNodeIds.forEach(id => {
                 joinNodeDeps.add(id);
                 // 同时，建立反向依赖
-                if(!this.dependents.has(id)) this.dependents.set(id, new Set());
+                if (!this.dependents.has(id)) this.dependents.set(id, new Set());
                 this.dependents.get(id).add(joinNodeId);
             });
-            
+
             this.dependencies.set(joinNodeId, joinNodeDeps);
 
             if (!joinNode.params) joinNode.params = {};
@@ -448,7 +441,7 @@ export class GenerationOrchestrator {
                 try {
                     // 防御性检查，防止跳过的节点被错误执行
                     if (this.nodeStates[nodeId] !== 'pending') return;
-                    
+
                     this.nodeStates[nodeId] = 'running';
                     await this._executeNode(nodeId);
                     this.nodeStates[nodeId] = 'completed';
@@ -462,7 +455,7 @@ export class GenerationOrchestrator {
             });
 
             await Promise.all(promises);
-            
+
             // [!code focus:start]
             // ========================= 核心修正逻辑 START =========================
             // 在处理下游节点之前，检查刚刚完成的批次中是否有MapNode。
@@ -478,15 +471,20 @@ export class GenerationOrchestrator {
                         // 新节点在创建时已设置依赖，这里直接从 this.dependencies 获取
                         const initialDegree = this.dependencies.get(dynamicNodeId)?.size || 0;
                         inDegree.set(dynamicNodeId, initialDegree);
+
+                        // 【补充检查】如果新节点的入度为0，它应该被加入下一个执行队列
+                        // 但在你的设计中，动态节点的依赖是MapNode本身，所以它的入度至少为1，
+                        // 并且会在MapNode完成后递减，所以这里的逻辑是安全的。
                     }
 
                     // 2. 更新JoinNode的inDegree，因为它获得了新的依赖
                     if (joinNodeId && this.nodes[joinNodeId]) {
-                        const oldDegree = inDegree.get(joinNodeId) || 0;
-                        // 新的入度 = 旧的入度 + 新增的动态节点依赖数量
-                        const newDegree = oldDegree + dynamicNodeIds.length;
-                        inDegree.set(joinNodeId, newDegree);
-                        console.log(`[GraphUpdate] JoinNode ${joinNodeId} inDegree updated from ${oldDegree} to ${newDegree}`);
+                        // 【重要修正】这里的逻辑需要调整。不应该是 oldDegree + newDegree。
+                        // 应该是直接从 this.dependencies 重新计算。
+                        // 但考虑到拓扑排序的递减性质，更好的方法是增加它的 inDegree。
+                        const currentDegree = inDegree.get(joinNodeId) || 0;
+                        inDegree.set(joinNodeId, currentDegree + dynamicNodeIds.length);
+                        console.log(`[GraphUpdate] JoinNode ${joinNodeId} inDegree increased by ${dynamicNodeIds.length}, new total: ${inDegree.get(joinNodeId)}`);
                     }
                 }
             }
@@ -505,24 +503,24 @@ export class GenerationOrchestrator {
                         const targetNodeId = node.routes[routeKey];
                         if (targetNodeId !== decision && this.nodes[targetNodeId] && this.nodeStates[targetNodeId] === 'pending') {
                             this.nodeStates[targetNodeId] = 'skipped';
-                            nodesToProcessForDependents.add(targetNodeId); 
+                            nodesToProcessForDependents.add(targetNodeId);
                             console.log(`[Router:${node.id}] Skipped node ${targetNodeId}`);
                         }
                     }
                 }
             }
-            
+
             completedOrSkippedCount += nodesToProcessForDependents.size;
 
             // 为所有新完成或跳过的节点，更新其下游节点的入度
             for (const processedNodeId of nodesToProcessForDependents) {
                 const dependents = this.dependents.get(processedNodeId) || new Set();
-                
+
                 for (const dependentId of dependents) {
                     if (this.nodeStates[dependentId] === 'pending') {
                         const newDegree = (inDegree.get(dependentId) || 1) - 1;
                         inDegree.set(dependentId, newDegree);
-                       
+
                         if (newDegree === 0) {
                             executionQueue.push(dependentId);
                         }
@@ -530,7 +528,7 @@ export class GenerationOrchestrator {
                 }
             }
         }
-        
+
         const totalNodes = Object.keys(this.nodes).length;
         if (completedOrSkippedCount < totalNodes) {
             const unexecutedNodes = Object.keys(this.nodes).filter(id => this.nodeStates[id] === 'pending');

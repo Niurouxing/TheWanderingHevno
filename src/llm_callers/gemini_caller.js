@@ -16,7 +16,7 @@ export async function execute(prompt, llmConfig) {
         throw new Error("Google Generative AI SDK is not loaded.");
     }
     
-    const key = apiKeyManager.acquireKey();
+    const key = await apiKeyManager.acquireKey();
     try {
         const genAI = new window.GoogleGenerativeAI(key);
 
