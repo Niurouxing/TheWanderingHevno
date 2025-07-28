@@ -9,12 +9,24 @@ import { WorldInfoProcessor } from './processor.js';
 export class WorldInfoManager {
     constructor(options = {}) {
         this.loader = worldInfoLoader;
-        // 调试模式根据用户选项决定
-        this.processor = new WorldInfoProcessor({
-            ...options,
-            debugMode: options.debugMode || false
-        });
-        this.debugMode = options.debugMode || false;
+        
+        // 默认配置，重点关注递归相关设置
+        const defaultOptions = {
+            budget: 25,                // token预算（百分比）
+            maxRecursionDepth: 2,      // 【重要】最大递归深度，默认2次
+            caseSensitive: false,      // 大小写敏感
+            matchWholeWords: false,    // 匹配整词
+            includeNames: true,        // 包含名称
+            debugMode: false,          // 调试模式
+            ...options
+        };
+        
+        this.processor = new WorldInfoProcessor(defaultOptions);
+        this.debugMode = defaultOptions.debugMode;
+        
+        if (this.debugMode) {
+            console.log('[WorldInfoManager] Initialized with options:', defaultOptions);
+        }
     }
 
     /**

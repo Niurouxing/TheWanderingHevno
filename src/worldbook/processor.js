@@ -52,13 +52,13 @@ export class WorldInfoProcessor {
      * @returns {Promise<Object>} 处理结果
      */
     async processWorldInfo(entries, chatMessages, globalScanData = {}, maxContext = 4096) {
-        console.log(`[WorldInfoProcessor] Processing ${entries.length} entries`);
+        console.log(`[WorldInfoProcessor] Processing ${entries.length} entries with max recursion depth: ${this.options.maxRecursionDepth}`);
         
         const activatedEntries = [];
         const processedEntries = new Set(); // 防止重复处理
-        const recursionStack = new Set(); // 防止无限递归
         
-        // 第一轮：处理常量条目和关键词匹配
+        // ========== 第一轮：初始激活（常量条目和关键词匹配） ==========
+        console.log(`[WorldInfoProcessor] [Round 0] Initial activation from chat messages`);
         const initialActivated = await this._processInitialEntries(
             entries, 
             chatMessages, 
@@ -67,8 +67,9 @@ export class WorldInfoProcessor {
         );
         
         activatedEntries.push(...initialActivated);
+        console.log(`[WorldInfoProcessor] [Round 0] Activated ${initialActivated.length} entries initially`);
 
-        // 递归处理
+        // ========== 递归处理：激活的条目内容可能触发更多条目 ==========
         let currentDepth = 0;
         let hasNewActivations = true;
         
@@ -76,41 +77,70 @@ export class WorldInfoProcessor {
             hasNewActivations = false;
             currentDepth++;
             
-            console.log(`[WorldInfoProcessor] Recursion depth ${currentDepth}`);
+            console.log(`[WorldInfoProcessor] [Round ${currentDepth}] Starting recursion depth ${currentDepth}`);
             
-            // 获取新激活内容的文本用于下一轮匹配
-            const newContent = activatedEntries
-                .filter(entry => !recursionStack.has(entry.uid))
+            // 获取本轮可以用于递归激活的内容
+            // 只有 preventRecursion = false 的条目才能触发递归
+            const recursiveTriggerContent = activatedEntries
+                .filter(entry => {
+                    // 必须不阻止递归，且内容不为空
+                    return !entry.preventRecursion && entry.content && entry.content.trim();
+                })
                 .map(entry => entry.content)
                 .join(' ');
             
-            if (!newContent.trim()) {
+            if (!recursiveTriggerContent.trim()) {
+                console.log(`[WorldInfoProcessor] [Round ${currentDepth}] No recursive trigger content available, stopping recursion`);
                 break;
             }
 
-            // 用新内容进行匹配
+            if (this.debugMode) {
+                console.log(`[WorldInfoProcessor] [Round ${currentDepth}] Recursive trigger content (${recursiveTriggerContent.length} chars): ${recursiveTriggerContent.substring(0, 200)}...`);
+            }
+
+            // 用递归内容进行匹配，寻找新的激活条目
             const recursiveActivated = await this._processRecursiveEntries(
                 entries,
-                [newContent], // 将新内容作为"消息"进行匹配
+                [recursiveTriggerContent], // 将递归内容作为"消息"进行匹配
                 globalScanData,
                 processedEntries,
-                recursionStack
+                currentDepth
             );
             
             if (recursiveActivated.length > 0) {
                 activatedEntries.push(...recursiveActivated);
                 hasNewActivations = true;
                 
-                // 将新激活的条目加入递归栈
-                recursiveActivated.forEach(entry => recursionStack.add(entry.uid));
+                console.log(`[WorldInfoProcessor] [Round ${currentDepth}] Activated ${recursiveActivated.length} entries by recursion`);
+                
+                if (this.debugMode) {
+                    recursiveActivated.forEach(entry => {
+                        console.log(`[WorldInfoProcessor] [Round ${currentDepth}] --> Activated: ${entry.comment || 'Unnamed'} (uid: ${entry.uid})`);
+                    });
+                }
+            } else {
+                console.log(`[WorldInfoProcessor] [Round ${currentDepth}] No new entries activated, stopping recursion`);
             }
+        }
+
+        if (currentDepth >= this.options.maxRecursionDepth) {
+            console.warn(`[WorldInfoProcessor] Reached maximum recursion depth (${this.options.maxRecursionDepth}), stopping to prevent infinite loops`);
         }
 
         // 排序和格式化
         const sortedEntries = this._sortEntriesByOrder(activatedEntries);
         const formattedResult = this._formatActivatedEntries(sortedEntries, maxContext);
         
-        console.log(`[WorldInfoProcessor] Activated ${activatedEntries.length} entries after ${currentDepth} recursion rounds`);
+        console.log(`[WorldInfoProcessor] Final result: ${activatedEntries.length} total entries activated after ${currentDepth} recursion rounds`);
+        
+        // 输出最终激活的条目摘要
+        if (this.debugMode && activatedEntries.length > 0) {
+            console.log(`[WorldInfoProcessor] Activated entries summary:`);
+            activatedEntries.forEach((entry, index) => {
+                const activationType = entry.constant ? 'Constant' : 'Triggered';
+                console.log(`  ${index + 1}. ${entry.comment || 'Unnamed'} (uid: ${entry.uid}) - ${activationType}`);
+            });
+        }
         
         return formattedResult;
     }
@@ -164,27 +194,51 @@ export class WorldInfoProcessor {
 
     /**
      * 处理递归条目
+     * @param {Object[]} entries - 所有世界书条目
+     * @param {string[]} recursiveContent - 递归触发内容数组
+     * @param {Object} globalScanData - 全局扫描数据
+     * @param {Set} processedEntries - 已处理的条目UID集合
+     * @param {number} currentDepth - 当前递归深度
+     * @returns {Promise<Object[]>} 新激活的条目数组
      */
-    async _processRecursiveEntries(entries, newContentArray, globalScanData, processedEntries, recursionStack) {
+    async _processRecursiveEntries(entries, recursiveContent, globalScanData, processedEntries, currentDepth) {
         const activated = [];
         
         for (const entry of entries) {
-            if (processedEntries.has(entry.uid) || 
-                entry.disable || 
-                entry.constant || 
-                entry.preventRecursion ||
-                recursionStack.has(entry.uid)) {
+            // 跳过条件检查
+            if (processedEntries.has(entry.uid) || entry.disable) {
                 continue;
             }
 
-            if (entry.key && entry.key.length > 0) {
-                const shouldActivate = this._checkKeywordMatch(entry, newContentArray, {});
-                if (shouldActivate) {
-                    activated.push(entry);
-                    processedEntries.add(entry.uid);
-                    if (this.debugMode) {
-                        console.log(`[WorldInfoProcessor] Entry ${entry.uid} activated by recursive match`);
-                    }
+            // 【关键】excludeRecursion = true 的条目不能被递归激活
+            if (entry.excludeRecursion) {
+                if (this.debugMode) {
+                    console.log(`[WorldInfoProcessor] [Round ${currentDepth}] Entry ${entry.uid} (${entry.comment}) skipped - excludeRecursion is true`);
+                }
+                continue;
+            }
+
+            // 常量条目只在初始轮次激活，不会在递归中激活
+            if (entry.constant) {
+                continue;
+            }
+
+            // 必须有关键词才能被激活
+            if (!entry.key || entry.key.length === 0) {
+                continue;
+            }
+
+            // 进行关键词匹配
+            const shouldActivate = this._checkKeywordMatch(entry, recursiveContent, globalScanData);
+            
+            if (shouldActivate) {
+                activated.push(entry);
+                processedEntries.add(entry.uid);
+                
+                if (this.debugMode) {
+                    console.log(`[WorldInfoProcessor] [Round ${currentDepth}] Entry ${entry.uid} (${entry.comment}) activated by recursive match`);
+                    console.log(`[WorldInfoProcessor] [Round ${currentDepth}] --> Matched keys: [${entry.key.join(', ')}]`);
+                    console.log(`[WorldInfoProcessor] [Round ${currentDepth}] --> preventRecursion: ${entry.preventRecursion}, excludeRecursion: ${entry.excludeRecursion}`);
                 }
             }
         }
