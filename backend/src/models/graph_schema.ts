@@ -109,7 +109,7 @@ export type ProcessorNode = z.infer<typeof ProcessorNodeSchema>;
  * 结构节点：MapNode
  * 它的职责是流程控制，因此保持独立
  */
-export const MapNodeSchema = BaseNodeSchema.extend({
+export const MapNodeSchema = z.object({
   type: z.literal('map'),
   // The subgraph to be executed for each item in the input list.
   subgraph: z.lazy(() => GraphSchema),
