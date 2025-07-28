@@ -82,9 +82,19 @@ export class GenerationOrchestrator {
         console.log(`[Orchestrator] Processing World Info for node: ${module.id}. Books: [${module.worldInfo.join(', ')}]`);
 
         try {
+            // 临时设置一个空的worldInfo对象，防止在渲染过程中出现路径解析错误
+            const originalModuleContext = this.context.module;
+            this.context.module = { 
+                ...originalModuleContext,
+                worldInfo: this._createEmptyWorldInfoObject()
+            };
+            
             // 先渲染节点的prompt内容（不包含worldInfo），获取完整的渲染后文本
             // 这样可以包含所有用户想要的模板变量，如 {{item}}, {{outputs.story_generator}} 等
             const renderedPrompt = this._renderPrompt(module, module.injectedParams || {});
+            
+            // 恢复原始的module上下文
+            this.context.module = originalModuleContext;
             
             console.log(`[Orchestrator] Using rendered prompt as search text for World Info (length: ${renderedPrompt.length})`);
             
@@ -138,6 +148,28 @@ export class GenerationOrchestrator {
             allActivatedEntries: [],
             worldInfoString: ''
         };
+    }
+
+    /**
+     * 创建空的世界书对象（用于模板渲染时的临时占位）
+     */
+    _createEmptyWorldInfoObject() {
+        const worldInfoObject = Object.create(String.prototype);
+        Object.assign(worldInfoObject, {
+            // 作为字符串时的值
+            toString: () => '',
+            valueOf: () => '',
+            
+            // 分位置的属性
+            before: '',
+            after: '',
+            ANTop: '',
+            ANBottom: '',
+            EMTop: '',
+            EMBottom: '',
+            atDepth: []
+        });
+        return worldInfoObject;
     }
 
     _renderPrompt(node, injectedParams = {}) {
@@ -213,6 +245,8 @@ export class GenerationOrchestrator {
             }
             if (params.sourceMapNode && this.nodes[params.sourceMapNode]) {
                 nodeDependencies.add(params.sourceMapNode);
+                // 【关键修改】标记这个节点需要等待Map节点的动态子节点完成
+                node._waitForMapCompletion = params.sourceMapNode;
             }
             if (params.sourceNodeIds && Array.isArray(params.sourceNodeIds)) {
                 params.sourceNodeIds.forEach(id => {
@@ -439,6 +473,10 @@ export class GenerationOrchestrator {
         // Map节点的输出是动态节点ID的列表
         this.context.outputs[node.id] = dynamicNodeIds;
         console.log(`[MapNode:${node.id}] Output: [${dynamicNodeIds.join(', ')}]`);
+        
+        // 【关键修改】Map节点现在不立即完成，而是等待所有动态节点完成
+        // 这将在主执行循环中的检查逻辑中处理
+        console.log(`[MapNode:${node.id}] Waiting for ${dynamicNodeIds.length} dynamic nodes to complete...`);
     }
 
     async run() {
@@ -447,7 +485,17 @@ export class GenerationOrchestrator {
 
         const inDegree = new Map();
         for (const nodeId in this.nodes) {
-            inDegree.set(nodeId, this.dependencies.get(nodeId)?.size || 0);
+            const baseDegree = this.dependencies.get(nodeId)?.size || 0;
+            const node = this.nodes[nodeId];
+            
+            // 【新增】如果节点需要等待Map完成，增加额外的入度
+            let finalDegree = baseDegree;
+            if (node._waitForMapCompletion) {
+                finalDegree += 1; // 额外增加1个入度，直到Map真正完成才减少
+                console.log(`[GraphInit] Node ${nodeId} waiting for Map completion: ${node._waitForMapCompletion}, degree: ${baseDegree} -> ${finalDegree}`);
+            }
+            
+            inDegree.set(nodeId, finalDegree);
         }
 
         let executionQueue = Object.keys(this.nodes).filter(nodeId => inDegree.get(nodeId) === 0);
@@ -466,7 +514,15 @@ export class GenerationOrchestrator {
 
                     this.nodeStates[nodeId] = 'running';
                     await this._executeNode(nodeId);
-                    this.nodeStates[nodeId] = 'completed';
+                    
+                    // 【关键修改】Map节点执行后保持running状态，等待动态节点完成
+                    const node = this.nodes[nodeId];
+                    if (node.type === 'map') {
+                        // Map节点保持running状态，将在后续逻辑中检查并完成
+                        console.log(`[MapNode:${nodeId}] Execution completed but staying in running state`);
+                    } else {
+                        this.nodeStates[nodeId] = 'completed';
+                    }
                 } catch (error) {
                     this.nodeStates[nodeId] = 'failed';
                     const nodeName = this.nodes[nodeId]?.name || 'Unknown Node';
@@ -478,43 +534,71 @@ export class GenerationOrchestrator {
 
             await Promise.all(promises);
 
+            let nodesToProcessForDependents = new Set(currentBatch);
+
             // [!code focus:start]
             // ========================= 核心修正逻辑 START =========================
-            // 在处理下游节点之前，检查刚刚完成的批次中是否有MapNode。
-            // 如果有，图的结构已经改变，我们必须更新inDegree映射。
+            // 处理Map节点创建的动态节点
             for (const completedNodeId of currentBatch) {
                 const node = this.nodes[completedNodeId];
-                if (node.type === 'map') {
-                    const joinNodeId = node.joinNode;
-                    const dynamicNodeIds = this.nodes[joinNodeId]?.params?.sourceNodeIds || [];
-
-                    // 1. 为所有新生成的动态节点设置初始inDegree
+                if (node.type === 'map' && this.nodeStates[completedNodeId] === 'running') {
+                    const dynamicNodeIds = this.context.outputs[completedNodeId] || [];
+                    
+                    // 为新创建的动态节点设置入度并加入队列
                     for (const dynamicNodeId of dynamicNodeIds) {
-                        // 新节点在创建时已设置依赖，这里直接从 this.dependencies 获取
-                        const initialDegree = this.dependencies.get(dynamicNodeId)?.size || 0;
-                        inDegree.set(dynamicNodeId, initialDegree);
-
-                        // 【补充检查】如果新节点的入度为0，它应该被加入下一个执行队列
-                        // 但在你的设计中，动态节点的依赖是MapNode本身，所以它的入度至少为1，
-                        // 并且会在MapNode完成后递减，所以这里的逻辑是安全的。
+                        if (!inDegree.has(dynamicNodeId)) {
+                            const initialDegree = this.dependencies.get(dynamicNodeId)?.size || 0;
+                            inDegree.set(dynamicNodeId, initialDegree);
+                            
+                            // 如果入度为0（不太可能，因为动态节点依赖Map节点），加入队列
+                            if (initialDegree === 0) {
+                                executionQueue.push(dynamicNodeId);
+                            }
+                        }
                     }
-
-                    // 2. 更新JoinNode的inDegree，因为它获得了新的依赖
-                    if (joinNodeId && this.nodes[joinNodeId]) {
-                        // 【重要修正】这里的逻辑需要调整。不应该是 oldDegree + newDegree。
-                        // 应该是直接从 this.dependencies 重新计算。
-                        // 但考虑到拓扑排序的递减性质，更好的方法是增加它的 inDegree。
-                        const currentDegree = inDegree.get(joinNodeId) || 0;
-                        inDegree.set(joinNodeId, currentDegree + dynamicNodeIds.length);
-                        console.log(`[GraphUpdate] JoinNode ${joinNodeId} inDegree increased by ${dynamicNodeIds.length}, new total: ${inDegree.get(joinNodeId)}`);
+                }
+            }
+            
+            // 检查是否有Map节点的所有动态子节点都已完成
+            for (const nodeId in this.nodes) {
+                const node = this.nodes[nodeId];
+                if (node.type === 'map' && this.nodeStates[nodeId] === 'running') {
+                    // 检查这个Map节点的所有动态子节点是否都完成了
+                    const dynamicNodeIds = this.context.outputs[nodeId] || [];
+                    const allDynamicNodesCompleted = dynamicNodeIds.every(dynamicId => 
+                        this.nodeStates[dynamicId] === 'completed' || 
+                        this.nodeStates[dynamicId] === 'failed' || 
+                        this.nodeStates[dynamicId] === 'skipped'
+                    );
+                    
+                    if (allDynamicNodesCompleted && dynamicNodeIds.length > 0) {
+                        // Map节点现在可以标记为完成
+                        this.nodeStates[nodeId] = 'completed';
+                        nodesToProcessForDependents.add(nodeId);
+                        console.log(`[MapNode:${nodeId}] All ${dynamicNodeIds.length} dynamic nodes completed, Map node now completed`);
+                        
+                        // 【新增】检查是否有节点在等待这个Map节点的完全完成
+                        for (const waitingNodeId in this.nodes) {
+                            const waitingNode = this.nodes[waitingNodeId];
+                            if (waitingNode._waitForMapCompletion === nodeId && this.nodeStates[waitingNodeId] === 'pending') {
+                                // 减少这个等待节点的入度，因为它现在可以执行了
+                                const currentDegree = inDegree.get(waitingNodeId) || 1;
+                                const newDegree = currentDegree - 1;
+                                inDegree.set(waitingNodeId, newDegree);
+                                console.log(`[MapCompletion:${nodeId}] Releasing waiting node ${waitingNodeId}, degree: ${currentDegree} -> ${newDegree}`);
+                                
+                                // 重新检查该节点是否可以加入执行队列
+                                if (newDegree === 0) {
+                                    executionQueue.push(waitingNodeId);
+                                    console.log(`[MapCompletion:${nodeId}] Added ${waitingNodeId} to execution queue`);
+                                }
+                            }
+                        }
                     }
                 }
             }
             // ========================= 核心修正逻辑 END =========================
             // [!code focus:end]
-
-
-            let nodesToProcessForDependents = new Set(currentBatch);
 
             // 处理刚刚完成的节点，特别是Router
             for (const completedNodeId of currentBatch) {

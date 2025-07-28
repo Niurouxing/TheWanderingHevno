@@ -177,9 +177,16 @@ export class WorldInfoProcessor {
                 }
             } else if (entry.key && entry.key.length > 0) {
                 // 关键词匹配
+                if (this.debugMode) {
+                    console.log(`[WorldInfoProcessor] Testing entry ${entry.uid} (${entry.comment || 'no comment'}) with keywords: [${entry.key.join(', ')}]`);
+                }
                 shouldActivate = this._checkKeywordMatch(entry, chatMessages, globalScanData);
-                if (this.debugMode && shouldActivate) {
-                    console.log(`[WorldInfoProcessor] Entry ${entry.uid} activated by keyword match`);
+                if (this.debugMode) {
+                    if (shouldActivate) {
+                        console.log(`[WorldInfoProcessor] ✓ Entry ${entry.uid} activated by keyword match`);
+                    } else {
+                        console.log(`[WorldInfoProcessor] ❌ Entry ${entry.uid} NOT activated - no keyword match`);
+                    }
                 }
             }
 
@@ -279,7 +286,9 @@ export class WorldInfoProcessor {
 
         if (this.debugMode) {
             console.log(`[WorldInfoProcessor] Checking entry ${entry.uid} keywords: [${entry.key?.join(', ') || 'none'}]`);
-            console.log(`[WorldInfoProcessor] Search text length: ${searchText.length}, preview: "${searchText.substring(0, 100)}..."`);
+            console.log(`[WorldInfoProcessor] Search text length: ${searchText.length}`);
+            console.log(`[WorldInfoProcessor] Search text preview: "${searchText.substring(0, 200)}..."`);
+            console.log(`[WorldInfoProcessor] Case sensitive: ${caseSensitive}, Match whole words: ${entry.matchWholeWords ?? this.options.matchWholeWords}`);
         }
 
         // 主要关键词匹配
@@ -302,6 +311,22 @@ export class WorldInfoProcessor {
     }
 
     /**
+     * 规范化文本中的引号，处理常见的引号不匹配问题
+     * @param {string} text - 要规范化的文本
+     * @returns {string} 规范化后的文本
+     */
+    _normalizeQuotes(text) {
+        if (!text) return text;
+        
+        // 将各种引号类型统一为标准的单引号和双引号
+        return text
+            .replace(/['']/g, "'")  // 将弯曲的单引号替换为直单引号
+            .replace(/[""]/g, '"')  // 将弯曲的双引号替换为直双引号
+            .replace(/，/g, ',')    // 将中文逗号替换为英文逗号
+            .replace(/。/g, '.');   // 将中文句号替换为英文句号
+    }
+
+    /**
      * 检查关键词数组
      * @param {string[]} keys - 关键词数组
      * @param {string} searchText - 搜索文本
@@ -314,20 +339,25 @@ export class WorldInfoProcessor {
             return false;
         }
         
+        // 规范化搜索文本
+        const normalizedSearchText = this._normalizeQuotes(caseSensitive ? searchText : searchText.toLowerCase());
+        
         for (const key of keys) {
             if (!key || key.trim() === '') continue;
             
-            let searchKey = caseSensitive ? key : key.toLowerCase();
+            // 规范化关键词
+            let normalizedKey = this._normalizeQuotes(key);
+            let searchKey = caseSensitive ? normalizedKey : normalizedKey.toLowerCase();
             
             if (this.debugMode) {
-                console.log(`[WorldInfoProcessor] Testing keyword: "${key}" (searchKey: "${searchKey}")`);
+                console.log(`[WorldInfoProcessor] Testing keyword: "${key}" (normalized: "${normalizedKey}", searchKey: "${searchKey}")`);
             }
             
             if (this._isRegexPattern(searchKey)) {
                 // 正则表达式匹配
                 try {
                     const regex = this._parseRegexFromString(searchKey);
-                    if (regex && regex.test(searchText)) {
+                    if (regex && regex.test(normalizedSearchText)) {
                         if (this.debugMode) {
                             console.log(`[WorldInfoProcessor] ✓ Regex match: "${key}"`);
                         }
@@ -341,19 +371,19 @@ export class WorldInfoProcessor {
                 // 普通文本匹配
                 if (matchWholeWords ?? this.options.matchWholeWords) {
                     const wordRegex = new RegExp(`\\b${this._escapeRegex(searchKey)}\\b`, caseSensitive ? 'g' : 'gi');
-                    if (wordRegex.test(searchText)) {
+                    if (wordRegex.test(normalizedSearchText)) {
                         if (this.debugMode) {
                             console.log(`[WorldInfoProcessor] ✓ Whole word match: "${key}"`);
                         }
                         return true;
                     }
                 } else {
-                    if (searchText.includes(searchKey)) {
+                    if (normalizedSearchText.includes(searchKey)) {
                         if (this.debugMode) {
                             console.log(`[WorldInfoProcessor] ✓ Substring match: "${key}"`);
                             // 显示匹配上下文
-                            const index = searchText.indexOf(searchKey);
-                            const context = searchText.substring(Math.max(0, index - 20), index + searchKey.length + 20);
+                            const index = normalizedSearchText.indexOf(searchKey);
+                            const context = normalizedSearchText.substring(Math.max(0, index - 20), index + searchKey.length + 20);
                             console.log(`[WorldInfoProcessor] Match context: "...${context}..."`);
                         }
                         return true;

@@ -17,7 +17,7 @@ export class WorldInfoManager {
             caseSensitive: false,      // 大小写敏感
             matchWholeWords: false,    // 匹配整词
             includeNames: true,        // 包含名称
-            debugMode: false,          // 调试模式
+            debugMode: true,           // 启用调试模式以诊断关键词匹配问题
             ...options
         };
         
