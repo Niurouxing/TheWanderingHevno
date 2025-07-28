@@ -211,6 +211,9 @@ export class GenerationOrchestrator {
             if (params.sourceNode && this.nodes[params.sourceNode]) {
                 nodeDependencies.add(params.sourceNode);
             }
+            if (params.sourceMapNode && this.nodes[params.sourceMapNode]) {
+                nodeDependencies.add(params.sourceMapNode);
+            }
             if (params.sourceNodeIds && Array.isArray(params.sourceNodeIds)) {
                 params.sourceNodeIds.forEach(id => {
                     if (this.nodes[id]) nodeDependencies.add(id);
