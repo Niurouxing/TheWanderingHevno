@@ -28,10 +28,12 @@ import { Popup, POPUP_TYPE, callGenericPopup } from '/scripts/popup.js';
 import {
     getWorldInfoPrompt,
     selected_world_info,
-    loadWorldInfo,
     world_names,
     world_info, // 添加这个导入来访问世界书数据
 } from '/scripts/world-info.js';
+
+// 【新增】导入我们修复后的世界书加载器
+import { worldInfoLoader } from '../worldbook/loader.js';
 
 import { defaultSettings } from '../data/pluginSetting.js';
 
@@ -128,11 +130,25 @@ export const SYSTEM = {
     },
 
     /**
-     * 【新增】直接暴露SillyTavern的WI文件加载函数。
+     * 【修正】使用我们修复后的世界书加载器而不是原生的SillyTavern函数
      * @param {string} worldName - 要加载的世界书文件名。
      * @returns {Promise<object|null>} 加载的数据或null。
      */
-    loadWorldInfo: loadWorldInfo,
+    loadWorldInfo: async (worldName) => {
+        try {
+            console.log(`[SYSTEM] Loading world info: ${worldName}`);
+            const result = await worldInfoLoader.loadWorldInfo(worldName);
+            if (result) {
+                console.log(`[SYSTEM] Successfully loaded ${worldName} with ${result.entries?.length || 0} entries`);
+            } else {
+                console.warn(`[SYSTEM] Failed to load world info: ${worldName}`);
+            }
+            return result;
+        } catch (error) {
+            console.error(`[SYSTEM] Error loading world info ${worldName}:`, error);
+            return null;
+        }
+    },
 
     /**
      * 【新增】清理世界书缓存和状态

@@ -13,7 +13,22 @@ export const defaultPipeline = [
         "worldInfo": ["world_info"], // 使用正确的世界书名称（不带.json扩展名）
         "promptSlots": [{
             "enabled": true,
-            "content": "你是一位富有想象力的小说家。请根据用户的请求，创作一个包含多个角色的、戏剧性的中世纪奇幻小说。场景描述需要生动，并明确介绍至少两名出场角色的名字和简要特征，为后续情节发展埋下伏笔。\n\n用户请求:\n{{sillyTavern.userInput}}\n\n# 世界信息:{{module.worldInfo}}\n\n你的输出必须是一段200字以上的流畅的故事，不能包含任何控制文本或者指令。"
+            "content": `你是一位富有想象力的小说家。请根据以下信息创作一个包含多个角色的、戏剧性的中世纪奇幻小说。
+
+# 用户信息:
+- 用户名: {{sillyTavern.userName}}
+- 用户请求: {{sillyTavern.userInput}}
+
+# 角色设定:
+- 角色名: {{sillyTavern.character.name}}
+
+# 对话历史上下文:
+{{sillyTavern.chat}}
+
+# 世界信息:
+{{module.worldInfo}}
+
+场景描述需要生动，并明确介绍至少两名出场角色的名字和简要特征，为后续情节发展埋下伏笔。确保与之前的对话历史保持连贯性。你的输出必须是一段200字以上的流畅的故事，不能包含任何控制文本或者指令。`
         }]
     },
     
@@ -26,7 +41,18 @@ export const defaultPipeline = [
         "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.1 },
         "promptSlots": [{
             "enabled": true,
-            "content": "分析工具：严格按照 'Characters: 角色A, 角色B, 角色C' 的格式，从以下文本中提取所有被命名的角色。如果一个角色都没有，必须输出 'Characters: None'。不要添加任何其他解释或前言。\n\n文本：\n{{outputs.story_generator}}"
+            "content": `分析工具：基于对话上下文和新故事，提取所有被命名的角色。
+
+# 用户身份: {{sillyTavern.userName}}
+# 对话角色: {{sillyTavern.character.name}}
+
+# 对话历史:
+{{sillyTavern.chat}}
+
+# 新生成的故事:
+{{outputs.story_generator}}
+
+请严格按照 'Characters: 角色A, 角色B, 角色C' 的格式输出角色列表。如果没有角色，输出 'Characters: None'。不要添加任何其他解释或前言。`
         }]
     },
 
@@ -67,7 +93,6 @@ export const defaultPipeline = [
     },
 
     // 节点 5: Join/Reduce节点 - 聚合所有角色的行动
-    // 【重大改进】使用新的 'joinFromDynamicNodes' 函数
     {
         "id": "aggregate_character_actions",
         "name": "5. 聚合角色行动",
