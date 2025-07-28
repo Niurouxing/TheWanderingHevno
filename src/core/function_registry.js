@@ -118,8 +118,40 @@ export const functionRegistry = {
     },
 
     /**
-     * 【新】聚合来自 Map 节点的动态输出。
+     * 【新】从指定的Map节点输出聚合动态节点结果
+     * @param {object} context
+     * @param {object} params - { 
+     *   sourceMapNode: string, // map节点的ID
+     *   itemTemplate: string, 
+     *   separator: string 
+     * }
+     * @returns {string} 拼接后的字符串。
+     */
+    joinFromMapOutput: (context, params) => {
+        const { sourceMapNode, itemTemplate, separator = '\n\n' } = params;
+        if (!sourceMapNode) throw new Error("[joinFromMapOutput] 'sourceMapNode' parameter is required.");
+        if (!itemTemplate) throw new Error("[joinFromMapOutput] 'itemTemplate' parameter is required.");
+        
+        const dynamicNodeIds = context.outputs[sourceMapNode];
+        if (!dynamicNodeIds || !Array.isArray(dynamicNodeIds)) return "";
+        
+        const parts = dynamicNodeIds.map(nodeId => {
+            const output = context.outputs[nodeId] || '';
+            const dynamicNodeDef = context.nodes[nodeId];
+            const item = dynamicNodeDef?.injectedParams?.item || 'Unknown';
+            
+            return itemTemplate
+                .replace(/\{\{item\}\}/g, item)
+                .replace(/\{\{output\}\}/g, output);
+        });
+        
+        return parts.filter(Boolean).join(separator);
+    },
+
+    /**
+     * 【保留】聚合来自 Map 节点的动态输出。
      * 这是 aggregateStoryParts 的通用、可配置的替代品。
+     * @deprecated 建议使用 joinFromMapOutput 替代
      * @param {object} context
      * @param {object} params - { 
      *   sourceNodeIds: string[], 

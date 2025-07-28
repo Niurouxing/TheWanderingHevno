@@ -236,15 +236,7 @@ export class GenerationOrchestrator {
         for (const nodeId in this.nodes) {
             const node = this.nodes[nodeId];
 
-            // a. JoinNode 依赖于 MapNode
-            if (node.type === 'map' && node.joinNode) {
-                const joinNodeId = node.joinNode;
-                if (this.dependencies.has(joinNodeId)) {
-                    this.dependencies.get(joinNodeId).add(nodeId);
-                }
-            }
-
-            // b. 路由器的分支目标依赖于路由器本身
+            // 路由器的分支目标依赖于路由器本身
             if (node.type === 'router' && node.routes) {
                 for (const routeKey in node.routes) {
                     const targetNodeId = node.routes[routeKey];
@@ -408,16 +400,11 @@ export class GenerationOrchestrator {
 
     async _executeMapNode(node) {
         const list = this._resolvePath(node.inputListRef.replace(/{{|}}/g, '').trim(), this.context);
-        const joinNodeId = node.joinNode;
 
         if (!Array.isArray(list) || list.length === 0) {
-            console.warn(`[MapNode:${node.id}] Input list is empty or not an array. Informing join node.`);
-            if (joinNodeId && this.nodes[joinNodeId]) {
-                if (!this.nodes[joinNodeId].params) {
-                    this.nodes[joinNodeId].params = {};
-                }
-                this.nodes[joinNodeId].params.sourceNodeIds = [];
-            }
+            console.warn(`[MapNode:${node.id}] Input list is empty or not an array.`);
+            // Map节点的输出是空数组
+            this.context.outputs[node.id] = [];
             return;
         }
 
@@ -446,23 +433,9 @@ export class GenerationOrchestrator {
             console.log(`[MapNode:${node.id}] Spawned dynamic node: ${newNodeId}`);
         }
 
-        if (joinNodeId && this.nodes[joinNodeId]) {
-            const joinNode = this.nodes[joinNodeId];
-            const joinNodeDeps = this.dependencies.get(joinNodeId) || new Set();
-
-            // JoinNode 依赖于所有动态生成的节点
-            dynamicNodeIds.forEach(id => {
-                joinNodeDeps.add(id);
-                // 同时，建立反向依赖
-                if (!this.dependents.has(id)) this.dependents.set(id, new Set());
-                this.dependents.get(id).add(joinNodeId);
-            });
-
-            this.dependencies.set(joinNodeId, joinNodeDeps);
-
-            if (!joinNode.params) joinNode.params = {};
-            joinNode.params.sourceNodeIds = dynamicNodeIds; // 注入动态ID列表
-        }
+        // Map节点的输出是动态节点ID的列表
+        this.context.outputs[node.id] = dynamicNodeIds;
+        console.log(`[MapNode:${node.id}] Output: [${dynamicNodeIds.join(', ')}]`);
     }
 
     async run() {

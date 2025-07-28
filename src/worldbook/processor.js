@@ -15,11 +15,11 @@ export const WORLD_INFO_LOGIC = {
 export const WORLD_INFO_POSITION = {
     before: 0,
     after: 1,
-    ANTop: 2,
-    ANBottom: 3,
-    atDepth: 4,
-    EMTop: 5,
-    EMBottom: 6,
+    ANTop: 2,     // 作者注释之前
+    ANBottom: 3,  // 作者注释之后
+    atDepth: 4,   // 深度特定位置
+    EMTop: 5,     // ⬆️EM
+    EMBottom: 6,  // ⬇️EM
 };
 
 export const DEFAULT_DEPTH = 4;
