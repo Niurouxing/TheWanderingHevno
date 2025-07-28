@@ -15,6 +15,9 @@ export const defaultPipeline = [
             "enabled": true,
             "content": `你是一位富有想象力的小说家。请根据以下信息创作一个包含多个角色的、戏剧性的中世纪奇幻小说。
 
+# 核心世界设定
+{{module.worldInfo.before}}
+
 # 用户信息:
 - 用户名: {{sillyTavern.userName}}
 - 用户请求: {{sillyTavern.userInput}}
@@ -25,8 +28,11 @@ export const defaultPipeline = [
 # 对话历史上下文:
 {{sillyTavern.chat}}
 
-# 世界信息:
-{{module.worldInfo}}
+# 场景与环境信息:
+{{module.worldInfo.ANTop}}
+
+# 补充世界信息:
+{{module.worldInfo.after}}
 
 场景描述需要生动，并明确介绍至少两名出场角色的名字和简要特征，为后续情节发展埋下伏笔。确保与之前的对话历史保持连贯性。你的输出必须是一段200字以上的流畅的故事，不能包含任何控制文本或者指令。`
         }]
@@ -87,7 +93,7 @@ export const defaultPipeline = [
             "worldInfo": ["character_info"], // 使用正确的世界书名称（不带.json扩展名）
             "promptSlots": [{
                 "enabled": true,
-                "content": "当前场景中有一位名叫 '{{item}}' 的角色。基于TA的背景故事和当前场景，设想TA接下来最可能的一个具体行动和一段内心独白。以第三人称小说风格进行描述。\n\n# 角色 '{{item}}' 的背景\n{{module.worldInfo}}\n\n# 当前场景\n{{outputs.story_generator}}"
+                "content": "当前场景中有一位名叫 '{{item}}' 的角色。基于TA的背景故事和当前场景，设想TA接下来最可能的一个具体行动和一段内心独白。以第三人称小说风格进行描述。\n\n# 角色基础信息\n{{module.worldInfo.before}}\n\n# 角色 '{{item}}' 的详细背景\n{{module.worldInfo.after}}\n\n# 当前场景\n{{outputs.story_generator}}\n\n# 角色状态与情感补充\n{{module.worldInfo.ANBottom}}"
             }]
         }
     },

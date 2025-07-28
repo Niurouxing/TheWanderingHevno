@@ -74,9 +74,9 @@ export class GenerationOrchestrator {
 
 
     async _calculateModuleWorldInfo(module) {
-        // 步骤 1: 如果节点没有配置World Info，直接返回空字符串
+        // 步骤 1: 如果节点没有配置World Info，直接返回空对象
         if (!module.worldInfo || !Array.isArray(module.worldInfo) || module.worldInfo.length === 0) {
-            return '';
+            return this._createEmptyWorldInfoResult();
         }
 
         console.log(`[Orchestrator] Processing World Info for node: ${module.id}. Books: [${module.worldInfo.join(', ')}]`);
@@ -109,20 +109,35 @@ export class GenerationOrchestrator {
                 this.rawContext.max_context || 4096
             );
 
-            const worldInfoString = worldInfoResult.worldInfoString || '';
-
-            if (worldInfoString.trim()) {
-                console.log(`[Orchestrator] Node ${module.id} generated ${worldInfoString.length} chars of WI from ${worldInfoResult.allActivatedEntries.length} activated entries.`);
+            if (worldInfoResult.worldInfoString?.trim()) {
+                console.log(`[Orchestrator] Node ${module.id} generated ${worldInfoResult.worldInfoString.length} chars of WI from ${worldInfoResult.allActivatedEntries.length} activated entries.`);
             } else {
                 console.warn(`[Orchestrator] Node ${module.id} generated no WI with books [${module.worldInfo.join(', ')}]`);
             }
 
-            return worldInfoString;
+            return worldInfoResult;
 
         } catch (error) {
             console.error(`[Orchestrator] Error calculating World Info for node ${module.id}:`, error);
-            return '';
+            return this._createEmptyWorldInfoResult();
         }
+    }
+
+    /**
+     * 创建空的世界书结果对象
+     */
+    _createEmptyWorldInfoResult() {
+        return {
+            worldInfoBefore: '',
+            worldInfoAfter: '',
+            ANTop: '',
+            ANBottom: '',
+            atDepth: [],
+            EMTop: '',
+            EMBottom: '',
+            allActivatedEntries: [],
+            worldInfoString: ''
+        };
     }
 
     _renderPrompt(node, injectedParams = {}) {
@@ -284,9 +299,31 @@ export class GenerationOrchestrator {
         const nodeLabel = `${node.id} (${node.name})`;
         console.log(`[Pipeline] 🎯 Executing LLM node: ${nodeLabel}`);
         
-        // 计算世界书信息
-        const worldInfoContent = await this._calculateModuleWorldInfo(node);
-        this.context.module = { worldInfo: worldInfoContent };
+        // 计算世界书信息 - 现在返回完整的结果对象
+        const worldInfoResult = await this._calculateModuleWorldInfo(node);
+        
+        // 设置世界书模块上下文，支持分位置访问
+        // 创建一个特殊的worldInfo对象，既可以作为字符串使用，也可以访问嵌套属性
+        const worldInfoObject = Object.create(String.prototype);
+        Object.assign(worldInfoObject, {
+            // 作为字符串时的值
+            toString: () => worldInfoResult.worldInfoString || '',
+            valueOf: () => worldInfoResult.worldInfoString || '',
+            
+            // 分位置的属性
+            before: worldInfoResult.worldInfoBefore || '',
+            after: worldInfoResult.worldInfoAfter || '',
+            ANTop: worldInfoResult.ANTop || '',
+            ANBottom: worldInfoResult.ANBottom || '',
+            EMTop: worldInfoResult.EMTop || '',
+            EMBottom: worldInfoResult.EMBottom || '',
+            atDepth: worldInfoResult.atDepth || []
+        });
+        
+        this.context.module = { 
+            worldInfo: worldInfoObject
+        };
+        
         const finalPrompt = this._renderPrompt(node, node.injectedParams);
 
         // =================== 详细的LLM调用预览 ===================
@@ -299,7 +336,7 @@ export class GenerationOrchestrator {
             topP: node.llm.topP
         });
         console.log(`[Pipeline] 📏 Prompt Length: ${finalPrompt.length} characters`);
-        console.log(`[Pipeline] 🌍 World Info Length: ${worldInfoContent ? worldInfoContent.length : 0} characters`);
+        console.log(`[Pipeline] 🌍 World Info Length: ${worldInfoResult.worldInfoString ? worldInfoResult.worldInfoString.length : 0} characters`);
         console.log(`[Pipeline] ⏰ Timestamp: ${new Date().toISOString()}`);
         console.log(`[Pipeline] 📝 Full Prompt:`);
         console.log(finalPrompt);
