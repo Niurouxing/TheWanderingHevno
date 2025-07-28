@@ -75,225 +75,98 @@ export class GenerationOrchestrator {
 
 
 
-    async _calculateModuleWorldInfo(module, preRenderedPrompt) {
-        // 【注意】这个函数现在在 _executeLLMNode 的互斥锁保护下运行，不需要再次加锁
-        
-        // 1. 如果模块没有配置World Info，则提前返回。
+    async _calculateModuleWorldInfo(module) {
+        // 步骤 1: 如果节点没有配置World Info，直接返回一个解析为空字符串的Promise。
         if (!module.worldInfo || !Array.isArray(module.worldInfo) || module.worldInfo.length === 0) {
-            return '';
+            return Promise.resolve('');
         }
 
-        // 2. 检查必要的SillyTavern函数是否存在。
+        // 步骤 2: 检查必要的SillyTavern函数是否存在。
         if (typeof SYSTEM.getWorldInfoPrompt !== 'function' || typeof SYSTEM.loadWorldInfo !== 'function') {
             console.error('[Orchestrator] World Info functions are not available in the SYSTEM manager.');
-            return '';
+            return Promise.resolve('');
         }
 
-            // 3. 备份需要临时修改的全局状态。
-            // 首先获取当前的世界书状态
-            const currentSelectedWorldInfo = SYSTEM.getSelectedWorldInfo();
-            const currentCharacters = SYSTEM.getCharacters();
-            const currentCharacterId = SYSTEM.getCurrentCharacterId();
-            const currentChatMetadata = SYSTEM.getChatMetadata();
-            const currentPowerUser = SYSTEM.getPowerUser();
-            
+        // 步骤 3: 【健壮的互斥锁】创建一个新的Promise任务，并将其链接到当前的互斥锁Promise链上。
+        // 这确保了无论多少个节点并发调用此函数，它们都会被排队，一次只执行一个任务。
+        const taskPromise = this.worldInfoMutex.then(async () => {
+            // --- 从这里开始，是受锁保护的临界区 ---
+
+            console.log(`[Orchestrator] [LOCK ACQUIRED] Preparing isolated WI environment for node: ${module.id}. Books: [${module.worldInfo.join(', ')}]`);
+
+            // 步骤 4: 【备份】保存SillyTavern当前的全局WI状态。
             const originalState = {
-                selected_world_info: currentSelectedWorldInfo,
-                // 仅备份角色绑定的世界书，而不是整个角色对象
-                character_worlds: currentCharacters ? currentCharacters.map(c => c.data?.extensions?.world) : [],
-                chat_lorebook: currentChatMetadata ? currentChatMetadata[SYSTEM.METADATA_KEY] : undefined,
-                persona_lorebook: currentPowerUser?.persona_description_lorebook,
+                selected_world_info: SYSTEM.getSelectedWorldInfo(),
+                chat_lorebook: SYSTEM.getChatMetadata()?.[SYSTEM.METADATA_KEY],
+                // 注意：这里可以根据需要备份更多与WI相关的状态。
             };
 
+            let worldInfoString = '';
+
             try {
-                console.log(`[Orchestrator] Calculating WI for module with books: [${module.worldInfo.join(', ')}]`);
-
-                // 4. 改进的模块类型判断逻辑
-                // 优先检查原始节点定义中的世界书配置来确定模块意图
-                let isCharacterScoped = false;
-                
-                // 对于动态生成的节点，需要检查其模板节点的世界书配置
-                if (module.id.includes('character_action_template')) {
-                    // 这是一个动态生成的角色分析节点
-                    isCharacterScoped = true;
-                } else {
-                    // 对于其他节点，检查其世界书配置来推断意图
-                    // 如果世界书名包含 'character' 或类似关键词，则认为是角色相关
-                    const hasCharacterWorldInfo = module.worldInfo.some(wi => 
-                        wi.toLowerCase().includes('character') || wi.toLowerCase().includes('char')
-                    );
-                    isCharacterScoped = hasCharacterWorldInfo;
-                }
-
-                console.log(`[Orchestrator] Module ${module.id} determined as ${isCharacterScoped ? 'character-scoped' : 'global-scoped'}`);
-
-                // 5. 【强化清理】完全重置世界书状态，清除所有累积的内容
-                // 清除所有已选择的世界书
+                // 步骤 5: 【清理】创建一个干净的环境，为当前节点准备舞台。
                 SYSTEM.setSelectedWorldInfo([]);
-                
-                // 【新增】强制清理SillyTavern内部的世界书缓存和状态
-                if (typeof SYSTEM.clearWorldInfoCache === 'function') {
-                    SYSTEM.clearWorldInfoCache();
-                }
-                
-                // 清除所有其他世界书来源
-                if (currentPowerUser && 'persona_description_lorebook' in currentPowerUser) {
-                    currentPowerUser.persona_description_lorebook = undefined;
-                }
-                
-                if (currentChatMetadata && SYSTEM.METADATA_KEY in currentChatMetadata) {
-                    SYSTEM.setChatMetadata(SYSTEM.METADATA_KEY, undefined);
-                }
-                
-                if (currentCharacters) {
-                    currentCharacters.forEach(c => {
-                        if (c.data?.extensions) c.data.extensions.world = undefined;
-                    });
-                }
-                
-                // 【关键修复】强制等待，确保所有清理操作生效
-                await new Promise(resolve => setTimeout(resolve, 10));
-
-                // 6. 【修复策略改变】统一使用全局世界书机制，确保一致性
-                if (isCharacterScoped) {
-                    // 角色相关模块：使用全局世界书机制，但只设置角色相关的世界书
-                    SYSTEM.setSelectedWorldInfo(module.worldInfo);
-                    console.log(`[Orchestrator] Setting character-related global lore to: [${module.worldInfo.join(', ')}]`);
-                    
-                    // 不设置角色绑定的世界书，避免冲突
-                } else {
-                    // 全局相关模块：使用全局世界书机制
-                    SYSTEM.setSelectedWorldInfo(module.worldInfo);
-                    console.log(`[Orchestrator] Setting global lore to: [${module.worldInfo.join(', ')}]`);
-                }
-
-                // 7. 【强化修复】彻底重新加载世界书，确保正确设置
-                console.log(`[Orchestrator] Loading world info files: [${module.worldInfo.join(', ')}]`);
-                
-                // 【关键】先强制卸载所有已加载的世界书数据（但保留选择列表）
+                SYSTEM.setChatMetadata(SYSTEM.METADATA_KEY, undefined);
                 if (typeof SYSTEM.unloadAllWorldInfo === 'function') {
                     await SYSTEM.unloadAllWorldInfo();
-                    console.log(`[Orchestrator] Cleared previous world info data`);
                 }
-                
-                // 然后只加载当前模块需要的世界书
+
+                // 步骤 6: 【加载】只加载当前节点定义中明确要求的世界书。
+                SYSTEM.setSelectedWorldInfo(module.worldInfo);
                 for (const worldName of module.worldInfo) {
                     try {
                         await SYSTEM.loadWorldInfo(worldName);
-                        console.log(`[Orchestrator] Successfully loaded world info: ${worldName}`);
                     } catch (error) {
-                        console.warn(`[Orchestrator] Failed to load world info "${worldName}":`, error);
+                        console.warn(`[Orchestrator] Failed to load world info "${worldName}" for node ${module.id}:`, error);
                     }
                 }
                 
-                // 【关键修复】确保选择列表正确设置（重新设置，确保生效）
-                SYSTEM.setSelectedWorldInfo(module.worldInfo);
-                
-                // 强制等待，确保设置生效
-                await new Promise(resolve => setTimeout(resolve, 50));
-                
-                // 7.5. 【调试】验证世界书设置情况
-                const finalSelectedWI = SYSTEM.getSelectedWorldInfo();
-                console.log(`[Orchestrator] After setup - Selected WI: [${finalSelectedWI.join(', ')}]`);
-                
-                // 【安全检查】如果选择列表仍然为空，说明有问题
-                if (finalSelectedWI.length === 0) {
-                    console.error(`[Orchestrator] CRITICAL: Selected WI is empty after setup for module ${module.id}`);
-                    // 尝试强制重新设置
-                    SYSTEM.setSelectedWorldInfo([...module.worldInfo]);
-                    console.log(`[Orchestrator] Force re-set Selected WI: [${SYSTEM.getSelectedWorldInfo().join(', ')}]`);
-                }
-                
-                console.log(`[Orchestrator] World info setup complete for module: ${module.id}`);
-
-                // 【新增】强制等待一个事件循环，确保所有状态更改生效
+                // 等待一个事件循环，确保DOM和内部状态更新生效。
                 await new Promise(resolve => setTimeout(resolve, 10));
 
-                // 8. 准备参数并调用SillyTavern的核心WI计算函数。
-                // 【修复】使用更符合SillyTavern内部格式的消息结构
-                const chatMessages = this.rawContext.chat
-                    .filter(m => !m.is_system)
-                    .map(m => m.mes);
-                
-                // 【重要】不要reverse，保持原始顺序，SillyTavern会在内部处理
+                // 步骤 7: 【执行】在隔离环境中计算WI。
+                const chatMessages = this.rawContext.chat.map(m => m.mes);
                 const maxContextSize = this.rawContext.max_context || 4096;
-                
-                // 【修复】使用更完整的扫描数据，包括当前用户输入
                 const globalScanData = {
                     personaDescription: this.rawContext.persona?.description ?? '',
                     characterDescription: this.context.sillyTavern.character?.description ?? '',
                     characterPersonality: this.context.sillyTavern.character?.personality ?? '',
-                    characterDepthPrompt: this.context.sillyTavern.character?.data?.extensions?.depth_prompt ?? '',
                     scenario: this.rawContext.scenario ?? '',
-                    creatorNotes: this.context.sillyTavern.character?.creatornotes ?? '',
-                    // 【新增】包含当前的用户输入，这可能是激活世界书的关键
                     userInput: this.context.sillyTavern.userInput ?? '',
                 };
 
-                console.log(`[Orchestrator] Calling getWorldInfoPrompt for module...`);
-                console.log(`[Orchestrator] Chat messages count: ${chatMessages.length}, Max context: ${maxContextSize}`);
-                console.log(`[Orchestrator] Global scan data:`, globalScanData);
-                
-                // 【修复】尝试不同的调用模式，可能需要传递当前用户输入作为扫描内容
-                const scanContent = [
-                    globalScanData.userInput,
-                    globalScanData.characterDescription,
-                    globalScanData.scenario,
-                    ...chatMessages.slice(-3) // 最近3条消息
-                ].filter(Boolean).join('\n');
-                
-                console.log(`[Orchestrator] Scan content for WI activation:`, scanContent.substring(0, 200));
-                
                 const wiResult = await SYSTEM.getWorldInfoPrompt(chatMessages, maxContextSize, true, globalScanData);
-                
-                console.log(`[Orchestrator] Raw WI result:`, wiResult);
+                worldInfoString = (wiResult?.worldInfoString || '').trim();
 
-                let moduleWiString = (wiResult?.worldInfoString || '').trim();
-                
-                console.log(`[Orchestrator] Module WI calculated. Length: ${moduleWiString.length}`);
-                if (moduleWiString.length > 0) {
-                    console.log(`[Orchestrator] Module WI content preview: ${moduleWiString.substring(0, 200)}${moduleWiString.length > 200 ? '...' : ''}`);
+                if (worldInfoString) {
+                    console.log(`[Orchestrator] Node ${module.id} generated ${worldInfoString.length} chars of WI.`);
                 } else {
-                    console.warn(`[Orchestrator] No world info was generated for module ${module.id} with books [${module.worldInfo.join(', ')}]`);
-                    
-                    // 【调试信息】检查当前的世界书状态
-                    console.log(`[Orchestrator] Debug - Current selected_world_info:`, SYSTEM.getSelectedWorldInfo());
+                    console.warn(`[Orchestrator] Node ${module.id} generated no WI with books [${module.worldInfo.join(', ')}]`);
                 }
 
-                // 创建延迟恢复函数
-                const restoreFunction = async () => {
-                    console.log('[Orchestrator] Restoring original SillyTavern state...');
-
-                    // 【延迟恢复】为了避免影响同时进行的其他世界书计算，稍作延迟
-                    await new Promise(resolve => setTimeout(resolve, 50));
-
-                    SYSTEM.setSelectedWorldInfo(originalState.selected_world_info);
-
-                    if (originalState.persona_lorebook !== undefined && currentPowerUser) {
-                        currentPowerUser.persona_description_lorebook = originalState.persona_lorebook;
-                    }
-                    
-                    if (originalState.chat_lorebook !== undefined) {
-                        SYSTEM.setChatMetadata(SYSTEM.METADATA_KEY, originalState.chat_lorebook);
-                    }
-                    
-                    if (currentCharacters && originalState.character_worlds.length > 0) {
-                        currentCharacters.forEach((c, i) => {
-                            if (c.data?.extensions && i < originalState.character_worlds.length) {
-                                c.data.extensions.world = originalState.character_worlds[i];
-                            }
-                        });
-                    }
-
-                    console.log('[Orchestrator] Original state restored successfully.');
-                };
-
-                return { worldInfo: moduleWiString, restoreFunction };
-
             } catch (error) {
-                console.error(`[Orchestrator] An error occurred during module WI calculation:`, error);
-                return { worldInfo: '', restoreFunction: null };
+                console.error(`[Orchestrator] An error occurred during isolated WI calculation for node ${module.id}:`, error);
+                worldInfoString = ''; // 确保出错时返回空字符串
+            } finally {
+                // 步骤 8: 【恢复】无论成功与否，都必须恢复SillyTavern的原始状态，清理舞台。
+                console.log(`[Orchestrator] [LOCK RELEASED] Restoring original WI state after processing node ${module.id}.`);
+                SYSTEM.setSelectedWorldInfo(originalState.selected_world_info);
+                if (originalState.chat_lorebook !== undefined) {
+                    SYSTEM.setChatMetadata(SYSTEM.METADATA_KEY, originalState.chat_lorebook);
+                }
+                // --- 临界区结束 ---
             }
+            
+            return worldInfoString;
+        });
+
+        // 步骤 9: 更新互斥锁，使其指向我们刚刚创建的新任务Promise。
+        // 这样，下一个调用者就必须等待这个任务完成。
+        this.worldInfoMutex = taskPromise;
+
+        // 步骤 10: 返回这个任务Promise。
+        // `_executeLLMNode` 将会 `await` 这个Promise，从而等待WI计算的完成。
+        return taskPromise;
     }
 
     _renderPrompt(node, injectedParams = {}) {
@@ -452,61 +325,62 @@ export class GenerationOrchestrator {
     }
 
     async _executeLLMNode(node) {
-        // 【优化策略】分离世界书计算和LLM调用，只对世界书计算进行串行化
+        const nodeLabel = `${node.id} (${node.name})`;
+        console.log(`[Pipeline] 🎯 Executing LLM node: ${nodeLabel}`);
         
-        // 第一阶段：串行化的世界书计算
-        let worldInfoContent = '';
-        let restoreFunction = null; // 用于延迟恢复状态
-        
-        if (node.worldInfo && Array.isArray(node.worldInfo) && node.worldInfo.length > 0) {
-            // 等待之前的世界书操作完成
-            await this.worldInfoMutex;
-            
-            // 创建新的互斥锁Promise来保护当前的世界书计算
-            /** @type {function} */
-            let resolveCurrentMutex = null;
-            this.worldInfoMutex = new Promise(resolve => {
-                resolveCurrentMutex = resolve;
-            });
-            
-            try {
-                const promptForWiScan = this._renderPrompt(node, node.injectedParams);
-                const result = await this._calculateModuleWorldInfo(node, promptForWiScan);
-                
-                // 处理新的返回格式
-                if (result && typeof result === 'object' && 'worldInfo' in result) {
-                    worldInfoContent = result.worldInfo || '';
-                    restoreFunction = result.restoreFunction; // 获取恢复函数
-                } else {
-                    // 向后兼容，如果返回的是字符串
-                    worldInfoContent = String(result || '');
-                }
-                
-                console.log(`[Orchestrator] World info calculated for ${node.id}, length: ${worldInfoContent.length}`);
-            } finally {
-                // 释放世界书计算的互斥锁
-                if (resolveCurrentMutex) {
-                    resolveCurrentMutex();
-                }
-            }
-        }
-        
-        // 第二阶段：并发的LLM调用（不需要互斥锁保护）
+        // 计算世界书信息
+        const worldInfoContent = await this._calculateModuleWorldInfo(node);
         this.context.module = { worldInfo: worldInfoContent };
         const finalPrompt = this._renderPrompt(node, node.injectedParams);
-        console.log(`[Orchestrator] === START LLM PROMPT for ${node.id} ===\n${finalPrompt}\n=== END LLM PROMPT for ${node.id} ===`);
 
-        const result = await dispatchLLM(finalPrompt, node.llm);
+        // =================== 详细的LLM调用预览 ===================
+        console.log(`[Pipeline] ================== LLM CALL OVERVIEW: ${nodeLabel} ==================`);
+        console.log(`[Pipeline] � Node: ${nodeLabel}`);
+        console.log(`[Pipeline] 🤖 Model: ${node.llm.provider}/${node.llm.model}`);
+        console.log(`[Pipeline] ⚙️  Config:`, {
+            temperature: node.llm.temperature,
+            maxOutputTokens: node.llm.maxOutputTokens,
+            topP: node.llm.topP
+        });
+        console.log(`[Pipeline] 📏 Prompt Length: ${finalPrompt.length} characters`);
+        console.log(`[Pipeline] 🌍 World Info Length: ${worldInfoContent ? worldInfoContent.length : 0} characters`);
+        console.log(`[Pipeline] ⏰ Timestamp: ${new Date().toISOString()}`);
+        console.log(`[Pipeline] 📝 Full Prompt:`);
+        console.log(finalPrompt);
+        console.log(`[Pipeline] ================== PROMPT END ==================`);
 
-        console.log(`[Orchestrator] === START LLM OUTPUT for ${node.id} ===\n${result}\n=== END LLM OUTPUT for ${node.id} ===`);
+        try {
+            const startTime = Date.now();
+            const result = await dispatchLLM(finalPrompt, node.llm);
+            const duration = Date.now() - startTime;
 
-        // 【延迟恢复】在LLM调用完成后恢复状态
-        if (restoreFunction) {
-            await restoreFunction();
+            // =================== 详细的LLM响应报告 ===================
+            console.log(`[Pipeline] ================== LLM RESPONSE REPORT: ${nodeLabel} ==================`);
+            console.log(`[Pipeline] 📋 Node: ${nodeLabel}`);
+            console.log(`[Pipeline] ⏱️  Duration: ${duration}ms`);
+            console.log(`[Pipeline] 📏 Response Length: ${result ? result.length : 0} characters`);
+            
+            if (!result || result.trim().length === 0) {
+                console.warn(`[Pipeline] ⚠️  WARNING: EMPTY RESPONSE`);
+                console.warn(`[Pipeline] 🔍 Check detailed API analysis above for diagnostic information`);
+                console.log(`[Pipeline] 📝 Response Content: (EMPTY)`);
+            } else {
+                console.log(`[Pipeline] ✅ Success: Generated ${result.length} characters`);
+                console.log(`[Pipeline] 📝 Full Response:`);
+                console.log(result);
+            }
+            
+            console.log(`[Pipeline] ================== RESPONSE END ==================`);
+
+            return result || '';
+            
+        } catch (error) {
+            console.error(`[Pipeline] ================== LLM ERROR REPORT: ${nodeLabel} ==================`);
+            console.error(`[Pipeline] ❌ Error: ${error.message}`);
+            console.error(`[Pipeline] 🔍 Full Error:`, error);
+            console.error(`[Pipeline] ================== ERROR END ==================`);
+            throw error;
         }
-
-        // 【新增】如果输出为空，给一个默认值防止后续模板渲染出错
-        return result || '';
     }
 
 

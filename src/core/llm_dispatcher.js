@@ -26,5 +26,15 @@ export async function dispatch(prompt, llmConfig) {
         throw new Error(`Unsupported LLM provider: "${providerName}". No caller found.`);
     }
 
-    return await caller.execute(prompt, llmConfig);
+    // 简洁的调度日志
+    console.log(`[LLM-Dispatch] 🚀 Routing to ${providerName}/${llmConfig.model || 'default'}`);
+
+    try {
+        const result = await caller.execute(prompt, llmConfig);
+        console.log(`[LLM-Dispatch] ✅ ${providerName} completed successfully`);
+        return result;
+    } catch (error) {
+        console.error(`[LLM-Dispatch] ❌ ${providerName} failed: ${error.message}`);
+        throw error;
+    }
 }

@@ -145,50 +145,111 @@ jQuery(async () => {
 // src/llm_callers/gemini_caller.js
 
 import { apiKeyManager } from '../core/apiKeyManager.js';
+import { llmLogger } from '../utils/llm_logger.js';
 
 /**
- * 执行对Google Gemini API的调用。
+ * 【V4 - 解耦版】执行对Google Gemini API的调用。
+ * 自身不包含重试逻辑，完全依赖ApiKeyManager进行密钥轮换。
  * @param {string} prompt - 完整的、渲染后的prompt。
  * @param {object} llmConfig - 来自模块定义的LLM配置。
  * @returns {Promise<string>} LLM生成的文本。
  */
 export async function execute(prompt, llmConfig) {
-    const { model, temperature = 0.7, topP = 1.0, maxOutputTokens = 2048 } = llmConfig;
-
-    // 检查 window.GoogleGenerativeAI 是否已加载
     if (typeof window.GoogleGenerativeAI === 'undefined') {
         throw new Error("Google Generative AI SDK is not loaded.");
     }
+
+    const { model, temperature = 0.7, topP = 1.0, maxOutputTokens = 2048 } = llmConfig;
+    let lastError = null;
+    let retryAttempt = 0;
+    const sessionId = llmLogger.generateSessionId();
     
-    const key = await apiKeyManager.acquireKey();
-    try {
-        const genAI = new window.GoogleGenerativeAI(key);
+    const startTime = Date.now();
+    console.log(`[LLM-Exec] � Session ${sessionId} | Starting execution...`);
+    
+    // 循环，直到成功，或ApiKeyManager告知我们已无健康密钥可用
+    while (true) {
+        retryAttempt++;
+        const key = await apiKeyManager.getHealthyKey();
 
-        const generativeModel = genAI.getGenerativeModel({
-            model: model,
-            generationConfig: {
-                temperature,
-                topP,
-                maxOutputTokens,
-            },
-        });
-        
-        // Gemini API 需要一个内容数组
-        const contents = [{ role: "user", parts: [{ text: prompt }] }];
-        
-        console.log(`[GeminiCaller] Sending request to model: ${model}`);
-        const result = await generativeModel.generateContent({ contents });
-        const response = await result.response;
-        
-        return response.text();
+        if (!key) {
+            const duration = Date.now() - startTime;
+            console.error(`[LLM-Exec] ❌ Session ${sessionId} | No healthy keys available | ${duration}ms`);
+            throw lastError || new Error("No healthy API keys available to fulfill the request.");
+        }
 
-    } catch (error) {
-        console.error("[GeminiCaller] Error during API call:", error);
-        // 重新抛出错误，以便Orchestrator可以捕获它
-        throw new Error(`Gemini API Error: ${error.message}`);
-    } finally {
-        // 无论成功与否，都必须释放密钥
-        apiKeyManager.releaseKey(key);
+        try {
+            console.log(`[LLM-Exec] 🔑 Session ${sessionId} | Using key ...${key.slice(-4)} | Attempt ${retryAttempt}`);
+            
+            const genAI = new window.GoogleGenerativeAI(key);
+            const generativeModel = genAI.getGenerativeModel({
+                model: model,
+                generationConfig: { temperature, topP, maxOutputTokens },
+            });
+            const contents = [{ role: "user", parts: [{ text: prompt }] }];
+
+            const result = await generativeModel.generateContent({ contents });
+            const response = await result.response;
+            const text = response.text();
+            const duration = Date.now() - startTime;
+            
+            // 解析API响应详情
+            const responseData = {
+                text: text,
+                candidates: response.candidates || [],
+                promptFeedback: response.promptFeedback || null,
+                usageMetadata: response.usageMetadata || null,
+                finishReason: response.candidates?.[0]?.finishReason || 'unknown',
+                safetyRatings: response.candidates?.[0]?.safetyRatings || []
+            };
+            
+            // 技术执行层的状态日志
+            if (!text || text.trim().length === 0) {
+                console.warn(`[LLM-Exec] ⚠️  Session ${sessionId} | EMPTY RESPONSE | ${duration}ms`);
+                console.warn(`[LLM-Exec] 🔍 Session ${sessionId} | Candidates: ${responseData.candidates.length} | Finish: ${responseData.finishReason}`);
+                
+                // 详细的空响应分析
+                if (responseData.promptFeedback) {
+                    console.warn(`[LLM-Exec] 🛡️  Session ${sessionId} | Prompt blocked:`, responseData.promptFeedback);
+                }
+                if (responseData.safetyRatings.length > 0) {
+                    console.warn(`[LLM-Exec] 🛡️  Session ${sessionId} | Safety ratings:`, responseData.safetyRatings);
+                }
+                
+                // 使用日志工具进行深度分析
+                llmLogger.logEmptyResponse(sessionId, prompt, llmConfig, responseData, {
+                    apiKey: key,
+                    retryAttempt,
+                    duration
+                });
+            } else {
+                console.log(`[LLM-Exec] ✅ Session ${sessionId} | Success | ${text.length} chars | ${duration}ms`);
+                
+                // 记录Token使用情况
+                if (responseData.usageMetadata) {
+                    const usage = responseData.usageMetadata;
+                    console.log(`[LLM-Exec] 📊 Session ${sessionId} | Tokens: ${usage.promptTokenCount}→${usage.candidatesTokenCount} (${usage.totalTokenCount} total)`);
+                }
+            }
+
+            // 成功！释放key并返回结果
+            apiKeyManager.releaseKey(key);
+            return text;
+
+        } catch (error) {
+            lastError = error;
+            const duration = Date.now() - startTime;
+            
+            console.error(`[LLM-Exec] ❌ Session ${sessionId} | Key ...${key.slice(-4)} failed | ${duration}ms`);
+            console.error(`[LLM-Exec] 🔍 Session ${sessionId} | Error: ${error.name} - ${error.message}`);
+            
+            // 使用分析工具进行错误分析
+            if (retryAttempt === 1) { // 只在第一次失败时详细分析
+                llmLogger.analyzeError(error, { apiKey: key, sessionId });
+            }
+            
+            await apiKeyManager.recordFailure(key, error);
+        }
     }
 }
 ```
@@ -223,7 +284,17 @@ export async function dispatch(prompt, llmConfig) {
         throw new Error(`Unsupported LLM provider: "${providerName}". No caller found.`);
     }
 
-    return await caller.execute(prompt, llmConfig);
+    // 简洁的调度日志
+    console.log(`[LLM-Dispatch] 🚀 Routing to ${providerName}/${llmConfig.model || 'default'}`);
+
+    try {
+        const result = await caller.execute(prompt, llmConfig);
+        console.log(`[LLM-Dispatch] ✅ ${providerName} completed successfully`);
+        return result;
+    } catch (error) {
+        console.error(`[LLM-Dispatch] ❌ ${providerName} failed: ${error.message}`);
+        throw error;
+    }
 }
 ```
 
@@ -261,6 +332,7 @@ import {
     selected_world_info,
     loadWorldInfo,
     world_names,
+    world_info, // 添加这个导入来访问世界书数据
 } from '/scripts/world-info.js';
 
 import { defaultSettings } from '../data/pluginSetting.js';
@@ -346,15 +418,15 @@ export const SYSTEM = {
      * 获取当前全局选择的世界书列表。
      * @returns {Array<string>}
      */
-    getSelectedWorldInfo: () => [...window.selected_world_info],
+    getSelectedWorldInfo: () => [...selected_world_info],
 
     /**
      * 临时设置SillyTavern全局选择的世界书列表。
      * @param {Array<string>} worlds - 世界书文件名列表。
      */
     setSelectedWorldInfo: (worlds) => {
-        window.selected_world_info.length = 0;
-        window.selected_world_info.push(...worlds);
+        selected_world_info.length = 0;
+        selected_world_info.push(...worlds);
     },
 
     /**
@@ -364,12 +436,48 @@ export const SYSTEM = {
      */
     loadWorldInfo: loadWorldInfo,
 
+    /**
+     * 【新增】清理世界书缓存和状态
+     */
+    clearWorldInfoCache: () => {
+        try {
+            // 清理world_info中的所有条目
+            if (world_info && typeof world_info === 'object') {
+                Object.keys(world_info).forEach(key => {
+                    delete world_info[key];
+                });
+            }
+            console.log('[SYSTEM] World info cache cleared');
+        } catch (error) {
+            console.warn('[SYSTEM] Failed to clear world info cache:', error);
+        }
+    },
+
+    /**
+     * 【新增】卸载所有已加载的世界书（但保留选择列表）
+     */
+    unloadAllWorldInfo: async () => {
+        try {
+            // 【修复】只清理世界书数据缓存，不清理选择列表
+            // 这样loadWorldInfo可以重新加载，但selected_world_info保持正确状态
+            if (world_info && typeof world_info === 'object') {
+                Object.keys(world_info).forEach(key => {
+                    delete world_info[key];
+                });
+            }
+            
+            console.log('[SYSTEM] World info data cleared (keeping selection)');
+        } catch (error) {
+            console.warn('[SYSTEM] Failed to unload world info:', error);
+        }
+    },
+
 
     /**
      * 【新增】获取所有已知的世界书文件名。
      * @returns {Array<string>}
      */
-    getWorldNames: () => [...window.world_names],
+    getWorldNames: () => [...world_names],
 
 
     /**
@@ -380,6 +488,53 @@ export const SYSTEM = {
         world_names.length = 0; // Clear the array
         Array.prototype.push.apply(world_names, newWorldNames); // Mutate it
     },
+
+    /**
+     * 获取角色数据
+     * @returns {Array}
+     */
+    getCharacters: () => getContext()?.characters || [],
+
+    /**
+     * 获取当前角色ID
+     * @returns {number}
+     */
+    getCurrentCharacterId: () => getContext()?.characterId || -1,
+
+    /**
+     * 获取聊天元数据
+     * @returns {object}
+     */
+    getChatMetadata: () => getContext()?.chat_metadata || {},
+
+    /**
+     * 设置聊天元数据
+     * @param {string} key
+     * @param {any} value
+     */
+    setChatMetadata: (key, value) => {
+        const context = getContext();
+        if (context?.chat_metadata) {
+            context.chat_metadata[key] = value;
+        }
+    },
+
+    /**
+     * 获取power_user对象
+     * @returns {object}
+     */
+    getPowerUser: () => getContext()?.power_user || {},
+
+    /**
+     * METADATA_KEY常量
+     */
+    METADATA_KEY: 'world_info',
+
+    /**
+     * 获取世界书数据对象
+     * @returns {object}
+     */
+    getWorldInfoData: () => world_info,
 };
 ```
 
@@ -570,96 +725,209 @@ export function executeFunction(functionName, context, params) {
 
 ### core/apiKeyManager.js
 ```
-// src/core/apiKeyManager.js 
+// src/core/apiKeyManager.js
 
 import { USER } from './manager.js';
+import { renderSettings } from '../scripts/settings/userExtensionSetting.js';
 
+// --- Key Status Enums ---
+const KEY_STATUS = {
+    HEALTHY: 'healthy',
+    BANNED: 'banned',
+    SUSPENDED: 'suspended'
+};
+
+const QUOTA_ERROR_LIMIT_PER_DAY = 5;
+
+// --- 错误分类函数 ---
+function getErrorType(error) {
+    const message = error.message.toLowerCase();
+    const status = error.message.match(/\[(\d{3})\]/)?.[1] || '';
+
+    if (message.includes('api key not valid') || 
+        message.includes('permission denied') || 
+        message.includes('consumer suspended') ||
+        message.includes('expired') ||
+        (status === '403') ||
+        (status === '400') // 将400作为API Key错误的强信号，因为它通常与请求格式或认证有关
+    ) {
+        return 'ApiKeyError';
+    }
+    if (status === '429' || message.includes('quota exceeded') || message.includes('rate limit exceeded')) {
+        return 'QuotaError';
+    }
+    // [!code focus:start]
+    // --- 新增：识别自定义的空响应错误 ---
+    if (message.includes('emptyresponseerror') || status.startsWith('5') || message.includes('socket hang up') || message.includes('fetch failed')|| message.includes('prohibited')) {
+        return 'NetworkError'; // 将空响应归类为网络/瞬时错误
+    }
+    // [!code focus:end]
+    return 'UnknownError';
+}
+
+// ... ApiKeyManager 类的其余部分保持不变 ...
 class ApiKeyManager {
     constructor() {
-        this.keys = [];
+        this.keyPool = new Map(); // key -> { status: string, stats: object }
         this.busyKeys = new Set();
-        // 【新增】等待队列，存放Promise的resolve函数
-        this.waitQueue = []; 
+        this.waitQueue = [];
     }
 
     /**
-     * 从用户设置加载或刷新API密钥列表。
+     * 从用户设置加载或刷新API密钥池。
      */
     loadKeys() {
         const userKeys = USER.settings.geminiApiKeys || [];
-        this.keys = userKeys.filter(key => key && key.trim() !== '');
-        console.log(`[ApiKeyManager] Loaded ${this.keys.length} Gemini API keys.`);
-        // 【新增】如果密钥池变小，可能需要处理正在进行的请求，但简单起见，这里只重新加载
-        // 如果有正在等待的请求，并且现在有新密钥可用，可以尝试处理它们
-        this._processWaitQueue(); 
+        const today = new Date().toISOString().slice(0, 10);
+
+        // 清理旧的key，保留已有的健康数据
+        const newKeySet = new Set(userKeys);
+        for (const key of this.keyPool.keys()) {
+            if (!newKeySet.has(key)) {
+                this.keyPool.delete(key);
+            }
+        }
+        
+        // 添加新key或更新现有key的状态
+        userKeys.forEach(key => {
+            if (key && key.trim() !== '') {
+                if (!this.keyPool.has(key)) {
+                    this.keyPool.set(key, {
+                        status: KEY_STATUS.HEALTHY,
+                        stats: {
+                            lastErrorDate: '',
+                            quotaErrorCount: 0,
+                            networkErrorCount: 0,
+                            suspensionEndTime: 0
+                        }
+                    });
+                } else {
+                    // 如果是新的一天，重置每日配额计数
+                    const entry = this.keyPool.get(key);
+                    if (entry.stats.lastErrorDate !== today) {
+                        entry.stats.quotaErrorCount = 0;
+                    }
+                    // 如果停用时间已过，恢复健康状态
+                    if (entry.status === KEY_STATUS.SUSPENDED && Date.now() > entry.stats.suspensionEndTime) {
+                        entry.status = KEY_STATUS.HEALTHY;
+                        entry.stats.suspensionEndTime = 0;
+                        console.log(`[ApiKeyManager] Key ...${key.slice(-4)} has been restored from suspension.`);
+                    }
+                }
+            }
+        });
+
+        console.log(`[ApiKeyManager] Loaded and synchronized ${this.keyPool.size} keys.`);
+        this._processWaitQueue();
     }
 
     /**
-     * 【重大修改】获取一个可用的API密钥，如果不可用则异步等待。
-     * @returns {Promise<string>} 一个解析为可用API密钥的Promise。
-     * @throws {Error} 如果没有配置任何密钥。
+     * 获取一个健康的、空闲的API密钥。
+     * @returns {Promise<string|null>} 一个解析为可用密钥或null的Promise。
      */
-    acquireKey() {
-        if (this.keys.length === 0) {
-            // 这是唯一应该立即抛出错误的地方
-            return Promise.reject(new Error("No Gemini API keys are configured."));
+    getHealthyKey() {
+        // 每次获取时都刷新状态，确保及时恢复被暂停的key
+        this.loadKeys(); 
+
+        const healthyAndFreeKeys = Array.from(this.keyPool.entries())
+            .filter(([key, data]) => 
+                data.status === KEY_STATUS.HEALTHY && !this.busyKeys.has(key)
+            );
+
+        if (healthyAndFreeKeys.length > 0) {
+            const [keyToUse] = healthyAndFreeKeys[0]; 
+            this.busyKeys.add(keyToUse);
+            console.log(`[ApiKeyManager] Acquired healthy key ...${keyToUse.slice(-4)}`);
+            return Promise.resolve(keyToUse);
+        }
+        
+        const healthyButBusy = Array.from(this.keyPool.entries())
+            .some(([key, data]) => data.status === KEY_STATUS.HEALTHY && this.busyKeys.has(key));
+            
+        if (healthyButBusy) {
+             console.log(`[ApiKeyManager] All healthy keys are busy. Request is now waiting.`);
+             return new Promise(resolve => this.waitQueue.push(resolve));
         }
 
-        // 寻找一个空闲的key
-        const availableKey = this.keys.find(key => !this.busyKeys.has(key));
-
-        if (availableKey) {
-            this.busyKeys.add(availableKey);
-            console.log(`[ApiKeyManager] Acquired key ending in ...${availableKey.slice(-4)}`);
-            // 如果有可用key，立即返回一个已解决的Promise
-            return Promise.resolve(availableKey);
-        } else {
-            // 如果没有可用key，返回一个新的Promise并进入等待队列
-            console.log(`[ApiKeyManager] All keys are busy. Request is now waiting.`);
-            return new Promise((resolve) => {
-                this.waitQueue.push(resolve);
-            });
-        }
+        return Promise.resolve(null);
     }
 
     /**
-     * 【重大修改】释放一个API密钥，并检查是否有等待的请求。
-     * @param {string} key 要释放的API密钥。
+     * 报告一次失败，管理器将据此更新密钥状态。
+     * @param {string} key - 失败的密钥。
+     * @param {Error} error - 捕获到的错误对象。
      */
+    async recordFailure(key, error) {
+        if (!this.keyPool.has(key)) return;
+
+        const entry = this.keyPool.get(key);
+        const errorType = getErrorType(error);
+        const today = new Date().toISOString().slice(0, 10);
+        entry.stats.lastErrorDate = today;
+
+        console.warn(`[ApiKeyManager] Failure recorded for key ...${key.slice(-4)}. Type: ${errorType}. Error: ${error.message}`);
+
+        switch (errorType) {
+            case 'ApiKeyError':
+                entry.status = KEY_STATUS.BANNED;
+                console.error(`[ApiKeyManager] Key ...${key.slice(-4)} has been permanently banned.`);
+                toastr.error(`An API key (...${key.slice(-4)}) was found to be invalid/banned and has been permanently disabled.`, "API Key Banned");
+                
+                // [!code focus:start]
+                // 【关键修正】我们应该直接在这里修改用户设置，而不是依赖下次loadKeys
+                const currentKeys = USER.settings.geminiApiKeys || [];
+                // 过滤掉当前坏掉的key
+                const newKeys = currentKeys.filter(k => k !== key);
+                // 确保 USER.settings.geminiApiKeys 被正确赋值以触发代理的set
+                if (newKeys.length !== currentKeys.length) {
+                    USER.settings.geminiApiKeys = newKeys;
+                }
+
+            case 'QuotaError':
+                entry.stats.quotaErrorCount++;
+                if (entry.stats.quotaErrorCount >= QUOTA_ERROR_LIMIT_PER_DAY) {
+                    entry.status = KEY_STATUS.SUSPENDED;
+                    const tomorrow = new Date();
+                    tomorrow.setHours(24, 0, 0, 0); 
+                    entry.stats.suspensionEndTime = tomorrow.getTime();
+                    console.error(`[ApiKeyManager] Key ...${key.slice(-4)} has reached its daily quota limit and is suspended until tomorrow.`);
+                    toastr.warning(`An API key (...${key.slice(-4)}) seems to have hit its daily limit. It will be temporarily disabled.`, "Key Suspended");
+                }
+                break;
+                
+            case 'NetworkError':
+                entry.stats.networkErrorCount++;
+                break;
+        }
+        
+        this.releaseKey(key);
+    }
+    
     releaseKey(key) {
         if (key && this.busyKeys.has(key)) {
             this.busyKeys.delete(key);
-            console.log(`[ApiKeyManager] Released key ending in ...${key.slice(-4)}`);
-            // 密钥已释放，检查等待队列
+            console.log(`[ApiKeyManager] Released key ...${key.slice(-4)}.`);
             this._processWaitQueue();
         }
     }
-    
-    /**
-     * 【新增】内部辅助函数，用于处理等待队列。
-     * @private
-     */
+
     _processWaitQueue() {
-        // 如果有等待的请求，并且有空闲的密钥
         if (this.waitQueue.length > 0) {
-             const availableKey = this.keys.find(key => !this.busyKeys.has(key));
-             if (availableKey) {
-                console.log(`[ApiKeyManager] A key is now free. Fulfilling a waiting request.`);
-                // 取出队列中最早的等待者
+            const healthyAndFreeKeys = Array.from(this.keyPool.entries())
+                .filter(([key, data]) => 
+                    data.status === KEY_STATUS.HEALTHY && !this.busyKeys.has(key)
+                );
+            if (healthyAndFreeKeys.length > 0) {
+                const [keyToUse] = healthyAndFreeKeys[0];
                 const nextInQueue = this.waitQueue.shift();
-                
-                // 将可用的key标记为繁忙
-                this.busyKeys.add(availableKey);
-                console.log(`[ApiKeyManager] Re-assigned key ending in ...${availableKey.slice(-4)} to waiting request.`);
-                
-                // 解决它的Promise，并把key传给它
-                nextInQueue(availableKey);
-             }
+                this.busyKeys.add(keyToUse);
+                console.log(`[ApiKeyManager] Re-assigned key ...${keyToUse.slice(-4)} to waiting request.`);
+                nextInQueue(keyToUse);
+            }
         }
     }
 }
 
-// 导出单例，确保整个插件共享同一个密钥管理器
 export const apiKeyManager = new ApiKeyManager();
 ```
 
@@ -686,6 +954,9 @@ export class GenerationOrchestrator {
         this.nodeStates = {}; // 'pending', 'running', 'completed', 'failed', 'skipped'
         this.dependencies = new Map(); // node_id -> Set<dependency_id>
         this.dependents = new Map(); // node_id -> Set<dependent_id>
+
+        // 【新增】世界书访问互斥锁
+        this.worldInfoMutex = Promise.resolve();
 
         this.context = {
             sillyTavern: {
@@ -737,99 +1008,100 @@ export class GenerationOrchestrator {
         return current;
     }
 
-    async _calculateModuleWorldInfo(module, preRenderedPrompt) {
+
+
+    async _calculateModuleWorldInfo(module) {
+        // 步骤 1: 如果节点没有配置World Info，直接返回一个解析为空字符串的Promise。
         if (!module.worldInfo || !Array.isArray(module.worldInfo) || module.worldInfo.length === 0) {
-            return '';
+            return Promise.resolve('');
         }
 
-        try {
-            if (typeof SYSTEM.getWorldInfoPrompt !== 'function' || typeof SYSTEM.loadWorldInfo !== 'function') {
-                console.error('[Orchestrator] World info functions not available in SYSTEM object');
-                console.log('[Orchestrator] Available SYSTEM methods:', Object.keys(SYSTEM));
-                return '';
-            }
+        // 步骤 2: 检查必要的SillyTavern函数是否存在。
+        if (typeof SYSTEM.getWorldInfoPrompt !== 'function' || typeof SYSTEM.loadWorldInfo !== 'function') {
+            console.error('[Orchestrator] World Info functions are not available in the SYSTEM manager.');
+            return Promise.resolve('');
+        }
 
+        // 步骤 3: 【健壮的互斥锁】创建一个新的Promise任务，并将其链接到当前的互斥锁Promise链上。
+        // 这确保了无论多少个节点并发调用此函数，它们都会被排队，一次只执行一个任务。
+        const taskPromise = this.worldInfoMutex.then(async () => {
+            // --- 从这里开始，是受锁保护的临界区 ---
+
+            console.log(`[Orchestrator] [LOCK ACQUIRED] Preparing isolated WI environment for node: ${module.id}. Books: [${module.worldInfo.join(', ')}]`);
+
+            // 步骤 4: 【备份】保存SillyTavern当前的全局WI状态。
             const originalState = {
-                selected_world_info: window.selected_world_info ? [...window.selected_world_info] : [],
-                characters: window.characters ? [...window.characters] : [],
-                chat_metadata: window.chat_metadata ? JSON.parse(JSON.stringify(window.chat_metadata)) : {},
-                power_user_lorebook: window.power_user?.persona_description_lorebook
+                selected_world_info: SYSTEM.getSelectedWorldInfo(),
+                chat_lorebook: SYSTEM.getChatMetadata()?.[SYSTEM.METADATA_KEY],
+                // 注意：这里可以根据需要备份更多与WI相关的状态。
             };
 
-            console.log(`[Orchestrator] Setting module WI: [${module.worldInfo.join(', ')}]`);
+            let worldInfoString = '';
 
-            if (!window.selected_world_info) {
-                window.selected_world_info = [];
+            try {
+                // 步骤 5: 【清理】创建一个干净的环境，为当前节点准备舞台。
+                SYSTEM.setSelectedWorldInfo([]);
+                SYSTEM.setChatMetadata(SYSTEM.METADATA_KEY, undefined);
+                if (typeof SYSTEM.unloadAllWorldInfo === 'function') {
+                    await SYSTEM.unloadAllWorldInfo();
+                }
+
+                // 步骤 6: 【加载】只加载当前节点定义中明确要求的世界书。
+                SYSTEM.setSelectedWorldInfo(module.worldInfo);
+                for (const worldName of module.worldInfo) {
+                    try {
+                        await SYSTEM.loadWorldInfo(worldName);
+                    } catch (error) {
+                        console.warn(`[Orchestrator] Failed to load world info "${worldName}" for node ${module.id}:`, error);
+                    }
+                }
+                
+                // 等待一个事件循环，确保DOM和内部状态更新生效。
+                await new Promise(resolve => setTimeout(resolve, 10));
+
+                // 步骤 7: 【执行】在隔离环境中计算WI。
+                const chatMessages = this.rawContext.chat.map(m => m.mes);
+                const maxContextSize = this.rawContext.max_context || 4096;
+                const globalScanData = {
+                    personaDescription: this.rawContext.persona?.description ?? '',
+                    characterDescription: this.context.sillyTavern.character?.description ?? '',
+                    characterPersonality: this.context.sillyTavern.character?.personality ?? '',
+                    scenario: this.rawContext.scenario ?? '',
+                    userInput: this.context.sillyTavern.userInput ?? '',
+                };
+
+                const wiResult = await SYSTEM.getWorldInfoPrompt(chatMessages, maxContextSize, true, globalScanData);
+                worldInfoString = (wiResult?.worldInfoString || '').trim();
+
+                if (worldInfoString) {
+                    console.log(`[Orchestrator] Node ${module.id} generated ${worldInfoString.length} chars of WI.`);
+                } else {
+                    console.warn(`[Orchestrator] Node ${module.id} generated no WI with books [${module.worldInfo.join(', ')}]`);
+                }
+
+            } catch (error) {
+                console.error(`[Orchestrator] An error occurred during isolated WI calculation for node ${module.id}:`, error);
+                worldInfoString = ''; // 确保出错时返回空字符串
+            } finally {
+                // 步骤 8: 【恢复】无论成功与否，都必须恢复SillyTavern的原始状态，清理舞台。
+                console.log(`[Orchestrator] [LOCK RELEASED] Restoring original WI state after processing node ${module.id}.`);
+                SYSTEM.setSelectedWorldInfo(originalState.selected_world_info);
+                if (originalState.chat_lorebook !== undefined) {
+                    SYSTEM.setChatMetadata(SYSTEM.METADATA_KEY, originalState.chat_lorebook);
+                }
+                // --- 临界区结束 ---
             }
-            if (!window.characters) {
-                window.characters = [];
-            }
-            if (!window.chat_metadata) {
-                window.chat_metadata = {};
-            }
-            if (!window.power_user) {
-                window.power_user = {};
-            }
+            
+            return worldInfoString;
+        });
 
-            window.selected_world_info.length = 0;
-            window.selected_world_info.push(...module.worldInfo);
+        // 步骤 9: 更新互斥锁，使其指向我们刚刚创建的新任务Promise。
+        // 这样，下一个调用者就必须等待这个任务完成。
+        this.worldInfoMutex = taskPromise;
 
-            window.characters.length = 0;
-            Object.keys(window.chat_metadata).forEach(key => {
-                delete window.chat_metadata[key];
-            });
-
-            window.power_user.persona_description_lorebook = undefined;
-
-            const loadPromises = module.worldInfo.map(worldName => SYSTEM.loadWorldInfo(worldName));
-            await Promise.all(loadPromises);
-
-            const chatMessages = this.rawContext.chat
-                .filter(m => !m.is_system)
-                .map(m => m.mes)
-                .reverse();
-
-            const maxContextSize = this.rawContext.max_context || 4096;
-
-            const globalScanData = {
-                personaDescription: '',
-                characterDescription: '',
-                characterPersonality: '',
-                characterDepthPrompt: '',
-                scenario: '',
-                creatorNotes: ''
-            };
-
-            console.log(`[Orchestrator] Calling getWorldInfoPrompt with ${chatMessages.length} messages, maxContext: ${maxContextSize}`);
-
-            const wiResult = await SYSTEM.getWorldInfoPrompt(chatMessages, maxContextSize, true, globalScanData);
-
-            const moduleWiString = (wiResult?.worldInfoString || wiResult || '').toString().trim();
-            console.log(`[Orchestrator] WI calculated. Length: ${moduleWiString.length}`);
-
-            window.selected_world_info.length = 0;
-            window.selected_world_info.push(...originalState.selected_world_info);
-
-            window.characters.length = 0;
-            window.characters.push(...originalState.characters);
-
-            Object.keys(window.chat_metadata).forEach(key => {
-                delete window.chat_metadata[key];
-            });
-            Object.assign(window.chat_metadata, originalState.chat_metadata);
-
-            if (originalState.power_user_lorebook !== undefined) {
-                window.power_user.persona_description_lorebook = originalState.power_user_lorebook;
-            }
-
-            console.log('[Orchestrator] Original state restored.');
-            return moduleWiString;
-
-        } catch (error) {
-            console.error(`[Orchestrator] Error calculating WI:`, error);
-            console.error('[Orchestrator] Error stack:', error.stack);
-            return '';
-        }
+        // 步骤 10: 返回这个任务Promise。
+        // `_executeLLMNode` 将会 `await` 这个Promise，从而等待WI计算的完成。
+        return taskPromise;
     }
 
     _renderPrompt(node, injectedParams = {}) {
@@ -988,20 +1260,62 @@ export class GenerationOrchestrator {
     }
 
     async _executeLLMNode(node) {
-        this.context.module = { worldInfo: '' };
-        const promptForWiScan = this._renderPrompt(node, node.injectedParams);
-        this.context.module.worldInfo = await this._calculateModuleWorldInfo(node, promptForWiScan);
-
+        const nodeLabel = `${node.id} (${node.name})`;
+        console.log(`[Pipeline] 🎯 Executing LLM node: ${nodeLabel}`);
+        
+        // 计算世界书信息
+        const worldInfoContent = await this._calculateModuleWorldInfo(node);
+        this.context.module = { worldInfo: worldInfoContent };
         const finalPrompt = this._renderPrompt(node, node.injectedParams);
-        console.log(`[Orchestrator] === START LLM PROMPT for ${node.id} ===\n${finalPrompt}\n=== END LLM PROMPT for ${node.id} ===`);
 
-        const result = await dispatchLLM(finalPrompt, node.llm);
+        // =================== 详细的LLM调用预览 ===================
+        console.log(`[Pipeline] ================== LLM CALL OVERVIEW: ${nodeLabel} ==================`);
+        console.log(`[Pipeline] � Node: ${nodeLabel}`);
+        console.log(`[Pipeline] 🤖 Model: ${node.llm.provider}/${node.llm.model}`);
+        console.log(`[Pipeline] ⚙️  Config:`, {
+            temperature: node.llm.temperature,
+            maxOutputTokens: node.llm.maxOutputTokens,
+            topP: node.llm.topP
+        });
+        console.log(`[Pipeline] 📏 Prompt Length: ${finalPrompt.length} characters`);
+        console.log(`[Pipeline] 🌍 World Info Length: ${worldInfoContent ? worldInfoContent.length : 0} characters`);
+        console.log(`[Pipeline] ⏰ Timestamp: ${new Date().toISOString()}`);
+        console.log(`[Pipeline] 📝 Full Prompt:`);
+        console.log(finalPrompt);
+        console.log(`[Pipeline] ================== PROMPT END ==================`);
 
-        console.log(`[Orchestrator] === START LLM OUTPUT for ${node.id} ===\n${result}\n=== END LLM OUTPUT for ${node.id} ===`);
+        try {
+            const startTime = Date.now();
+            const result = await dispatchLLM(finalPrompt, node.llm);
+            const duration = Date.now() - startTime;
 
-        // 【新增】如果输出为空，给一个默认值防止后续模板渲染出错
-        // 有些模型在某些情况下可能返回空字符串或null
-        return result || '';
+            // =================== 详细的LLM响应报告 ===================
+            console.log(`[Pipeline] ================== LLM RESPONSE REPORT: ${nodeLabel} ==================`);
+            console.log(`[Pipeline] 📋 Node: ${nodeLabel}`);
+            console.log(`[Pipeline] ⏱️  Duration: ${duration}ms`);
+            console.log(`[Pipeline] 📏 Response Length: ${result ? result.length : 0} characters`);
+            
+            if (!result || result.trim().length === 0) {
+                console.warn(`[Pipeline] ⚠️  WARNING: EMPTY RESPONSE`);
+                console.warn(`[Pipeline] 🔍 Check detailed API analysis above for diagnostic information`);
+                console.log(`[Pipeline] 📝 Response Content: (EMPTY)`);
+            } else {
+                console.log(`[Pipeline] ✅ Success: Generated ${result.length} characters`);
+                console.log(`[Pipeline] 📝 Full Response:`);
+                console.log(result);
+            }
+            
+            console.log(`[Pipeline] ================== RESPONSE END ==================`);
+
+            return result || '';
+            
+        } catch (error) {
+            console.error(`[Pipeline] ================== LLM ERROR REPORT: ${nodeLabel} ==================`);
+            console.error(`[Pipeline] ❌ Error: ${error.message}`);
+            console.error(`[Pipeline] 🔍 Full Error:`, error);
+            console.error(`[Pipeline] ================== ERROR END ==================`);
+            throw error;
+        }
     }
 
 
@@ -1218,6 +1532,382 @@ export class GenerationOrchestrator {
 }
 ```
 
+### utils/logging_example.js
+```
+// src/utils/logging_example.js
+
+/**
+ * 日志系统使用示例和配置指南
+ */
+
+import { DEBUG_CONFIG, setLogLevel } from './debug_config.js';
+import { llmLogger } from './llm_logger.js';
+
+// =============================================================================
+// 使用示例
+// =============================================================================
+
+/**
+ * 示例1：生产环境配置
+ * 只显示警告和错误，保持日志简洁
+ */
+function setupProductionLogging() {
+    setLogLevel('WARN');
+    DEBUG_CONFIG.LLM_LOGS.INCLUDE_FULL_PROMPT = false;
+    DEBUG_CONFIG.LLM_LOGS.INCLUDE_FULL_RESPONSE = false;
+    
+    console.log('✅ Production logging configured - minimal output');
+}
+
+/**
+ * 示例2：开发环境配置
+ * 显示详细信息，便于调试
+ */
+function setupDevelopmentLogging() {
+    setLogLevel('DEBUG');
+    DEBUG_CONFIG.LLM_LOGS.INCLUDE_FULL_PROMPT = true;
+    DEBUG_CONFIG.LLM_LOGS.INCLUDE_FULL_RESPONSE = true;
+    
+    console.log('✅ Development logging configured - verbose output');
+}
+
+/**
+ * 示例3：故障排除配置
+ * 专注于错误分析和空响应诊断
+ */
+function setupTroubleshootingLogging() {
+    setLogLevel('INFO');
+    DEBUG_CONFIG.LLM_LOGS.EMPTY_RESPONSE_ANALYSIS = true;
+    DEBUG_CONFIG.LLM_LOGS.INCLUDE_API_DETAILS = true;
+    
+    console.log('✅ Troubleshooting logging configured - focused on issues');
+}
+
+/**
+ * 示例4：静默模式
+ * 只记录严重错误
+ */
+function setupSilentLogging() {
+    setLogLevel('ERROR');
+    Object.keys(DEBUG_CONFIG).forEach(key => {
+        if (typeof DEBUG_CONFIG[key] === 'object') {
+            Object.keys(DEBUG_CONFIG[key]).forEach(subKey => {
+                if (subKey !== 'ENABLED') {
+                    DEBUG_CONFIG[key][subKey] = false;
+                }
+            });
+        }
+    });
+    
+    console.log('✅ Silent logging configured - errors only');
+}
+
+// =============================================================================
+// 快速配置函数
+// =============================================================================
+
+/**
+ * 根据环境自动配置日志
+ */
+export function autoConfigureLogging() {
+    const isDevelopment = process.env.NODE_ENV === 'development' || 
+                         window.location.hostname === 'localhost';
+    
+    if (isDevelopment) {
+        setupDevelopmentLogging();
+    } else {
+        setupProductionLogging();
+    }
+}
+
+/**
+ * 运行时切换日志级别
+ */
+export function switchLoggingMode(mode) {
+    switch (mode.toLowerCase()) {
+        case 'production':
+        case 'prod':
+            setupProductionLogging();
+            break;
+        case 'development':
+        case 'dev':
+            setupDevelopmentLogging();
+            break;
+        case 'troubleshoot':
+        case 'debug':
+            setupTroubleshootingLogging();
+            break;
+        case 'silent':
+        case 'quiet':
+            setupSilentLogging();
+            break;
+        default:
+            console.warn(`Unknown logging mode: ${mode}`);
+            console.log('Available modes: production, development, troubleshoot, silent');
+    }
+}
+
+// =============================================================================
+// 浏览器控制台辅助函数
+// =============================================================================
+
+/**
+ * 在浏览器控制台中可用的调试函数
+ */
+if (typeof window !== 'undefined') {
+    window.HevnoLogging = {
+        // 快速切换日志模式
+        setMode: switchLoggingMode,
+        
+        // 获取当前配置
+        getConfig: () => DEBUG_CONFIG,
+        
+        // 分析最近的空响应（如果有的话）
+        analyzeLastEmpty: () => {
+            console.log('This would analyze the last empty response if tracking was enabled');
+        },
+        
+        // 显示帮助信息
+        help: () => {
+            console.log(`
+🔧 Hevno Logging Controls:
+
+HevnoLogging.setMode('production')    - 生产模式（简洁日志）
+HevnoLogging.setMode('development')   - 开发模式（详细日志）
+HevnoLogging.setMode('troubleshoot')  - 故障排除模式
+HevnoLogging.setMode('silent')        - 静默模式（仅错误）
+
+HevnoLogging.getConfig()              - 查看当前配置
+HevnoLogging.help()                   - 显示此帮助
+
+Example:
+  HevnoLogging.setMode('dev')         - 切换到开发模式
+            `);
+        }
+    };
+    
+    console.log('🔧 Hevno logging controls available. Type HevnoLogging.help() for commands.');
+}
+
+// =============================================================================
+// 自动初始化
+// =============================================================================
+
+// 自动配置（如果没有手动配置的话）
+if (typeof window !== 'undefined' && !window.HEVNO_LOGGING_CONFIGURED) {
+    autoConfigureLogging();
+    window.HEVNO_LOGGING_CONFIGURED = true;
+}
+
+```
+
+### utils/llm_logger.js
+```
+// src/utils/llm_logger.js
+
+import { DEBUG_CONFIG, shouldLog, getLogConfig } from './debug_config.js';
+
+/**
+ * LLM调用专用分析工具
+ * 专注于问题诊断和深度分析，不重复基础日志
+ */
+export class LLMLogger {
+    
+    /**
+     * 记录空响应的详细分析（这是最重要的功能）
+     */
+    static logEmptyResponse(sessionId, prompt, llmConfig, apiResponse, context = {}) {
+        const timestamp = new Date().toISOString();
+        
+        console.group(`🔍 [LLM-Analysis] EMPTY RESPONSE - ${sessionId} - ${timestamp}`);
+        console.warn('⚠️  Empty response detected, analyzing possible causes...');
+        
+        // 基本信息
+        console.log('📋 Context:', {
+            promptLength: prompt.length,
+            model: llmConfig.model,
+            temperature: llmConfig.temperature,
+            maxTokens: llmConfig.maxOutputTokens,
+            apiKey: context.apiKey ? `...${context.apiKey.slice(-4)}` : 'unknown'
+        });
+        
+        // 分析API响应结构
+        console.group('🕵️  API Response Analysis:');
+        
+        if (!apiResponse.candidates || apiResponse.candidates.length === 0) {
+            console.warn('❌ No candidates returned by API - possible request rejection');
+        } else {
+            console.log(`✅ ${apiResponse.candidates.length} candidate(s) available`);
+            
+            const candidate = apiResponse.candidates[0];
+            if (candidate.finishReason !== 'STOP') {
+                console.warn(`❌ Unusual finish reason: ${candidate.finishReason}`);
+                if (candidate.finishReason === 'SAFETY') {
+                    console.warn('🛡️  Content filtered by safety system');
+                } else if (candidate.finishReason === 'MAX_TOKENS') {
+                    console.warn('📏 Response truncated due to token limit');
+                }
+            }
+        }
+        
+        if (apiResponse.promptFeedback) {
+            console.warn('🛡️  Prompt feedback (content policy):');
+            console.warn(apiResponse.promptFeedback);
+        }
+        
+        if (apiResponse.safetyRatings && apiResponse.safetyRatings.length > 0) {
+            const blockedRatings = apiResponse.safetyRatings.filter(rating => 
+                rating.probability === 'HIGH' || rating.probability === 'MEDIUM'
+            );
+            if (blockedRatings.length > 0) {
+                console.warn('🚨 Safety concerns detected:');
+                blockedRatings.forEach(rating => {
+                    console.warn(`  - ${rating.category}: ${rating.probability}`);
+                });
+            }
+        }
+        
+        console.groupEnd();
+        
+        // 分析可能的原因
+        console.group('💡 Possible Solutions:');
+        
+        if (prompt.length > 30000) {
+            console.log('📏 Try reducing prompt length (current: >30k chars)');
+        }
+        
+        if (llmConfig.maxOutputTokens && llmConfig.maxOutputTokens < 100) {
+            console.log('🔧 Try increasing maxOutputTokens (current: <100)');
+        }
+        
+        if (llmConfig.temperature === 0) {
+            console.log('🎲 Try increasing temperature for more creativity');
+        }
+        
+        if (apiResponse.promptFeedback || (apiResponse.safetyRatings && apiResponse.safetyRatings.length > 0)) {
+            console.log('📝 Try rephrasing prompt to avoid content policy triggers');
+        }
+        
+        if (context.retryAttempt > 1) {
+            console.log('🔄 Consider checking API key quota and status');
+        }
+        
+        console.groupEnd();
+        console.groupEnd();
+    }
+    
+    /**
+     * 生成会话ID用于跟踪单次LLM调用
+     */
+    static generateSessionId() {
+        return Math.random().toString(36).substring(2, 8).toUpperCase();
+    }
+    
+    /**
+     * 分析API错误
+     */
+    static analyzeError(error, context = {}) {
+        console.group('🔍 [LLM-Analysis] ERROR ANALYSIS');
+        
+        if (error.status === 429) {
+            console.error('🚫 Rate limit exceeded - API quota exhausted');
+            console.log('💡 Solutions: Wait for quota reset, use different API key, or reduce request frequency');
+        } else if (error.status === 401 || error.status === 403) {
+            console.error('🔑 Authentication/Authorization failed');
+            console.log('💡 Solutions: Check API key validity, permissions, and billing status');
+        } else if (error.status >= 500) {
+            console.error('🔥 Server error - API service issue');
+            console.log('💡 Solutions: Retry after delay, check API status page');
+        } else if (error.name === 'TypeError' && error.message.includes('fetch')) {
+            console.error('🌐 Network connectivity issue');
+            console.log('💡 Solutions: Check internet connection, proxy settings, firewall');
+        } else {
+            console.error(`❓ Unknown error: ${error.name} - ${error.message}`);
+        }
+        
+        if (context.apiKey) {
+            console.log(`🔑 API Key: ...${context.apiKey.slice(-4)}`);
+        }
+        
+        console.groupEnd();
+    }
+}
+
+// 全局可用的便捷函数
+export const llmLogger = LLMLogger;
+
+```
+
+### utils/debug_config.js
+```
+// src/utils/debug_config.js
+
+/**
+ * 调试和日志配置
+ * 用于控制整个系统的日志输出级别
+ */
+export const DEBUG_CONFIG = {
+    // 日志级别: 'DEBUG', 'INFO', 'WARN', 'ERROR'
+    LOG_LEVEL: 'DEBUG',
+    
+    // LLM相关日志
+    LLM_LOGS: {
+        ENABLED: true,
+        INCLUDE_FULL_PROMPT: true,
+        INCLUDE_FULL_RESPONSE: true,
+        INCLUDE_API_DETAILS: true,
+        EMPTY_RESPONSE_ANALYSIS: true
+    },
+    
+    // 节点执行日志
+    NODE_EXECUTION: {
+        ENABLED: true,
+        INCLUDE_TIMING: true,
+        INCLUDE_CONTEXT: true
+    },
+    
+    // API密钥管理日志
+    API_KEY_MANAGEMENT: {
+        ENABLED: true,
+        INCLUDE_KEY_ROTATION: true,
+        INCLUDE_FAILURE_DETAILS: true
+    },
+    
+    // 世界书日志
+    WORLD_INFO: {
+        ENABLED: true,
+        INCLUDE_LOADING_DETAILS: true,
+        INCLUDE_MUTEX_INFO: true
+    }
+};
+
+/**
+ * 设置日志级别
+ */
+export function setLogLevel(level) {
+    DEBUG_CONFIG.LOG_LEVEL = level;
+    console.log(`[Debug Config] Log level set to: ${level}`);
+}
+
+/**
+ * 检查是否应该记录特定级别的日志
+ */
+export function shouldLog(level) {
+    const levels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+    const currentLevelIndex = levels.indexOf(DEBUG_CONFIG.LOG_LEVEL);
+    const requestedLevelIndex = levels.indexOf(level);
+    return requestedLevelIndex >= currentLevelIndex;
+}
+
+/**
+ * 获取特定功能的日志配置
+ */
+export function getLogConfig(feature) {
+    return DEBUG_CONFIG[feature] || { ENABLED: false };
+}
+
+```
+
 ### data/defaultPipeline.js
 ```
 export const defaultPipeline = [
@@ -1231,10 +1921,11 @@ export const defaultPipeline = [
         "name": "1. 故事生成器",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.8 },
+        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.8 },
+        "worldInfo": ["world_info"], // 使用正确的世界书名称（不带.json扩展名）
         "promptSlots": [{
             "enabled": true,
-            "content": "你是一位富有想象力的小说家。请根据用户的请求，创作一个包含多个角色的、戏剧性的中世纪奇幻小说。场景描述需要生动，并明确介绍至少两名出场角色的名字和简要特征，为后续情节发展埋下伏笔。\n\n用户请求:\n{{sillyTavern.userInput}}\n\n你的输出必须是一段200字以上的流畅的故事，不能包含任何控制文本或者指令。"
+            "content": "你是一位富有想象力的小说家。请根据用户的请求，创作一个包含多个角色的、戏剧性的中世纪奇幻小说。场景描述需要生动，并明确介绍至少两名出场角色的名字和简要特征，为后续情节发展埋下伏笔。\n\n用户请求:\n{{sillyTavern.userInput}}\n\n# 世界信息:{{module.worldInfo}}\n\n你的输出必须是一段200字以上的流畅的故事，不能包含任何控制文本或者指令。"
         }]
     },
     
@@ -1244,7 +1935,7 @@ export const defaultPipeline = [
         "name": "2. LLM识别角色",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.1 },
+        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.1 },
         "promptSlots": [{
             "enabled": true,
             "content": "分析工具：严格按照 'Characters: 角色A, 角色B, 角色C' 的格式，从以下文本中提取所有被命名的角色。如果一个角色都没有，必须输出 'Characters: None'。不要添加任何其他解释或前言。\n\n文本：\n{{outputs.story_generator}}"
@@ -1278,8 +1969,8 @@ export const defaultPipeline = [
             "id": "character_action_template", // 临时ID
             "name": "角色行动分析模板",
             "type": "llm",
-            "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.7 },
-            "worldInfo": ["Character-Backstory.json"], // 假设这是一个包含角色背景的世界书
+            "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.7 },
+            "worldInfo": ["character_info"], // 使用正确的世界书名称（不带.json扩展名）
             "promptSlots": [{
                 "enabled": true,
                 "content": "当前场景中有一位名叫 '{{item}}' 的角色。基于TA的背景故事和当前场景，设想TA接下来最可能的一个具体行动和一段内心独白。以第三人称小说风格进行描述。\n\n# 角色 '{{item}}' 的背景\n{{module.worldInfo}}\n\n# 当前场景\n{{outputs.story_generator}}"
@@ -1313,7 +2004,7 @@ export const defaultPipeline = [
         "name": "6. LLM检查战斗可能性",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.0 }, // temperature=0.0 使输出更稳定
+        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.0 }, // temperature=0.0 使输出更稳定
         "promptSlots": [{
             "enabled": true,
             "content": "分析以下场景描述中是否隐含了即将发生的物理冲突或战斗意图。你的回答只能是 'Yes' 或 'No'，不要包含任何其他字符或解释。\n\n场景:\n{{outputs.aggregate_character_actions}}"
@@ -1356,7 +2047,7 @@ export const defaultPipeline = [
         "name": "9a. 战斗流程",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.9 },
+        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.9 },
         "promptSlots": [{ "enabled": true, "content": "续写下面的故事，引入一场激烈的战斗。详细描写战斗的起因和最初的几个回合。\n\n故事背景：\n{{outputs.aggregate_character_actions}}" }]
     },
     {
@@ -1364,7 +2055,7 @@ export const defaultPipeline = [
         "name": "9b. 和平流程",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.6 },
+        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.6 },
         "promptSlots": [{ "enabled": true, "content": "续写下面的故事，展开一段充满紧张感的对话或非暴力冲突。聚焦于角色的心理博弈和潜台词。\n\n故事背景：\n{{outputs.aggregate_character_actions}}" }]
     },
 
@@ -1378,7 +2069,7 @@ export const defaultPipeline = [
         "name": "10. 最终整合器",
         "enabled": true,
         "type": "llm",
-        "llm": { "provider": "gemini", "model": "gemini-1.5-flash", "temperature": 0.5 },
+        "llm": { "provider": "gemini", "model": "gemini-2.5-flash", "temperature": 0.5 },
         "promptSlots": [{
             "enabled": true,
             // 这个 prompt 现在可以安全地处理空输入了，因为 {{outputs.combat_module}} 或 {{outputs.peaceful_module}}
@@ -1498,7 +2189,7 @@ function handleImportPipeline(event) {
 /**
  * 渲染设置界面的当前值
  */
-function renderSettings() {
+export function renderSettings() {
     $('#Hevno_enabled_switch').prop('checked', USER.settings.isEnabled);
     $('#Hevno_demo_string_input').val(USER.settings.demoString);
 
