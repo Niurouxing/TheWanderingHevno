@@ -82,7 +82,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # 1. 导入新的模型和核心组件
 from backend.models import Graph
-from backend.core.executor import GraphExecutor
+from backend.core.engine import ExecutionEngine
 from backend.core.registry import runtime_registry
 
 # 2. 导入并注册基础运行时
@@ -120,17 +120,23 @@ def setup_application():
     return app
 
 app = setup_application()
-graph_executor = GraphExecutor(registry=runtime_registry)
+execution_engine = ExecutionEngine(registry=runtime_registry)
 
 # --- API 端点 ---
 @app.post("/api/graphs/execute")
 async def execute_graph_endpoint(graph: Graph):
     try:
-        result_context = await graph_executor.execute(graph)
+        result_context = await execution_engine.execute(graph)
         return result_context
+    except ValueError as e:
+        # 捕获已知的用户输入错误，例如环路
+        raise HTTPException(status_code=400, detail=f"Invalid graph structure: {e}")
     except Exception as e:
+        # 未预料到的服务器内部错误
+        # 可以在这里添加日志记录
+        # import logging; logging.exception("Graph execution failed")
         raise HTTPException(status_code=500, detail=f"An unexpected graph execution error occurred: {e}")
-
+        
 @app.get("/")
 def read_root():
     return {"message": "Hevno Backend is running on refactored architecture!"}
@@ -183,32 +189,24 @@ from backend.core.runtime import RuntimeInterface
 
 class RuntimeRegistry:
     def __init__(self):
-        # 存储类或实例
-        self._registry: Dict[str, Union[Type[RuntimeInterface], RuntimeInterface]] = {}
+        # 只存储类，不存储实例
+        self._registry: Dict[str, Type[RuntimeInterface]] = {}
 
     def register(self, name: str, runtime_class: Type[RuntimeInterface]):
         if name in self._registry:
             print(f"Warning: Overwriting runtime registration for '{name}'.")
-        # 只存储类，不实例化
         self._registry[name] = runtime_class
         print(f"Runtime class '{name}' registered.")
 
     def get_runtime(self, name: str) -> RuntimeInterface:
-        entry = self._registry.get(name)
-        if entry is None:
+        runtime_class = self._registry.get(name)
+        if runtime_class is None:
             raise ValueError(f"Runtime '{name}' not found.")
-
-        # 如果存储的是类，则实例化并替换它
-        if isinstance(entry, type):
-            print(f"Instantiating runtime '{name}' for the first time.")
-            instance = entry()
-            self._registry[name] = instance
-            return instance
         
-        # 否则，直接返回已有的实例
-        return entry
+        # 总是返回一个新的实例
+        return runtime_class()
 
-# 创建一个全局单例
+# 全局单例保持不变
 runtime_registry = RuntimeRegistry()
 ```
 
@@ -262,111 +260,214 @@ class RuntimeInterface(ABC):
         pass
 ```
 
-### core/executor.py
+### core/engine.py
 ```
-# backend/core/executor.py
 import asyncio
-from graphlib import TopologicalSorter, CycleError
-from typing import Dict, Any, Set
+from enum import Enum, auto
+from typing import Dict, Any, Set, List
+from collections import defaultdict
 
-from backend.models import Graph
+from backend.models import Graph, GenericNode
 from backend.core.registry import RuntimeRegistry
 from backend.core.runtime import ExecutionContext
 
-class GraphExecutor:
-    def __init__(self, registry: RuntimeRegistry):
+
+class NodeState(Enum):
+    """定义节点在执行过程中的所有可能状态。"""
+    PENDING = auto()
+    READY = auto()
+    RUNNING = auto()
+    SUCCEEDED = auto()
+    FAILED = auto()
+    SKIPPED = auto()
+
+class GraphRun:
+    """管理一次图执行的所有状态。"""
+    def __init__(self, graph: Graph):
+        self.graph = graph
+        self.node_map: Dict[str, GenericNode] = {n.id: n for n in graph.nodes}
+        self.node_states: Dict[str, NodeState] = {}
+        self.node_results: Dict[str, Dict[str, Any]] = {}
+
+        self.dependencies: Dict[str, Set[str]] = defaultdict(set)
+        self.subscribers: Dict[str, Set[str]] = defaultdict(set)
+
+        self._build_dependency_graph()
+        self._initialize_node_states()
+
+    def _build_dependency_graph(self):
+        for edge in self.graph.edges:
+            self.dependencies[edge.target].add(edge.source)
+            self.subscribers[edge.source].add(edge.target)
+
+        # 改进后的环路检测
+        visiting = set()  # 存储当前递归路径上的节点
+        visited = set()   # 存储所有已访问过的节点
+
+        def detect_cycle_util(node_id, path):
+            visiting.add(node_id)
+            visited.add(node_id)
+            
+            for neighbour in self.dependencies.get(node_id, []):
+                if neighbour in visiting:
+                    # 发现了环路
+                    cycle_path = " -> ".join(path + [neighbour])
+                    raise ValueError(f"Cycle detected in graph: {cycle_path}")
+                if neighbour not in visited:
+                    detect_cycle_util(neighbour, path + [node_id])
+            
+            visiting.remove(node_id)
+
+        for node_id in self.node_map:
+            if node_id not in visited:
+                try:
+                    detect_cycle_util(node_id, [node_id])
+                except ValueError as e:
+                    # 重新抛出，让上层能捕获到更清晰的错误
+                    raise e
+
+    def _initialize_node_states(self):
+        for node_id in self.node_map:
+            if not self.dependencies[node_id]:
+                self.node_states[node_id] = NodeState.READY
+            else:
+                self.node_states[node_id] = NodeState.PENDING
+    
+    def get_node(self, node_id: str) -> GenericNode:
+        return self.node_map[node_id]
+    def get_node_state(self, node_id: str) -> NodeState:
+        return self.node_states.get(node_id)
+    def set_node_state(self, node_id: str, state: NodeState):
+        self.node_states[node_id] = state
+    def set_node_result(self, node_id: str, result: Dict[str, Any]):
+        self.node_results[node_id] = result
+    def get_nodes_in_state(self, state: NodeState) -> List[str]:
+        return [nid for nid, s in self.node_states.items() if s == state]
+    def get_dependencies(self, node_id: str) -> Set[str]:
+        return self.dependencies[node_id]
+    def get_subscribers(self, node_id: str) -> Set[str]:
+        return self.subscribers[node_id]
+    def get_execution_context(self) -> ExecutionContext:
+        return ExecutionContext(state=self.node_results, graph=self.graph)
+    def get_final_state(self) -> Dict[str, Any]:
+        return self.node_results
+
+
+class ExecutionEngine:
+    """这是新的、基于事件和工作者的执行引擎。"""
+    def __init__(self, registry: RuntimeRegistry, num_workers: int = 5):
         self.registry = registry
+        self.num_workers = num_workers
 
     async def execute(self, graph: Graph) -> Dict[str, Any]:
-        node_map = {node.id: node for node in graph.nodes}
-        # 构建一个反向依赖图，方便查找父节点
-        predecessors = {node.id: [] for node in graph.nodes}
-        for edge in graph.edges:
-            predecessors[edge.target].append(edge.source)
-        sorter = TopologicalSorter()
-        
-        # 2. 完成所有的 add 操作
-        for node in graph.nodes:
-            sorter.add(node.id)
-
-        for edge in graph.edges:
-            sorter.add(edge.target, edge.source)
-
-        # 3. 在所有 add 操作后，调用 prepare 一次
-        try:
-            sorter.prepare()
-        except CycleError as e:
-            # CycleError 被正确捕获
-            raise ValueError(f"Graph has a cycle: {e.args[1]}") from e
-
-        exec_context = ExecutionContext(
-            state={},
-            graph=graph,
-            function_registry={}
-        )
-
-        # 3. 循环执行，直到所有节点完成
-        while sorter.is_active():
-            ready_nodes_ids = sorter.get_ready()
-            
-            # --- 1. 将就绪节点分为“要执行”和“要跳过”两组 ---
-            nodes_to_execute = []
-            nodes_to_skip = []
-
-            for node_id in ready_nodes_ids:
-                parent_ids = predecessors.get(node_id, [])
-                if any(exec_context.state.get(p_id, {}).get("error") for p_id in parent_ids):
-                    nodes_to_skip.append(node_id)
-                else:
-                    nodes_to_execute.append(node_map[node_id])
-            
-            # --- 2. 处理跳过的节点 ---
-            for node_id in nodes_to_skip:
-                print(f"Skipping node {node_id} due to upstream failure.")
-                # 可选：在state中明确标记为skipped，方便调试
-                exec_context.state[node_id] = {"status": "skipped", "reason": "Upstream failure"}
-                sorter.done(node_id)
-
-            # --- 3. 并发执行并处理结果 ---
-            if nodes_to_execute:
-                tasks = [self._execute_node(node, exec_context) for node in nodes_to_execute]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-
-                for i, result in enumerate(results):
-                    node = nodes_to_execute[i]
-                    node_id = node.id
-
-                    if isinstance(result, Exception):
-                        error_message = f"Error executing node {node_id}: {result}"
-                        print(error_message)
-                        exec_context.state[node_id] = {"error": error_message}
-                    else:
-                        exec_context.state[node_id] = result
-                    
-                    sorter.done(node_id)
-        
+        run = self._initialize_run(graph)
+        task_queue = asyncio.Queue()
+        for node_id in run.get_nodes_in_state(NodeState.READY):
+            await task_queue.put(node_id)
+        workers = [
+            asyncio.create_task(self._worker(f"worker-{i}", run, task_queue))
+            for i in range(self.num_workers)
+        ]
+        await task_queue.join()
+        for w in workers:
+            w.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
         print("Graph execution finished.")
-        return exec_context.state
+        return run.get_final_state()
+
+    def _initialize_run(self, graph: Graph) -> 'GraphRun':
+        try:
+            return GraphRun(graph)
+        except ValueError as e:
+            raise ValueError(f"Graph has a cycle: {e}") from e
+
+    async def _worker(self, name: str, run: 'GraphRun', queue: asyncio.Queue):
+        """工作者协程，从队列中获取并处理节点。"""
+        while True:
+            try:
+                node_id = await queue.get()
+                print(f"[{name}] Picked up node: {node_id}")
+
+                node = run.get_node(node_id)
+                context = run.get_execution_context()
+                
+                run.set_node_state(node_id, NodeState.RUNNING)
+                
+                try:
+                    output = await self._execute_node(node, context)
+                    
+                    # 检查返回的 output 是否是一个我们定义的错误结构
+                    if isinstance(output, dict) and "error" in output:
+                        # 这是 _execute_node 内部捕获并返回的错误（例如，管道失败）
+                        print(f"[{name}] Node {node_id} FAILED (internally): {output['error']}")
+                        run.set_node_result(node_id, output)
+                        run.set_node_state(node_id, NodeState.FAILED)
+                    else:
+                        # 这是正常的成功执行
+                        run.set_node_result(node_id, output)
+                        run.set_node_state(node_id, NodeState.SUCCEEDED)
+                        print(f"[{name}] Node {node_id} SUCCEEDED.")
+
+                    # 无论成功或内部失败，都通知下游节点
+                    self._process_subscribers(node_id, run, queue)
+
+                except Exception as e:
+                    # 这是 _execute_node 执行期间发生的意外异常
+                    error_message = f"Unexpected error in worker for node {node_id}: {e}"
+                    print(f"[{name}] Node {node_id} FAILED (unexpectedly): {error_message}")
+                    run.set_node_result(node_id, {"error": error_message})
+                    run.set_node_state(node_id, NodeState.FAILED)
+                    
+                    # 同样通知下游节点
+                    self._process_subscribers(node_id, run, queue)
+
+                finally:
+                    queue.task_done()
+            
+            except asyncio.CancelledError:
+                print(f"[{name}] shutting down.")
+                break
+    
+    def _process_subscribers(self, completed_node_id: str, run: 'GraphRun', queue: asyncio.Queue):
+        completed_node_state = run.get_node_state(completed_node_id)
+        for sub_id in run.get_subscribers(completed_node_id):
+            if run.get_node_state(sub_id) != NodeState.PENDING:
+                continue
+            if completed_node_state == NodeState.FAILED:
+                run.set_node_state(sub_id, NodeState.SKIPPED)
+                # 为下游节点记录跳过的原因
+                run.set_node_result(sub_id, {
+                    "status": "skipped",
+                    "reason": f"Upstream failure of node {completed_node_id}."
+                })
+                self._process_subscribers(sub_id, run, queue)
+                continue
+            is_ready = True
+            for dep_id in run.get_dependencies(sub_id):
+                if run.get_node_state(dep_id) != NodeState.SUCCEEDED:
+                    is_ready = False
+                    break
+            if is_ready:
+                run.set_node_state(sub_id, NodeState.READY)
+                queue.put_nowait(sub_id)
+
 
     async def _execute_node(self, node, context: ExecutionContext) -> Dict[str, Any]:
         """
         一个辅助方法，用于执行单个节点。
-        现在支持单个runtime或一个runtime管道。
+        现在它能正确捕获并处理管道中每一步的异常。
         """
         node_id = node.id
         runtime_spec = node.data.get("runtime")
         
         if not runtime_spec:
-            print(f"Warning: Node {node_id} has no runtime. Skipping.")
             return {"skipped": True}
 
-        # 将单个 runtime 字符串包装成列表，以统一处理
         if isinstance(runtime_spec, str):
             runtime_names = [runtime_spec]
         else:
             runtime_names = runtime_spec
 
-        # 这是管道的初始输入，就是节点自身的data
         pipeline_input = node.data
         final_output = {}
 
@@ -377,19 +478,15 @@ class GraphExecutor:
             try:
                 runtime = self.registry.get_runtime(runtime_name)
                 
-                # 关键：将上一步的输出作为当前运行时的输入
-                # 同时，将原始节点数据和上下文也传入，以便运行时能访问它们
-                # 我们创建一个新的字典，以防运行时意外修改原始数据
+                # 它精确地包围了可能出错的 runtime.execute 调用
                 current_step_input = {**pipeline_input, "node_data": node.data}
-                
                 output = await runtime.execute(current_step_input, context)
                 
-                # 将当前步骤的输出作为下一步骤的输入
                 pipeline_input = output
                 final_output = output
 
             except Exception as e:
-                # 如果管道中任何一步失败，整个节点都失败
+                # 如果管道中任何一步失败，捕获异常
                 error_message = f"Failed at step {i+1} ('{runtime_name}'): {e}"
                 print(f"  - Error in pipeline: {error_message}")
                 # 返回一个标准的错误结构
@@ -397,6 +494,7 @@ class GraphExecutor:
 
         # 整个管道成功完成后，返回最后一个运行时的输出
         return final_output
+
 ```
 
 ### runtimes/__init__.py

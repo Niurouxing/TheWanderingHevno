@@ -36,20 +36,31 @@ class GraphRun:
             self.dependencies[edge.target].add(edge.source)
             self.subscribers[edge.source].add(edge.target)
 
-        path = set()
-        visited = set()
-        def detect_cycle_util(node_id):
-            path.add(node_id)
+        # 改进后的环路检测
+        visiting = set()  # 存储当前递归路径上的节点
+        visited = set()   # 存储所有已访问过的节点
+
+        def detect_cycle_util(node_id, path):
+            visiting.add(node_id)
             visited.add(node_id)
+            
             for neighbour in self.dependencies.get(node_id, []):
-                if neighbour in path:
-                    raise ValueError(f"involving node {neighbour}")
+                if neighbour in visiting:
+                    # 发现了环路
+                    cycle_path = " -> ".join(path + [neighbour])
+                    raise ValueError(f"Cycle detected in graph: {cycle_path}")
                 if neighbour not in visited:
-                    detect_cycle_util(neighbour)
-            path.remove(node_id)
+                    detect_cycle_util(neighbour, path + [node_id])
+            
+            visiting.remove(node_id)
+
         for node_id in self.node_map:
             if node_id not in visited:
-                detect_cycle_util(node_id)
+                try:
+                    detect_cycle_util(node_id, [node_id])
+                except ValueError as e:
+                    # 重新抛出，让上层能捕获到更清晰的错误
+                    raise e
 
     def _initialize_node_states(self):
         for node_id in self.node_map:
@@ -177,45 +188,59 @@ class ExecutionEngine:
                 queue.put_nowait(sub_id)
 
 
-    async def _execute_node(self, node, context: ExecutionContext) -> Dict[str, Any]:
+    async def _execute_node(self, node: GenericNode, context: ExecutionContext) -> Dict[str, Any]:
         """
-        一个辅助方法，用于执行单个节点。
-        现在它能正确捕获并处理管道中每一步的异常。
+        执行单个节点内的 Runtime 流水线。
+        
+        该方法实现了一个混合数据流模型：
+        1. 转换流 (step_input): 每个 Runtime 的输出成为下一个的输入，实现覆盖式流水线。
+        2. 增强流 (pipeline_state): 所有 Runtime 的输出被持续合并，为后续步骤提供完整的历史上下文。
         """
         node_id = node.id
         runtime_spec = node.data.get("runtime")
         
         if not runtime_spec:
-            return {"skipped": True}
+            # 如果没有指定 runtime，可以认为该节点是一个纯粹的数据持有者
+            return node.data
 
-        if isinstance(runtime_spec, str):
-            runtime_names = [runtime_spec]
-        else:
-            runtime_names = runtime_spec
+        runtime_names = [runtime_spec] if isinstance(runtime_spec, str) else runtime_spec
 
-        pipeline_input = node.data
-        final_output = {}
+        # 1. 初始化两个数据流的起点
+        #    - `pipeline_state` 用于累积和增强数据
+        #    - `step_input` 用于在步骤间传递和转换数据
+        pipeline_state = node.data.copy()
+        step_input = node.data.copy()
 
         print(f"Executing node: {node_id} with runtime pipeline: {runtime_names}")
         
         for i, runtime_name in enumerate(runtime_names):
             print(f"  - Step {i+1}/{len(runtime_names)}: Running runtime '{runtime_name}'")
             try:
-                runtime = self.registry.get_runtime(runtime_name)
+                # 从注册表获取一个新的 Runtime 实例
+                runtime: RuntimeInterface = self.registry.get_runtime(runtime_name)
                 
-                # 它精确地包围了可能出错的 runtime.execute 调用
-                current_step_input = {**pipeline_input, "node_data": node.data}
-                output = await runtime.execute(current_step_input, context)
+                # 调用 execute，传入两个数据流和全局上下文
+                output = await runtime.execute(step_input, pipeline_state, context)
                 
-                pipeline_input = output
-                final_output = output
+                # 检查输出是否为 None 或非字典，以增加健壮性
+                if not isinstance(output, dict):
+                    error_message = f"Runtime '{runtime_name}' did not return a dictionary. Returned: {type(output).__name__}"
+                    print(f"  - Error in pipeline: {error_message}")
+                    return {"error": error_message, "failed_step": i, "runtime": runtime_name}
+
+                # 2. 更新两个数据流
+                #    - `step_input` 被完全覆盖，用于下一步
+                step_input = output
+                #    - `pipeline_state` 被合并更新，用于累积
+                pipeline_state.update(output)
 
             except Exception as e:
-                # 如果管道中任何一步失败，捕获异常
+                # 如果管道中任何一步失败，捕获异常并返回标准错误结构
+                # import traceback; traceback.print_exc() # for debugging
                 error_message = f"Failed at step {i+1} ('{runtime_name}'): {e}"
                 print(f"  - Error in pipeline: {error_message}")
-                # 返回一个标准的错误结构
                 return {"error": error_message, "failed_step": i, "runtime": runtime_name}
 
-        # 整个管道成功完成后，返回最后一个运行时的输出
-        return final_output
+        # 3. 整个节点流水线成功完成后，返回最终的、最完整的累积状态
+        print(f"Node {node_id} pipeline finished successfully.")
+        return pipeline_state

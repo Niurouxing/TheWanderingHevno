@@ -48,11 +48,17 @@ execution_engine = ExecutionEngine(registry=runtime_registry)
 @app.post("/api/graphs/execute")
 async def execute_graph_endpoint(graph: Graph):
     try:
-        result_context = await execution_engine.execute(graph) # 新的
+        result_context = await execution_engine.execute(graph)
         return result_context
+    except ValueError as e:
+        # 捕获已知的用户输入错误，例如环路
+        raise HTTPException(status_code=400, detail=f"Invalid graph structure: {e}")
     except Exception as e:
+        # 未预料到的服务器内部错误
+        # 可以在这里添加日志记录
+        # import logging; logging.exception("Graph execution failed")
         raise HTTPException(status_code=500, detail=f"An unexpected graph execution error occurred: {e}")
-
+        
 @app.get("/")
 def read_root():
     return {"message": "Hevno Backend is running on refactored architecture!"}
