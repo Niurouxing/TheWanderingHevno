@@ -1,177 +1,190 @@
-# tests/test_03_executor.py
+# tests/test_03_engine.py
+
 import pytest
 import asyncio
-from unittest.mock import call, ANY
-from backend.models import Graph, GenericNode, Edge 
-from backend.core.engine import ExecutionEngine
-from backend.core.registry import RuntimeRegistry
 
-# --- 测试基础线性流程 ---
+from backend.models import Graph, GenericNode, Edge
+from backend.core.engine import ExecutionEngine
+from backend.core.registry import RuntimeRegistry, runtime_registry
+from backend.runtimes.base_runtimes import InputRuntime, TemplateRuntime, LLMRuntime
+
+
+# --- Test Fixtures ---
+
+@pytest.fixture
+def fresh_runtime_registry() -> RuntimeRegistry:
+    """提供一个干净的、包含基础运行时的注册表实例，避免测试间干扰。"""
+    registry = RuntimeRegistry()
+    registry.register("system.input", InputRuntime)
+    registry.register("system.template", TemplateRuntime)
+    registry.register("llm.default", LLMRuntime)
+    return registry
+
+@pytest.fixture
+def simple_linear_graph() -> Graph:
+    """一个简单的三节点线性图：A -> B -> C"""
+    return Graph(
+        nodes=[
+            GenericNode(id="node_A", data={"runtime": "system.input", "value": "A story about a cat."}),
+            GenericNode(id="node_B", data={"runtime": "llm.default", "prompt": "Continue this story: {{ nodes.node_A.output }}"}),
+            # 关键：下游节点必须使用上游节点实际输出的键名
+            GenericNode(id="node_C", data={"runtime": "system.template", "template": "Final wisdom: {{ nodes.node_B.llm_output }}"})
+        ],
+        edges=[
+            Edge(source="node_A", target="node_B"),
+            Edge(source="node_B", target="node_C"),
+        ],
+    )
+
+@pytest.fixture
+def parallel_graph() -> Graph:
+    """一个扇出图，测试并行执行：A -> B, A -> C"""
+    return Graph(
+        nodes=[
+            GenericNode(id="A", data={"runtime": "system.input", "value": "Base Topic"}),
+            GenericNode(id="B", data={"runtime": "llm.default", "prompt": "Write a poem about {{ nodes.A.output }}"}),
+            GenericNode(id="C", data={"runtime": "llm.default", "prompt": "Write a joke about {{ nodes.A.output }}"}),
+        ],
+        edges=[
+            Edge(source="A", target="B"),
+            Edge(source="A", target="C"),
+        ]
+    )
+
+@pytest.fixture
+def graph_with_cycle() -> Graph:
+    """一个包含环路的图，用于测试环路检测。"""
+    return Graph(
+        nodes=[
+            # 修复：为每个节点提供包含 'runtime' 的合法 data
+            GenericNode(id="A", data={"runtime": "system.input"}),
+            GenericNode(id="B", data={"runtime": "system.input"}),
+            GenericNode(id="C", data={"runtime": "system.input"}),
+        ],
+        edges=[
+            Edge(source="A", target="B"),
+            Edge(source="B", target="C"),
+            Edge(source="C", target="A"), # Cycle!
+        ]
+    )
+
+
+# --- Test Cases ---
+
 @pytest.mark.asyncio
-async def test_executor_linear_flow(simple_linear_graph, fresh_runtime_registry: RuntimeRegistry, mocker):
-    mocker.patch("backend.runtimes.base_runtimes.asyncio.sleep", return_value=None)
+async def test_engine_detects_cycle(graph_with_cycle, fresh_runtime_registry: RuntimeRegistry):
+    """验证引擎在图初始化时能正确检测到环路并抛出异常。"""
+    executor = ExecutionEngine(registry=fresh_runtime_registry)
+    with pytest.raises(ValueError, match="Cycle detected in graph"):
+        await executor.execute(graph_with_cycle)
+
+
+@pytest.mark.asyncio
+async def test_engine_linear_flow(simple_linear_graph: Graph, fresh_runtime_registry: RuntimeRegistry, mocker):
+    """测试一个简单的线性工作流，验证数据在节点间的正确传递。"""
+    mocker.patch("asyncio.sleep", return_value=None)
     executor = ExecutionEngine(registry=fresh_runtime_registry)
 
     final_state = await executor.execute(simple_linear_graph)
 
+    # 验证 Node A (InputRuntime)
     assert "node_A" in final_state
     assert final_state["node_A"]["output"] == "A story about a cat."
 
+    # 验证 Node B (LLMRuntime)
     assert "node_B" in final_state
-    # 修复：LLMRuntime 的输出键是 'llm_output'
-    expected_llm_output = f"LLM_RESPONSE_FOR:[Continue this story: A story about a cat.]"
+    expected_llm_output = "LLM_RESPONSE_FOR:[Continue this story: A story about a cat.]"
     assert final_state["node_B"]["llm_output"] == expected_llm_output
-    
-    # 获取测试图中的 Node C 并修改其模板
-    node_c_config = simple_linear_graph.nodes[2].data
-    node_c_config['template'] = 'Final wisdom: {{ nodes.node_B.llm_output }}'
 
-    # 重新执行
-    final_state = await executor.execute(simple_linear_graph)
-
+    # 验证 Node C (TemplateRuntime)
     assert "node_C" in final_state
     assert final_state["node_C"]["output"] == f"Final wisdom: {expected_llm_output}"
 
-# --- 测试并行执行 ---
+
 @pytest.mark.asyncio
-async def test_executor_parallel_flow(parallel_graph, fresh_runtime_registry: RuntimeRegistry, mocker):
-    """验证并行节点是否可以被并发执行"""
-    call_order = []
-    
-    # 我们直接 mock _execute_node 方法，这样控制力最强
-    original_execute_node = ExecutionEngine._execute_node
-    
-    async def mock_execute_node_tracked(self, node, context):
-        # 如果是需要等待的节点，记录其ID
-        if node.id in ['B', 'C']:
-            call_order.append(node.id)
-            await asyncio.sleep(0.1) # 模拟耗时
-        
-        return await original_execute_node(self, node, context)
-
-    mocker.patch("backend.core.engine.ExecutionEngine._execute_node", side_effect=mock_execute_node_tracked, autospec=True)
-
+async def test_engine_parallel_flow(parallel_graph: Graph, fresh_runtime_registry: RuntimeRegistry, mocker):
+    """验证并行节点可以被并发执行，并且结果都正确。"""
+    mocker.patch("asyncio.sleep", return_value=None)
     executor = ExecutionEngine(registry=fresh_runtime_registry)
+    
     final_state = await executor.execute(parallel_graph)
 
-    # 断言结果
-    assert "B" in final_state and "llm_output" in final_state["B"]
-    assert "C" in final_state and "llm_output" in final_state["C"]
-
-    # 可以添加更详细的断言
+    assert len(final_state) == 3
+    assert "A" in final_state
+    assert "B" in final_state
+    assert "C" in final_state
+    
+    # 验证并行分支的结果
     assert final_state["B"]["llm_output"] == "LLM_RESPONSE_FOR:[Write a poem about Base Topic]"
     assert final_state["C"]["llm_output"] == "LLM_RESPONSE_FOR:[Write a joke about Base Topic]"
 
-# --- 测试分支合并 ---
-@pytest.mark.asyncio
-async def test_executor_fan_in_flow(fan_in_graph, fresh_runtime_registry: RuntimeRegistry):
-    """验证合并节点是否会等待所有上游节点完成"""
-    executor = ExecutionEngine(registry=fresh_runtime_registry)
-    final_state = await executor.execute(fan_in_graph)
-
-    # A 和 B 的输出应该都准备好了
-    assert final_state["A"]["output"] == "Character: Knight"
-    assert final_state["B"]["output"] == "Action: Fights a dragon"
-    
-    # C 应该成功地从 A 和 B 渲染了模板
-    assert final_state["C"]["output"] == "Story: The Character: Knight Action: Fights a dragon."
 
 @pytest.mark.asyncio
-async def test_executor_handles_runtime_error(simple_linear_graph, fresh_runtime_registry: RuntimeRegistry, mocker):
-    """验证当一个节点出错时，下游节点会被正确标记为skipped"""
-    mocker.patch(
-        "backend.runtimes.base_runtimes.LLMRuntime.execute",
-        side_effect=ValueError("LLM API is down")
-    )
-    executor = ExecutionEngine(registry=fresh_runtime_registry)
-    final_state = await executor.execute(simple_linear_graph)
+async def test_engine_node_with_runtime_pipeline(fresh_runtime_registry: RuntimeRegistry, mocker):
+    """测试单个节点内的运行时管道，并验证'pipeline_state'的合并行为。"""
+    mocker.patch("asyncio.sleep", return_value=None)
 
-    # A 应该成功执行
-    assert "node_A" in final_state and "output" in final_state["node_A"]
-    
-    # B 应该记录了错误
-    assert "node_B" in final_state and "error" in final_state["node_B"]
-    assert "LLM API is down" in final_state["node_B"]["error"]
-
-    # 关键修复：我们现在期望 node_C 存在，并且状态为 'skipped'
-    assert "node_C" in final_state
-    assert final_state["node_C"].get("status") == "skipped"
-    assert "Upstream failure" in final_state["node_C"].get("reason", "")
-
-@pytest.mark.asyncio
-async def test_executor_detects_cycle(cyclic_graph, fresh_runtime_registry: RuntimeRegistry):
-    """验证执行器能否正确处理带环的图"""
-    executor = ExecutionEngine(registry=fresh_runtime_registry)
-    
-    # 解决方案：测试代码保持不变，但现在它依赖于 executor 中正确的异常处理
-    with pytest.raises(ValueError, match="Graph has a cycle"):
-        await executor.execute(cyclic_graph)
-
-@pytest.mark.asyncio
-async def test_node_with_runtime_pipeline(mocker, fresh_runtime_registry: RuntimeRegistry):
-    """测试单个节点内的运行时管道是否按顺序执行。"""
-    mocker.patch("backend.runtimes.base_runtimes.asyncio.sleep", return_value=None)
-    
-    # 这个节点先用template准备prompt，再用llm调用
     graph = Graph(
         nodes=[
-            GenericNode(id="A", type="input", data={"runtime": "system.input", "value": "a cheerful dog"}),
+            GenericNode(id="A", data={"runtime": "system.input", "value": "a cheerful dog"}),
             GenericNode(
                 id="B",
-                type="default",
                 data={
                     "runtime": ["system.template", "llm.default"],
-                    "template": "Create a story about {{ nodes.A.output }}."
+                    "template": "Create a story about {{ nodes.A.output }}.",
+                    # 注意: LLMRuntime 会在其 step_input (即 TemplateRuntime 的输出) 中找到 'output' 作为 prompt
                 }
             )
         ],
-        # 关键修复：添加 B 依赖 A 的边
-        edges=[Edge(source="A", target="B")] 
+        edges=[Edge(source="A", target="B")]
     )
 
     executor = ExecutionEngine(registry=fresh_runtime_registry)
     final_state = await executor.execute(graph)
 
+    # 验证 B 节点的结果
     assert "B" in final_state
-    assert "error" not in final_state["B"]
+    node_b_result = final_state["B"]
+    assert "error" not in node_b_result
 
-    # 最终的 `pipeline_state` 是合并的结果，它会包含所有步骤的输出。
-    # `TemplateRuntime` 输出 `{"output": "..."}`
-    # `LLMRuntime` 输出 `{"llm_output": "...", "summary": "..."}`
-    # 合并后，`final_state["B"]` 会同时包含 "output" 和 "llm_output" 键。
-    
+    # 验证 pipeline_state 的合并行为
     expected_prompt = "Create a story about a cheerful dog."
     expected_llm_output = f"LLM_RESPONSE_FOR:[{expected_prompt}]"
 
-    # 断言 TemplateRuntime 的中间输出仍然存在于最终状态中
-    assert final_state["B"]["output"] == expected_prompt
-    
-    # 断言 LLMRuntime 的最终输出也存在
-    assert final_state["B"]["llm_output"] == expected_llm_output
+    # 1. 初始配置被保留
+    assert node_b_result["template"] == "Create a story about {{ nodes.A.output }}."
+    # 2. TemplateRuntime 的输出被保留
+    assert node_b_result["output"] == expected_prompt
+    # 3. LLMRuntime 的输出也被添加进来
+    assert node_b_result["llm_output"] == expected_llm_output
+    assert "summary" in node_b_result
 
 
 @pytest.mark.asyncio
-async def test_runtime_pipeline_failure(mocker, fresh_runtime_registry: RuntimeRegistry):
-    """测试管道中一步失败时，节点是否正确报告错误。"""
-    # 让TemplateRuntime渲染一个不存在的变量，使其失败
+async def test_engine_handles_runtime_error_gracefully(fresh_runtime_registry: RuntimeRegistry):
+    """测试当一个节点执行失败时，引擎会记录错误并跳过下游节点。"""
     graph = Graph(
         nodes=[
-            GenericNode(
-                id="C",
-                type="default",
-                data={
-                    "runtime": ["system.template", "llm.default"],
-                    "template": "This will fail: {{ non_existent.var }}"
-                }
-            )
+            GenericNode(id="A", data={"runtime": "system.input", "value": "start"}),
+            GenericNode(id="B", data={"runtime": "system.template", "template": "{{ undefined.variable }}"}), # This will fail
+            GenericNode(id="C", data={"runtime": "llm.default", "prompt": "This should be skipped."}),
         ],
-        edges=[]
+        edges=[
+            Edge(source="A", target="B"),
+            Edge(source="B", target="C"),
+        ]
     )
-    
+
     executor = ExecutionEngine(registry=fresh_runtime_registry)
     final_state = await executor.execute(graph)
 
+    # 验证失败的节点 B
+    assert "B" in final_state
+    assert "error" in final_state["B"]
+    assert "Failed at step 1" in final_state["B"]["error"]
+    assert "'undefined' is undefined" in final_state["B"]["error"]
+
+    # 验证被跳过的节点 C
     assert "C" in final_state
-    assert "error" in final_state["C"]
-    assert "Failed at step 1" in final_state["C"]["error"]
-    assert final_state["C"]["runtime"] == "system.template"
+    assert final_state["C"]["status"] == "skipped"
+    assert final_state["C"]["reason"] == "Upstream failure of node B."

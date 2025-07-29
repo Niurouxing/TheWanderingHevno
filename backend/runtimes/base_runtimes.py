@@ -1,50 +1,66 @@
 # backend/runtimes/base_runtimes.py
+import asyncio 
 from backend.core.runtime import RuntimeInterface, ExecutionContext
 from backend.core.templating import render_template
 from typing import Dict, Any
-import jinja2
-import asyncio
-
-template_env = jinja2.Environment(enable_async=True)
 
 class InputRuntime(RuntimeInterface):
-    """处理输入节点。它只关心自己的配置值。"""
-    async def execute(self, step_input: Dict[str, Any], pipeline_state: Dict[str, Any], context: ExecutionContext) -> Dict[str, Any]:
-        # 这个简单的 Runtime 只需要 step_input (即它自己的配置)
+    """我只关心 step_input。"""
+    async def execute(self, **kwargs) -> Dict[str, Any]:
+        step_input = kwargs.get("step_input", {})
         return {"output": step_input.get("value", "")}
 
 class TemplateRuntime(RuntimeInterface):
-    """通用的模板渲染运行时。"""
-    async def execute(self, step_input: Dict[str, Any], pipeline_state: Dict[str, Any], context: ExecutionContext) -> Dict[str, Any]:
-        # 它可能需要 step_input 中的模板字符串
-        template_str = step_input.get("template", "")
+    """我需要 step_input (或 pipeline_state) 来获取模板，需要 context 来渲染。"""
+    async def execute(self, **kwargs) -> Dict[str, Any]:
+        step_input = kwargs.get("step_input", {})
+        pipeline_state = kwargs.get("pipeline_state", {})
+        context = kwargs.get("context")
+
+        template_str = step_input.get("template", pipeline_state.get("template", ""))
         if not template_str:
-            # 如果在上一步的输出中找不到，它可以回退到整个流水线的状态中去寻找
-            template_str = pipeline_state.get("template", "")
-            if not template_str:
-                raise ValueError("TemplateRuntime requires a 'template' string from its input or pipeline state.")
+            raise ValueError("TemplateRuntime requires a 'template' string.")
             
-        # 模板渲染需要访问全局上下文
         rendered_string = await render_template(template_str, context)
         return {"output": rendered_string}
 
 class LLMRuntime(RuntimeInterface):
-    """处理LLM调用的运行时。"""
-    async def execute(self, step_input: Dict[str, Any], pipeline_state: Dict[str, Any], context: ExecutionContext) -> Dict[str, Any]:
-        # LLM 的 prompt 通常是上一步的输出
-        prompt_template_str = step_input.get("prompt", step_input.get("output", ""))
-
+    """我需要 step_input/pipeline_state 来获取 prompt，需要 context 来渲染。"""
+    async def execute(self, **kwargs) -> Dict[str, Any]:
+        step_input = kwargs.get("step_input", {})
+        pipeline_state = kwargs.get("pipeline_state", {})
+        context = kwargs.get("context")
+        
+        prompt_template_str = step_input.get("prompt", step_input.get("output", 
+                                pipeline_state.get("prompt", "")))
         if not prompt_template_str:
-             # 回退到 pipeline_state 寻找
-            prompt_template_str = pipeline_state.get("prompt", pipeline_state.get("output", ""))
-            if not prompt_template_str:
-                raise ValueError("LLMRuntime requires a 'prompt' or 'output' string from its input or pipeline state.")
+            raise ValueError("LLMRuntime requires a 'prompt' or 'output' string.")
 
         rendered_prompt = await render_template(prompt_template_str, context)
         
-        # 模拟LLM调用
-        await asyncio.sleep(0.1)
+        # 恢复异步行为，模拟 LLM API 调用延迟
+        await asyncio.sleep(0.1)  # <--- 恢复这一行
+        
         llm_response = f"LLM_RESPONSE_FOR:[{rendered_prompt}]"
         
-        # 返回LLM的核心数据
         return {"llm_output": llm_response, "summary": f"Summary of '{rendered_prompt[:20]}...'"}
+
+# 演示一个只关心 context 的新 Runtime
+class SetGlobalVariableRuntime(RuntimeInterface):
+    """我只关心 step_input 和 context，用于将输入设置为全局变量。"""
+    async def execute(self, **kwargs) -> Dict[str, Any]:
+        step_input = kwargs.get("step_input", {})
+        context = kwargs.get("context")
+        
+        variable_name = step_input.get("variable_name")
+        value_to_set = step_input.get("value")
+
+        if not variable_name:
+            raise ValueError("SetGlobalVariableRuntime requires 'variable_name'.")
+
+        if context:
+            context.global_vars[variable_name] = value_to_set
+            
+        # 这个 Runtime 不产生新的直接输出，所以返回空字典
+        # 它的作用完全是副作用（修改 context）
+        return {}

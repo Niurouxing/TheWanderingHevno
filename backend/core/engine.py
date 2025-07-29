@@ -220,8 +220,13 @@ class ExecutionEngine:
                 runtime: RuntimeInterface = self.registry.get_runtime(runtime_name)
                 
                 # 调用 execute，传入两个数据流和全局上下文
-                output = await runtime.execute(step_input, pipeline_state, context)
-                
+                output = await runtime.execute(
+                    step_input=step_input,
+                    pipeline_state=pipeline_state,
+                    context=context,
+                    node=node  # 传递当前节点本身也很有用
+                )
+                    
                 # 检查输出是否为 None 或非字典，以增加健壮性
                 if not isinstance(output, dict):
                     error_message = f"Runtime '{runtime_name}' did not return a dictionary. Returned: {type(output).__name__}"
