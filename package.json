@@ -1,0 +1,17 @@
+
+{
+  "name": "hevno",
+  "version": "1.0.0",
+  "private": true, 
+  "scripts": {
+    "dev": "concurrently \"pnpm:dev:schemas\" \"pnpm:dev:api\" \"pnpm:dev:web\"",
+    "dev:schemas": "pnpm --filter @hevno/schemas dev",
+    "dev:api": "pnpm --filter @hevno/api-server dev",
+    "dev:web": "pnpm --filter @hevno/web-client dev",
+    "build": "pnpm --filter \"@hevno/*\" build"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "typescript": "^5.4.5"
+  }
+}

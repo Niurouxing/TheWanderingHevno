@@ -1,0 +1,4 @@
+# pnpm-workspace.yaml
+packages:
+  - 'packages/*' # 我们的核心代码库
+  - 'plugins/*'   # 第三方或自定义插件
