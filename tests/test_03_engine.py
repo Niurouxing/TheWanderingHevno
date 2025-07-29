@@ -3,14 +3,14 @@ import pytest
 import asyncio
 from unittest.mock import call, ANY
 from backend.models import Graph, GenericNode, Edge 
-from backend.core.executor import GraphExecutor
+from backend.core.engine import ExecutionEngine
 from backend.core.registry import RuntimeRegistry
 
 # --- 测试基础线性流程 ---
 @pytest.mark.asyncio
 async def test_executor_linear_flow(simple_linear_graph, fresh_runtime_registry: RuntimeRegistry, mocker):
     mocker.patch("backend.runtimes.base_runtimes.asyncio.sleep", return_value=None)
-    executor = GraphExecutor(registry=fresh_runtime_registry)
+    executor = ExecutionEngine(registry=fresh_runtime_registry)
     
     final_state = await executor.execute(simple_linear_graph)
 
@@ -33,7 +33,7 @@ async def test_executor_parallel_flow(parallel_graph, fresh_runtime_registry: Ru
     call_order = []
     
     # 我们直接 mock _execute_node 方法，这样控制力最强
-    original_execute_node = GraphExecutor._execute_node
+    original_execute_node = ExecutionEngine._execute_node
     
     async def mock_execute_node_tracked(self, node, context):
         # 如果是需要等待的节点，记录其ID
@@ -41,12 +41,11 @@ async def test_executor_parallel_flow(parallel_graph, fresh_runtime_registry: Ru
             call_order.append(node.id)
             await asyncio.sleep(0.1) # 模拟耗时
         
-        # 调用原始的执行逻辑
         return await original_execute_node(self, node, context)
 
-    mocker.patch("backend.core.executor.GraphExecutor._execute_node", side_effect=mock_execute_node_tracked, autospec=True)
+    mocker.patch("backend.core.engine.ExecutionEngine._execute_node", side_effect=mock_execute_node_tracked, autospec=True)
 
-    executor = GraphExecutor(registry=fresh_runtime_registry)
+    executor = ExecutionEngine(registry=fresh_runtime_registry)
     final_state = await executor.execute(parallel_graph)
 
     # 断言结果
@@ -60,7 +59,7 @@ async def test_executor_parallel_flow(parallel_graph, fresh_runtime_registry: Ru
 @pytest.mark.asyncio
 async def test_executor_fan_in_flow(fan_in_graph, fresh_runtime_registry: RuntimeRegistry):
     """验证合并节点是否会等待所有上游节点完成"""
-    executor = GraphExecutor(registry=fresh_runtime_registry)
+    executor = ExecutionEngine(registry=fresh_runtime_registry)
     final_state = await executor.execute(fan_in_graph)
 
     # A 和 B 的输出应该都准备好了
@@ -77,7 +76,7 @@ async def test_executor_handles_runtime_error(simple_linear_graph, fresh_runtime
         "backend.runtimes.base_runtimes.LLMRuntime.execute",
         side_effect=ValueError("LLM API is down")
     )
-    executor = GraphExecutor(registry=fresh_runtime_registry)
+    executor = ExecutionEngine(registry=fresh_runtime_registry)
     final_state = await executor.execute(simple_linear_graph)
 
     # A 应该成功执行
@@ -95,7 +94,7 @@ async def test_executor_handles_runtime_error(simple_linear_graph, fresh_runtime
 @pytest.mark.asyncio
 async def test_executor_detects_cycle(cyclic_graph, fresh_runtime_registry: RuntimeRegistry):
     """验证执行器能否正确处理带环的图"""
-    executor = GraphExecutor(registry=fresh_runtime_registry)
+    executor = ExecutionEngine(registry=fresh_runtime_registry)
     
     # 解决方案：测试代码保持不变，但现在它依赖于 executor 中正确的异常处理
     with pytest.raises(ValueError, match="Graph has a cycle"):
@@ -123,7 +122,7 @@ async def test_node_with_runtime_pipeline(mocker, fresh_runtime_registry: Runtim
         edges=[Edge(source="A", target="B")] 
     )
 
-    executor = GraphExecutor(registry=fresh_runtime_registry)
+    executor = ExecutionEngine(registry=fresh_runtime_registry)
     final_state = await executor.execute(graph)
     
     assert "B" in final_state
@@ -153,7 +152,7 @@ async def test_runtime_pipeline_failure(mocker, fresh_runtime_registry: RuntimeR
         edges=[]
     )
     
-    executor = GraphExecutor(registry=fresh_runtime_registry)
+    executor = ExecutionEngine(registry=fresh_runtime_registry)
     final_state = await executor.execute(graph)
 
     assert "C" in final_state

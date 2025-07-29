@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # 1. 导入新的模型和核心组件
 from backend.models import Graph
-from backend.core.executor import GraphExecutor
+from backend.core.engine import ExecutionEngine
 from backend.core.registry import runtime_registry
 
 # 2. 导入并注册基础运行时
@@ -42,13 +42,13 @@ def setup_application():
     return app
 
 app = setup_application()
-graph_executor = GraphExecutor(registry=runtime_registry)
+execution_engine = ExecutionEngine(registry=runtime_registry)
 
 # --- API 端点 ---
 @app.post("/api/graphs/execute")
 async def execute_graph_endpoint(graph: Graph):
     try:
-        result_context = await graph_executor.execute(graph)
+        result_context = await execution_engine.execute(graph) # 新的
         return result_context
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An unexpected graph execution error occurred: {e}")
