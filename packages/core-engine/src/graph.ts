@@ -1,4 +1,5 @@
-import { GraphSchema, GraphNode, Edge } from '@hevno/schemas';
+// packages/core-engine/src/graph.ts
+import { GraphNode, Edge } from '@hevno/schemas';
 
 // 使用 Kahn 算法进行拓扑排序
 export function topologicalSort(nodes: GraphNode[], edges: Edge[]): string[] {
@@ -15,6 +16,7 @@ export function topologicalSort(nodes: GraphNode[], edges: Edge[]): string[] {
 
   // 计算每个节点的入度
   for (const edge of edges) {
+    // 无论是数据流还是控制流，都构成拓扑依赖
     adjList.get(edge.sourceNodeId)?.push(edge.targetNodeId);
     inDegree.set(edge.targetNodeId, (inDegree.get(edge.targetNodeId) ?? 0) + 1);
   }
@@ -40,9 +42,13 @@ export function topologicalSort(nodes: GraphNode[], edges: Edge[]): string[] {
     }
   }
 
-  // 检查是否有环 (如果排序后的节点数不等于总节点数)
+  // 检查是否有环
   if (sortedOrder.length !== nodes.length) {
-    throw new Error('Graph has at least one cycle. Topological sort is not possible.');
+    // 更详细的错误信息
+    const nodesInCycle = nodes
+        .filter(n => (inDegree.get(n.id) ?? 0) > 0)
+        .map(n => n.id);
+    throw new Error(`Graph has at least one cycle. Topological sort failed. Nodes in cycle might be: ${nodesInCycle.join(', ')}`);
   }
 
   return sortedOrder;

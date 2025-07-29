@@ -1,4 +1,5 @@
 // packages/api-server/src/index.ts
+import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { Server } from 'socket.io';
