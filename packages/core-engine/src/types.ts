@@ -1,6 +1,12 @@
 // packages/core-engine/src/types.ts
 import { Graph, GraphNode, ProcessorNode } from '@hevno/schemas';
-import { GraphExecutor } from './GraphExecutor';
+
+/**
+ * 这是我们将要创建的接口，用于打破循环依赖
+ */
+export interface IGraphExecutor {
+  execute(graph: Graph, initialInputs: Record<string, any>): Promise<ExecutionContext>;
+}
 
 /**
  * 执行上下文，贯穿整个图的执行过程。
@@ -16,7 +22,7 @@ export type ExecutionContext = {
  * 用于提供像图执行器、图注册表等系统级能力，避免循环依赖。
  */
 export type CoreServices = {
-  graphExecutor: GraphExecutor;
+  graphExecutor: IGraphExecutor; // <--- USE THE INTERFACE HERE
   graphRegistry: Map<string, Graph>;
   // 未来可以添加数据库服务、文件系统服务等
 };

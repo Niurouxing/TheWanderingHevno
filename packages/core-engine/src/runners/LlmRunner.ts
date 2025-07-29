@@ -40,27 +40,48 @@ class GeminiClient implements ILlmClient {
   }
 
   async generate(runtime: LlmRuntime, prompt: string): Promise<string | null> {
-    const model = this.client.getGenerativeModel({ 
+    const model = this.client.getGenerativeModel({
         model: runtime.model,
-        // Gemini 的 System Prompt 在这里设置
         systemInstruction: runtime.systemPrompt,
     });
     
-    const result = await model.generateContent({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: {
-            temperature: runtime.temperature,
-        },
-        // 安全设置，根据需要调整。这里设置为较低的屏蔽阈值。
-        safetySettings: [
-            { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        ],
-    });
+    try { // <--- 添加 try 块
+      const result = await model.generateContent({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: {
+              temperature: runtime.temperature,
+          },
+          safetySettings: [
+              { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+              { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+              { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+              { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+          ],
+      });
 
-    return result.response.text();
+      const response = result.response;
+      if (!response) {
+        const blockReason = result.promptFeedback?.blockReason;
+        const safetyRatings = result.promptFeedback?.safetyRatings;
+        let errorMessage = `Gemini API call failed. The response was empty.`;
+        if (blockReason) {
+          errorMessage += ` Reason: ${blockReason}.`;
+        }
+        if (safetyRatings && safetyRatings.length > 0) {
+          errorMessage += ` Safety ratings: ${JSON.stringify(safetyRatings)}`;
+        }
+        throw new Error(errorMessage);
+      }
+      
+      return response.text();
+
+    } catch (error: any) { // <--- 添加 catch 块
+      // 捕获 API Key 无效、网络错误等所有异常
+      console.error("[GeminiClient] Raw error from SDK:", error); // 打印原始错误以供调试
+      // 重新抛出一个标准的 Error 对象，包含更丰富的信息
+      const message = error.message || 'An unknown error occurred in GeminiClient.';
+      throw new Error(`Gemini API request failed: ${message}`);
+    }
   }
 }
 

@@ -27,6 +27,16 @@ Hevno 采取了截然不同的方法：
 
 所有 Schema 均由 `zod` 构建，提供了编译时类型安全和运行时验证。
 
+### `ValueTypeSchema` 
+
+这是 Hevno 类型系统的核心。`ValueType` 不是一个固定的类型，而是一个描述数据结构的元定义。它允许我们动态地定义任意复杂的数据类型，例如字符串、数字、布尔值、对象和数组。
+
+-   `type: 'string' | 'number' | 'boolean' | 'any'`: 基础类型。
+-   `type: 'object', properties: Record<string, ValueType>`: 描述一个对象及其属性的类型。
+-   `type: 'array', item: ValueType`: 描述一个数组及其元素的类型。
+
+这个元 schema 是实现动态端口类型和函数签名的关键。
+
 ### `GraphSchema`
 
 图的顶层结构。
@@ -56,7 +66,7 @@ Hevno 采取了截然不同的方法：
 -   `outputs: Port[]`: 输出端口。
 -   `runtime`: 定义其行为，可以是：
     -   `LlmRuntimeSchema`: 配置一个 LLM 调用，包含 `provider`, `model`, `userPrompt` (支持模板)等。
-    -   `FunctionRuntimeSchema`: 配置一个函数调用，包含 `functionName` 和静态 `config` 对象。
+    -   `FunctionRuntimeSchema`: 配置一个函数调用，包含 `functionName`，以及可选的 `inputSchema` 和 `outputSchema`，它们使用 `ValueTypeSchema` 来定义函数的输入输出数据结构。
 
 ### `PortSchema`
 
@@ -64,6 +74,7 @@ Hevno 采取了截然不同的方法：
 
 -   `id: string`: 端口的唯一 ID。
 -   `name: string`: 端口的可读名称。
+-   `valueType: ValueType`: **核心字段**。使用 `ValueTypeSchema` 定义该端口传输的数据类型。默认为 `{ type: 'any' }`。这使得编辑器和引擎可以在运行时理解和验证数据。
 -   `kind: 'data' | 'control'`: **关键字段**。`'data'` 表示传递数据，`'control'` 表示仅用于定义执行顺序，不传递数据。这使得控制流和数据流可以在图中被明确区分。
 
 ### `EdgeSchema`
@@ -72,6 +83,53 @@ Hevno 采取了截然不同的方法：
 
 -   `sourceNodeId`, `sourceOutputId`: 连接的起点（节点ID和端口ID）。
 -   `targetNodeId`, `targetInputId`: 连接的终点（节点ID和端口ID）。
+
+## 运行时验证器 (新增)
+
+为了让 `ValueType` 定义真正发挥作用，`@hevno/schemas` 包还提供了一组辅助函数，用于将这些元类型定义编译成可执行的 Zod 验证器。
+
+### `buildZodValidatorFromValueType(valueType: ValueType): ZodTypeAny`
+
+递归地将一个 `ValueType` 对象构建成一个 Zod 验证器。
+
+```typescript
+import { buildZodValidatorFromValueType } from '@hevno/schemas';
+
+const myType = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    age: { type: 'number' },
+  }
+};
+
+const validator = buildZodValidatorFromValueType(myType);
+
+validator.parse({ name: "Alice", age: 30 }); // OK
+validator.parse({ name: "Bob", age: "unknown" }); // Throws ZodError
+```
+
+### `buildObjectValidatorFromSchema(schema: Record<string, ValueType>): ZodObject`
+
+这是一个便捷函数，专门用于为 `FunctionRuntime` 的 `inputSchema` 或 `outputSchema` 构建整个对象的验证器。
+
+```typescript
+import { buildObjectValidatorFromSchema, FunctionRuntime } from '@hevno/schemas';
+
+const func: FunctionRuntime = {
+  type: 'function',
+  functionName: 'myFunc',
+  inputSchema: {
+    user: { type: 'string' },
+    count: { type: 'number' },
+  }
+};
+
+if (func.inputSchema) {
+  const inputValidator = buildObjectValidatorFromSchema(func.inputSchema);
+  // inputValidator is now a z.object({ user: z.string(), count: z.number() })
+}
+```
 
 ## 使用
 
@@ -82,10 +140,11 @@ const myGraph: Graph = {
   // ... a graph object
 };
 
-// Zod aill validate the structure at runtime
+// Zod will validate the structure at runtime
 try {
   GraphSchema.parse(myGraph);
   console.log("Graph is valid!");
 } catch (e) {
   console.error("Invalid graph structure:", e);
 }
+```

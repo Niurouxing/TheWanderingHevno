@@ -1,8 +1,7 @@
-
 {
   "name": "hevno",
   "version": "1.0.0",
-  "private": true, 
+  "private": true,
   "scripts": {
     "dev": "concurrently \"pnpm:dev:schemas\" \"pnpm:dev:api\" \"pnpm:dev:web\"",
     "dev:schemas": "pnpm --filter @hevno/schemas dev",
@@ -12,6 +11,7 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.2",
+    "dotenv": "^17.2.1",
     "typescript": "^5.4.5"
   }
 }

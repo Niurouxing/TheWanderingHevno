@@ -11,6 +11,9 @@ importers:
       concurrently:
         specifier: ^8.2.2
         version: 8.2.2
+      dotenv:
+        specifier: ^17.2.1
+        version: 17.2.1
       typescript:
         specifier: ^5.4.5
         version: 5.8.3
@@ -57,9 +60,6 @@ importers:
       '@hevno/schemas':
         specifier: workspace:*
         version: link:../schemas
-      dotenv:
-        specifier: ^17.2.1
-        version: 17.2.1
       openai:
         specifier: ^4.47.1
         version: 4.104.0(zod@3.25.76)
@@ -67,6 +67,15 @@ importers:
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.9
+      dotenv:
+        specifier: ^17.2.1
+        version: 17.2.1
+      ts-node:
+        specifier: ^10.9.2
+        version: 10.9.2(@types/node@20.19.9)(typescript@5.8.3)
+      ts-node-dev:
+        specifier: ^2.0.0
+        version: 2.0.0(@types/node@20.19.9)(typescript@5.8.3)
       typescript:
         specifier: ^5.4.5
         version: 5.8.3
