@@ -43,46 +43,41 @@ class GraphExecutor:
         while sorter.is_active():
             ready_nodes_ids = sorter.get_ready()
             
-            tasks = []
-            nodes_to_execute_ids = [] # 只包含真正要执行的节点
+            # --- 1. 将就绪节点分为“要执行”和“要跳过”两组 ---
+            nodes_to_execute = []
+            nodes_to_skip = []
 
             for node_id in ready_nodes_ids:
-                # 关键修复：检查上游依赖是否都成功了
-                parent_ids = predecessors[node_id]
-                if any(
-                    exec_context.state.get(p_id, {}).get("error")
-                    for p_id in parent_ids
-                ):
-                    # 如果任何一个父节点有错误，就跳过当前节点
-                    print(f"Skipping node {node_id} due to upstream failure.")
-                    # 标记为完成，但不在 state 中创建条目
-                    sorter.done(node_id)
-                    continue
-                
-                # 如果检查通过，才加入执行列表
-                nodes_to_execute_ids.append(node_id)
-                node = node_map[node_id]
-                tasks.append(self._execute_node(node, exec_context))
-
-            if not tasks: # 如果本轮没有可执行的任务，继续下一轮
-                continue
-
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # 5. 处理执行结果并更新状态
-            for i, result in enumerate(results):
-                node_id = ready_nodes_ids[i]
-                if isinstance(result, Exception):
-                    # 如果执行中发生异常，记录错误
-                    error_message = f"Error executing node {node_id}: {result}"
-                    print(error_message)
-                    exec_context.state[node_id] = {"error": error_message}
+                parent_ids = predecessors.get(node_id, [])
+                if any(exec_context.state.get(p_id, {}).get("error") for p_id in parent_ids):
+                    nodes_to_skip.append(node_id)
                 else:
-                    # 否则，更新状态
-                    exec_context.state[node_id] = result
-                
-                # 标记节点已完成，以便排序器可以找到下一批就绪节点
+                    nodes_to_execute.append(node_map[node_id])
+            
+            # --- 2. 处理跳过的节点 ---
+            for node_id in nodes_to_skip:
+                print(f"Skipping node {node_id} due to upstream failure.")
+                # 可选：在state中明确标记为skipped，方便调试
+                exec_context.state[node_id] = {"status": "skipped", "reason": "Upstream failure"}
                 sorter.done(node_id)
+
+            # --- 3. 并发执行并处理结果 ---
+            if nodes_to_execute:
+                tasks = [self._execute_node(node, exec_context) for node in nodes_to_execute]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                for i, result in enumerate(results):
+                    node = nodes_to_execute[i]
+                    node_id = node.id
+
+                    if isinstance(result, Exception):
+                        error_message = f"Error executing node {node_id}: {result}"
+                        print(error_message)
+                        exec_context.state[node_id] = {"error": error_message}
+                    else:
+                        exec_context.state[node_id] = result
+                    
+                    sorter.done(node_id)
         
         print("Graph execution finished.")
         return exec_context.state

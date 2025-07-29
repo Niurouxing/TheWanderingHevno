@@ -11,7 +11,6 @@ class Edge(BaseModel):
 # 而是创建一个通用的节点模型
 class GenericNode(BaseModel):
     id: str
-    type: str 
     
     data: Dict[str, Any] = Field(
         ...,

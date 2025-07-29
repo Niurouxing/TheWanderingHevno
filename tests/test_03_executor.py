@@ -70,10 +70,9 @@ async def test_executor_fan_in_flow(fan_in_graph, fresh_runtime_registry: Runtim
     # C 应该成功地从 A 和 B 渲染了模板
     assert final_state["C"]["output"] == "Story: The Character: Knight Action: Fights a dragon."
 
-# --- 测试错误处理 ---
 @pytest.mark.asyncio
 async def test_executor_handles_runtime_error(simple_linear_graph, fresh_runtime_registry: RuntimeRegistry, mocker):
-    """验证当一个节点出错时，图的执行会停止，并记录错误"""
+    """验证当一个节点出错时，下游节点会被正确标记为skipped"""
     mocker.patch(
         "backend.runtimes.base_runtimes.LLMRuntime.execute",
         side_effect=ValueError("LLM API is down")
@@ -83,14 +82,15 @@ async def test_executor_handles_runtime_error(simple_linear_graph, fresh_runtime
 
     # A 应该成功执行
     assert "node_A" in final_state and "output" in final_state["node_A"]
+    
     # B 应该记录了错误
     assert "node_B" in final_state and "error" in final_state["node_B"]
     assert "LLM API is down" in final_state["node_B"]["error"]
-    
-    # 解决方案：关键修复！
-    # C 不应该被执行，因为它依赖于失败的B。
-    # 所以它不应该出现在 final_state 中。
-    assert "node_C" not in final_state
+
+    # 关键修复：我们现在期望 node_C 存在，并且状态为 'skipped'
+    assert "node_C" in final_state
+    assert final_state["node_C"].get("status") == "skipped"
+    assert "Upstream failure" in final_state["node_C"].get("reason", "")
 
 @pytest.mark.asyncio
 async def test_executor_detects_cycle(cyclic_graph, fresh_runtime_registry: RuntimeRegistry):
