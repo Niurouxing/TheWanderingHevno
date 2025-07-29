@@ -1,499 +1,7 @@
-### requirements.txt
-```
-annotated-types==0.7.0
-anyio==4.9.0
-certifi==2025.7.14
-click==8.2.1
-dnspython==2.7.0
-email_validator==2.2.0
-fastapi==0.116.1
-fastapi-cli==0.0.8
-fastapi-cloud-cli==0.1.5
-h11==0.16.0
-httpcore==1.0.9
-httptools==0.6.4
-httpx==0.28.1
-idna==3.10
-iniconfig==2.1.0
-itsdangerous==2.2.0
-Jinja2==3.1.6
-markdown-it-py==3.0.0
-MarkupSafe==3.0.2
-mdurl==0.1.2
-orjson==3.11.1
-packaging==25.0
-pluggy==1.6.0
-pydantic==2.11.7
-pydantic-extra-types==2.10.5
-pydantic-settings==2.10.1
-pydantic_core==2.33.2
-Pygments==2.19.2
-pytest==8.4.1
-pytest-asyncio==1.1.0
-pytest-mock==3.14.1
-python-dotenv==1.1.1
-python-multipart==0.0.20
-PyYAML==6.0.2
-rich==14.1.0
-rich-toolkit==0.14.9
-rignore==0.6.4
-sentry-sdk==2.33.2
-shellingham==1.5.4
-sniffio==1.3.1
-starlette==0.47.2
-typer==0.16.0
-typing-inspection==0.4.1
-typing_extensions==4.14.1
-ujson==5.10.0
-urllib3==2.5.0
-uvicorn==0.35.0
-uvloop==0.21.0
-watchfiles==1.1.0
-websockets==15.0.1
-
-```
-
-### frontend/tsconfig.node.json
-```
-{
-  "compilerOptions": {
-    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
-    "target": "ES2023",
-    "lib": ["ES2023"],
-    "module": "ESNext",
-    "skipLibCheck": true,
-
-    /* Bundler mode */
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "moduleDetection": "force",
-    "noEmit": true,
-
-    /* Linting */
-    "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true
-  },
-  "include": ["vite.config.ts"]
-}
-
-```
-
-### frontend/index.html
-```
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Vite + React + TS</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
-
-```
-
-### frontend/tsconfig.app.json
-```
-{
-  "compilerOptions": {
-    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
-    "target": "ES2022",
-    "useDefineForClassFields": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "skipLibCheck": true,
-
-    /* Bundler mode */
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "moduleDetection": "force",
-    "noEmit": true,
-    "jsx": "react-jsx",
-
-    /* Linting */
-    "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true
-  },
-  "include": ["src"]
-}
-
-```
-
-### frontend/README.md
-```
-# React + TypeScript + Vite
-
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      ...tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      ...tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      ...tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-```
-
-### frontend/package.json
-```
-{
-  "name": "frontend",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "axios": "^1.11.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "reactflow": "^11.11.4"
-  },
-  "devDependencies": {
-    "@eslint/js": "^9.30.1",
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^4.6.0",
-    "eslint": "^9.30.1",
-    "eslint-plugin-react-hooks": "^5.2.0",
-    "eslint-plugin-react-refresh": "^0.4.20",
-    "globals": "^16.3.0",
-    "typescript": "~5.8.3",
-    "typescript-eslint": "^8.35.1",
-    "vite": "^7.0.4"
-  }
-}
-
-```
-
-### frontend/tsconfig.json
-```
-{
-  "files": [],
-  "references": [
-    { "path": "./tsconfig.app.json" },
-    { "path": "./tsconfig.node.json" }
-  ]
-}
-
-```
-
-### frontend/eslint.config.js
-```
-import js from '@eslint/js'
-import globals from 'globals'
-import reactHooks from 'eslint-plugin-react-hooks'
-import reactRefresh from 'eslint-plugin-react-refresh'
-import tseslint from 'typescript-eslint'
-import { globalIgnores } from 'eslint/config'
-
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      js.configs.recommended,
-      tseslint.configs.recommended,
-      reactHooks.configs['recommended-latest'],
-      reactRefresh.configs.vite,
-    ],
-    languageOptions: {
-      ecmaVersion: 2020,
-      globals: globals.browser,
-    },
-  },
-])
-
-```
-
-### tests/test_03_executor.py
-```
-# tests/test_03_executor.py
-import pytest
-from unittest.mock import patch
-from backend.core.executor import GraphExecutor
-from backend.models import Graph, GenericNode, Edge
-
-# 使用 pytest.mark.usefixtures 来自动应用 fixture
-@pytest.mark.usefixtures("fresh_runtime_registry")
-@pytest.mark.asyncio
-async def test_graph_executor_linear_flow(simple_linear_graph, mocker):
-    # 我们仍然需要mock掉LLM的外部调用
-    mocker.patch(
-        "backend.runtimes.base_runtimes.asyncio.sleep", 
-        return_value=None
-    )
-
-    executor = GraphExecutor()
-    final_state = await executor.execute(simple_linear_graph)
-
-    # 断言最终状态
-    assert "node_A" in final_state
-    assert final_state["node_A"]["output"] == "A story about a cat."
-
-    assert "node_B" in final_state
-    expected_llm_input = "Continue this story: A story about a cat."
-    assert final_state["node_B"]["output"] == f"LLM_RESPONSE_FOR:[{expected_llm_input}]"
-
-    assert "node_C" in final_state
-    expected_final_output = f"The final story is: {final_state['node_B']['output']}"
-    assert final_state["node_C"]["output"] == expected_final_output
-
-@pytest.mark.usefixtures("fresh_runtime_registry")
-@pytest.mark.asyncio
-async def test_graph_executor_handles_runtime_error(mocker):
-    # 模拟一个会出错的LLM Runtime
-    mocker.patch(
-        "backend.runtimes.base_runtimes.LLMRuntime.execute",
-        side_effect=IOError("LLM API is down")
-    )
-
-    graph = Graph(
-        nodes=[
-            GenericNode(id="A", type="input", data={"runtime": "system.input", "value": "test"}),
-            GenericNode(id="B", type="default", data={"runtime": "llm.default", "prompt": "{{ A.output }}"}),
-        ],
-        edges=[]
-    )
-    
-    executor = GraphExecutor()
-    final_state = await executor.execute(graph)
-    
-    assert "A" in final_state
-    assert final_state["A"]["output"] == "test"
-    
-    # 检查错误是否被正确捕获并记录在状态中
-    assert "B" in final_state
-    assert "error" in final_state["B"]
-    assert "LLM API is down" in final_state["B"]["error"]
-```
-
-### tests/test_02_runtimes.py
-```
-# tests/test_02_runtimes.py
-import pytest
-from backend.core.runtime import ExecutionContext
-from backend.runtimes.base_runtimes import InputRuntime, TemplateRuntime, LLMRuntime
-
-# ---- 测试 InputRuntime ----
-@pytest.mark.asyncio
-async def test_input_runtime():
-    runtime = InputRuntime()
-    node_data = {"value": "Hello World"}
-    context = ExecutionContext(state={}, graph=None, function_registry={})
-    
-    result = await runtime.execute(node_data, context)
-    
-    assert result == {"output": "Hello World"}
-
-# ---- 测试 TemplateRuntime ----
-@pytest.mark.asyncio
-async def test_template_runtime_simple():
-    runtime = TemplateRuntime()
-    node_data = {"template": "The value is: {{ node_A.output }}"}
-    context = ExecutionContext(
-        state={"node_A": {"output": "SUCCESS"}},
-        graph=None,
-        function_registry={}
-    )
-    
-    result = await runtime.execute(node_data, context)
-    
-    assert result == {"output": "The value is: SUCCESS"}
-
-@pytest.mark.asyncio
-async def test_template_runtime_missing_variable_raises_error():
-    runtime = TemplateRuntime()
-    node_data = {"template": "Value: {{ non_existent.output }}"}
-    context = ExecutionContext(state={}, graph=None, function_registry={})
-    
-    # Jinja2会抛出 UndefinedError，我们捕获它并包装为IOError
-    with pytest.raises(IOError, match="Template rendering failed"):
-        await runtime.execute(node_data, context)
-
-# ---- 测试 LLMRuntime (关键：使用 Mock) ----
-@pytest.mark.asyncio
-async def test_llm_runtime_with_mock(mocker): # 使用 pytest-mock 的 mocker fixture
-    # 1. Mock掉真正的LLM调用（这里我们假设它是一个异步函数）
-    # 注意：我们mock的是它在运行时模块中被调用的地方
-    mocked_llm_call = mocker.patch(
-        "backend.runtimes.base_runtimes.asyncio.sleep", # 在MVP中我们用sleep模拟
-        return_value=None # asyncio.sleep不返回任何东西
-    )
-    
-    runtime = LLMRuntime()
-    node_data = {"prompt": "Summarize: {{ input.text }}"}
-    context = ExecutionContext(
-        state={"input": {"text": "A very long story."}},
-        graph=None,
-        function_registry={}
-    )
-    
-    result = await runtime.execute(node_data, context)
-
-    # 2. 断言结果是否基于模拟的 LLM 响应
-    expected_prompt = "Summarize: A very long story."
-    assert "output" in result
-    assert result["output"] == f"LLM_RESPONSE_FOR:[{expected_prompt}]"
-    assert "summary" in result
-
-    # 3. 断言 mock 的函数是否被调用了
-    mocked_llm_call.assert_awaited_once_with(1)
-```
-
-### tests/conftest.py
-```
-# tests/conftest.py
-import pytest
-from backend.core.registry import RuntimeRegistry
-from backend.runtimes.base_runtimes import InputRuntime, TemplateRuntime, LLMRuntime
-from backend.models import Graph, GenericNode, Edge
-
-@pytest.fixture(scope="function") # 'function' scope表示每个测试函数都会获得一个新的实例
-def fresh_runtime_registry():
-    """提供一个干净的、预填充了基础运行时的注册表实例。"""
-    registry = RuntimeRegistry()
-    registry.register("system.input", InputRuntime)
-    registry.register("system.template", TemplateRuntime)
-    registry.register("llm.default", LLMRuntime)
-    return registry
-
-@pytest.fixture
-def simple_linear_graph():
-    """提供一个简单的线性图，用于测试执行流程。"""
-    return Graph(
-        nodes=[
-            GenericNode(id="node_A", type="input", data={"runtime": "system.input", "value": "A story about a cat."}),
-            GenericNode(id="node_B", type="default", data={"runtime": "llm.default", "prompt": "Continue this story: {{ node_A.output }}"}),
-            GenericNode(id="node_C", type="output", data={"runtime": "system.template", "template": "The final story is: {{ node_B.output }}"}),
-        ],
-        edges=[
-            Edge(source="node_A", target="node_B"),
-            Edge(source="node_B", target="node_C"),
-        ]
-    )
-```
-
-### tests/__init__.py
-```
-
-```
-
-### tests/test_01_models.py
-```
-# tests/test_01_models.py
-import pytest
-from pydantic import ValidationError
-from backend.models import GenericNode, Graph
-
-def test_generic_node_validation():
-    # 有效数据
-    valid_data = {"id": "1", "type": "default", "data": {"runtime": "test"}}
-    node = GenericNode(**valid_data)
-    assert node.id == "1"
-    assert node.data["runtime"] == "test"
-
-    # 缺少 runtime 会导致 data 字段验证失败（虽然我们没有明确要求，但通常是需要的）
-    # Pydantic 默认所有字段都是必须的，除非有默认值或 Optional
-    # 但我们这里是data字段本身必须存在，其内容可以灵活
-    valid_data_no_runtime = {"id": "2", "type": "default", "data": {}}
-    node_no_runtime = GenericNode(**valid_data_no_runtime)
-    assert node_no_runtime.data == {}
-
-
-    # 缺少 id 字段应该会失败
-    with pytest.raises(ValidationError):
-        GenericNode(type="default", data={"runtime": "test"})
-
-def test_graph_model(simple_linear_graph): # 使用我们定义的fixture
-    """测试Graph模型能否正确加载一个合法的图结构。"""
-    graph = simple_linear_graph
-    assert len(graph.nodes) == 3
-    assert len(graph.edges) == 2
-    assert graph.nodes[0].id == "node_A"
-```
-
-### backend/models.py
+### models.py
 ```
 # backend/models.py
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Dict, Any
 
 # Edge模型保持不变
@@ -505,22 +13,69 @@ class Edge(BaseModel):
 # 而是创建一个通用的节点模型
 class GenericNode(BaseModel):
     id: str
-    # 'type' 字段现在只用于前端UI渲染的提示，例如'input', 'output', 'default'
-    # 它不再决定后端的执行逻辑
     type: str 
     
-    # data 字段中包含了一个新的关键属性 'runtime'
     data: Dict[str, Any] = Field(
         ...,
         description="节点的核心配置，必须包含 'runtime' 字段来指定执行器"
     )
+
+    @field_validator('data')
+    @classmethod
+    def check_runtime_exists(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        if 'runtime' not in v:
+            raise ValueError("Node data must contain a 'runtime' field.")
+        
+        runtime_value = v['runtime']
+        if not (isinstance(runtime_value, str) or 
+                (isinstance(runtime_value, list) and all(isinstance(item, str) for item in runtime_value))):
+            raise ValueError("'runtime' must be a string or a list of strings.")
+            
+        return v
 
 class Graph(BaseModel):
     nodes: List[GenericNode]
     edges: List[Edge]
 ```
 
-### backend/main.py
+### README.md
+```
+
+# Hevno Backend Engine
+
+欢迎来到 Hevno 项目的后端引擎！这是一个高度可扩展、由配置驱动的图执行引擎，旨在为复杂的、多步骤的LLM应用提供动力。
+
+## 核心设计哲学
+
+本项目的构建基于一个核心哲学：**“拒绝类型爆炸，拥抱配置组合”**。
+
+在许多工作流或节点编辑器系统中，功能的增加往往伴随着新节点类型（`If-Else Node`, `Loop Node`, `Sub-Flow Node` 等）的涌入。这种方式虽然初看直观，但长期来看会导致系统变得复杂、僵化，并增加用户的学习成本。
+
+我们采取了截然不同的方法：
+
+1.  **极简的节点结构**: 我们只有一个通用的节点模型 (`GenericNode`)。一个节点是“LLM调用”还是“代码执行”，不由其类型决定。
+
+2.  **行为由运行时配置决定**: 节点是一个“变色龙”，其具体行为完全由其数据负载中的 `runtime` 字段指定。这意味着我们可以通过增加新的`runtime`实现来无限扩展功能，而无需修改或增加基础节点结构。
+
+    *   **旧方式 (我们避免的)**:
+        ```json
+        {"type": "LLMNode", "prompt": "..."}
+        {"type": "CodeNode", "code": "..."}
+        ```
+
+    *   **Hevno 的方式 (我们采用的)**:
+        ```json
+        {"type": "default", "data": {"runtime": "llm.default", "prompt": "..."}}
+        {"type": "default", "data": {"runtime": "code.python", "code": "..."}}
+        ```
+
+3.  **元能力下沉为核心函数**: 像“修改流图”或“创建新节点”这样的系统级“元能力”，我们不将其实现为特殊的节点类型。相反，它们将被实现为可供任何运行时调用的内置核心函数。这使得系统的核心功能和用户自定义功能在结构上完全等价，极大地增强了统一性和灵活性。
+
+这种设计使得 Hevno 不仅仅是一个应用，更是一个构建AI原生工作流的**框架**。
+
+```
+
+### main.py
 ```
 # backend/main.py
 from fastapi import FastAPI, HTTPException
@@ -566,7 +121,7 @@ def setup_application():
     return app
 
 app = setup_application()
-graph_executor = GraphExecutor()
+graph_executor = GraphExecutor(registry=runtime_registry)
 
 # --- API 端点 ---
 @app.post("/api/graphs/execute")
@@ -582,7 +137,46 @@ def read_root():
     return {"message": "Hevno Backend is running on refactored architecture!"}
 ```
 
-### backend/core/registry.py
+### core/templating.py
+```
+# backend/core/templating.py (最终正确版)
+import jinja2
+from typing import Any
+from backend.core.runtime import ExecutionContext
+
+# create_template_environment 不再需要，可以删除或简化为一个只创建env的函数
+def get_jinja_env():
+    return jinja2.Environment(
+        enable_async=True,
+        # 修复：使用 StrictUndefined，这样当变量不存在时会抛出 UndefinedError
+        undefined=jinja2.StrictUndefined 
+    )
+
+async def render_template(template_str: str, context: ExecutionContext) -> str:
+    """
+    一个辅助函数，使用最新的上下文来渲染模板。
+    """
+    if '{{' not in template_str:
+        return template_str
+        
+    env = get_jinja_env()
+    template = env.from_string(template_str)
+    
+    # 动态构建完整的渲染上下文
+    render_context = {
+        "nodes": context.state,
+        "vars": context.global_vars,
+        "session": context.session_info,
+        # 未来可以在这里注入函数
+    }
+
+    try:
+        return await template.render_async(render_context)
+    except Exception as e:
+        raise IOError(f"Template rendering failed: {e}")
+```
+
+### core/registry.py
 ```
 # backend/core/registry.py
 from typing import Dict, Type
@@ -609,122 +203,208 @@ class RuntimeRegistry:
 runtime_registry = RuntimeRegistry()
 ```
 
-### backend/core/__init__.py
+### core/__init__.py
 ```
 
 ```
 
-### backend/core/runtime.py
+### core/runtime.py
 ```
-# backend/runtimes/base_runtimes.py
-
-from typing import Dict, Any
-import jinja2
+# backend/core/runtime.py
+from abc import ABC, abstractmethod
+from typing import Dict, Any, Callable
+from pydantic import BaseModel, Field 
 import asyncio
+from datetime import datetime, timezone
 
-template_env = jinja2.Environment(enable_async=True)
 
-class InputRuntime(RuntimeInterface):
-    """处理输入节点的运行时"""
+class ExecutionContext(BaseModel):
+    # 之前已有的
+    state: Dict[str, Any] 
+    graph: Any
+    
+    # --- 新增的全局变量 ---
+    # 会话级的元数据
+    session_info: Dict[str, Any] = Field(default_factory=lambda: {
+        "start_time": datetime.now(timezone.utc),
+        "conversation_turn": 0,
+    })
+    
+    # 全局变量存储，可以在图执行过程中被修改和读取
+    global_vars: Dict[str, Any] = Field(default_factory=dict)
+
+    # 我们之前构想的函数注册表
+    function_registry: Dict[str, Callable] = Field(default_factory=dict)
+
+    model_config = {
+        "arbitrary_types_allowed": True
+    }
+
+class RuntimeInterface(ABC):
+    """定义所有运行时都必须遵守的接口 (使用抽象基类)"""
+    @abstractmethod
     async def execute(self, node_data: Dict[str, Any], context: ExecutionContext) -> Dict[str, Any]:
-        # 输入节点直接将其 'value' 作为输出
-        return {"output": node_data.get("value", "")}
-
-class TemplateRuntime(RuntimeInterface):
-    """一个通用的模板渲染运行时，可用于输出或任何需要格式化文本的地方"""
-    async def execute(self, node_data: Dict[str, Any], context: ExecutionContext) -> Dict[str, Any]:
-        template_str = node_data.get("template", "")
-        try:
-            template = template_env.from_string(template_str)
-            # 注意这里，我们把整个 state 传给 Jinja2
-            rendered_string = await template.render_async(context.state)
-            return {"output": rendered_string}
-        except Exception as e:
-            # 在未来，这里应该有一个更健壮的错误处理机制
-            raise IOError(f"Template rendering failed: {e}")
-
-class LLMRuntime(RuntimeInterface):
-    """处理LLM调用的运行时"""
-    async def execute(self, node_data: Dict[str, Any], context: ExecutionContext) -> Dict[str, Any]:
-        prompt_template_str = node_data.get("prompt", "")
-        
-        # 渲染模板，从上下文中注入依赖数据
-        try:
-            template = template_env.from_string(prompt_template_str)
-            rendered_prompt = await template.render_async(context.state)
-        except Exception as e:
-            raise IOError(f"Prompt template rendering failed: {e}")
-
-        # --- 模拟LLM调用 ---
-        print(f"  - Calling LLM with Prompt: {rendered_prompt}")
-        await asyncio.sleep(1) # 模拟网络延迟
-        
-        # 真实的LLM调用逻辑会在这里
-        llm_response = f"LLM_RESPONSE_FOR:[{rendered_prompt}]"
-        
-        # LLM运行时可以有多个输出，例如，一个用于对话，一个用于总结
-        return {"output": llm_response, "summary": f"Summary of '{rendered_prompt[:20]}...'"}
+        """
+        执行节点逻辑的核心方法。
+        - node_data: 节点自身的data字段。
+        - context: 当前的执行上下文。
+        - 返回值: 该节点的输出，将被存入全局状态。
+        """
+        pass
 ```
 
-### backend/core/executor.py
+### core/executor.py
 ```
 # backend/core/executor.py
+import asyncio
+from graphlib import TopologicalSorter, CycleError
+from typing import Dict, Any, Set
+
 from backend.models import Graph
-from backend.core.registry import runtime_registry
+from backend.core.registry import RuntimeRegistry
 from backend.core.runtime import ExecutionContext
-from typing import Dict, Any
 
 class GraphExecutor:
-    async def execute(self, graph: Graph) -> Dict[str, Any]:
-        # 这是一个更健壮的拓扑排序实现
-        # （这里为了简洁，我们仍然用一个简化版，但结构已经准备好了）
-        node_map = {node.id: node for node in graph.nodes}
-        
-        # 待办: 实现一个真正的拓扑排序算法来确定 execution_order
-        execution_order = sorted(graph.nodes, key=lambda n: n.id)
+    def __init__(self, registry: RuntimeRegistry):
+        self.registry = registry
 
-        # 初始上下文
+    async def execute(self, graph: Graph) -> Dict[str, Any]:
+        node_map = {node.id: node for node in graph.nodes}
+        # 构建一个反向依赖图，方便查找父节点
+        predecessors = {node.id: [] for node in graph.nodes}
+        for edge in graph.edges:
+            predecessors[edge.target].append(edge.source)
+        sorter = TopologicalSorter()
+        
+        # 2. 完成所有的 add 操作
+        for node in graph.nodes:
+            sorter.add(node.id)
+
+        for edge in graph.edges:
+            sorter.add(edge.target, edge.source)
+
+        # 3. 在所有 add 操作后，调用 prepare 一次
+        try:
+            sorter.prepare()
+        except CycleError as e:
+            # CycleError 被正确捕获
+            raise ValueError(f"Graph has a cycle: {e.args[1]}") from e
+
         exec_context = ExecutionContext(
             state={},
             graph=graph,
-            function_registry={} # 暂时为空，未来用于元能力
+            function_registry={}
         )
 
-        for node in execution_order:
-            node_id = node.id
-            runtime_name = node.data.get("runtime")
+        # 3. 循环执行，直到所有节点完成
+        while sorter.is_active():
+            ready_nodes_ids = sorter.get_ready()
             
-            if not runtime_name:
-                print(f"Warning: Node {node_id} has no runtime. Skipping.")
+            tasks = []
+            nodes_to_execute_ids = [] # 只包含真正要执行的节点
+
+            for node_id in ready_nodes_ids:
+                # 关键修复：检查上游依赖是否都成功了
+                parent_ids = predecessors[node_id]
+                if any(
+                    exec_context.state.get(p_id, {}).get("error")
+                    for p_id in parent_ids
+                ):
+                    # 如果任何一个父节点有错误，就跳过当前节点
+                    print(f"Skipping node {node_id} due to upstream failure.")
+                    # 标记为完成，但不在 state 中创建条目
+                    sorter.done(node_id)
+                    continue
+                
+                # 如果检查通过，才加入执行列表
+                nodes_to_execute_ids.append(node_id)
+                node = node_map[node_id]
+                tasks.append(self._execute_node(node, exec_context))
+
+            if not tasks: # 如果本轮没有可执行的任务，继续下一轮
                 continue
 
-            print(f"Executing node: {node_id} with runtime: {runtime_name}")
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            try:
-                # 从注册表获取运行时实例
-                runtime = runtime_registry.get_runtime(runtime_name)
+            # 5. 处理执行结果并更新状态
+            for i, result in enumerate(results):
+                node_id = ready_nodes_ids[i]
+                if isinstance(result, Exception):
+                    # 如果执行中发生异常，记录错误
+                    error_message = f"Error executing node {node_id}: {result}"
+                    print(error_message)
+                    exec_context.state[node_id] = {"error": error_message}
+                else:
+                    # 否则，更新状态
+                    exec_context.state[node_id] = result
                 
-                # 执行并更新状态
-                output = await runtime.execute(node.data, exec_context)
-                exec_context.state[node_id] = output
-
-            except Exception as e:
-                # 统一的错误处理
-                error_message = f"Error executing node {node_id} ({runtime_name}): {e}"
-                print(error_message)
-                # 将错误信息存入状态，以便前端显示
-                exec_context.state[node_id] = {"error": error_message}
-                # 可以在这里决定是中断执行还是继续
-                break 
-
+                # 标记节点已完成，以便排序器可以找到下一批就绪节点
+                sorter.done(node_id)
+        
         print("Graph execution finished.")
         return exec_context.state
+
+    async def _execute_node(self, node, context: ExecutionContext) -> Dict[str, Any]:
+        """
+        一个辅助方法，用于执行单个节点。
+        现在支持单个runtime或一个runtime管道。
+        """
+        node_id = node.id
+        runtime_spec = node.data.get("runtime")
+        
+        if not runtime_spec:
+            print(f"Warning: Node {node_id} has no runtime. Skipping.")
+            return {"skipped": True}
+
+        # 将单个 runtime 字符串包装成列表，以统一处理
+        if isinstance(runtime_spec, str):
+            runtime_names = [runtime_spec]
+        else:
+            runtime_names = runtime_spec
+
+        # 这是管道的初始输入，就是节点自身的data
+        pipeline_input = node.data
+        final_output = {}
+
+        print(f"Executing node: {node_id} with runtime pipeline: {runtime_names}")
+        
+        for i, runtime_name in enumerate(runtime_names):
+            print(f"  - Step {i+1}/{len(runtime_names)}: Running runtime '{runtime_name}'")
+            try:
+                runtime = self.registry.get_runtime(runtime_name)
+                
+                # 关键：将上一步的输出作为当前运行时的输入
+                # 同时，将原始节点数据和上下文也传入，以便运行时能访问它们
+                # 我们创建一个新的字典，以防运行时意外修改原始数据
+                current_step_input = {**pipeline_input, "node_data": node.data}
+                
+                output = await runtime.execute(current_step_input, context)
+                
+                # 将当前步骤的输出作为下一步骤的输入
+                pipeline_input = output
+                final_output = output
+
+            except Exception as e:
+                # 如果管道中任何一步失败，整个节点都失败
+                error_message = f"Failed at step {i+1} ('{runtime_name}'): {e}"
+                print(f"  - Error in pipeline: {error_message}")
+                # 返回一个标准的错误结构
+                return {"error": error_message, "failed_step": i, "runtime": runtime_name}
+
+        # 整个管道成功完成后，返回最后一个运行时的输出
+        return final_output
 ```
 
-### backend/runtimes/__init__.py
+### runtimes/__init__.py
+```
+
+```
+
+### runtimes/base_runtimes.py
 ```
 # backend/runtimes/base_runtimes.py
 from backend.core.runtime import RuntimeInterface, ExecutionContext
+from backend.core.templating import render_template
 from typing import Dict, Any
 import jinja2
 import asyncio
@@ -732,221 +412,45 @@ import asyncio
 template_env = jinja2.Environment(enable_async=True)
 
 class InputRuntime(RuntimeInterface):
-    """处理输入节点的运行时"""
+    """处理输入节点的运行时。现在它会忽略任何上游管道输入，只返回自己的配置值。"""
     async def execute(self, node_data: Dict[str, Any], context: ExecutionContext) -> Dict[str, Any]:
-        # 输入节点直接将其 'value' 作为输出
+        # 优先从 node_data['node_data'] (原始配置) 中获取
+        original_node_data = node_data.get("node_data", {})
+        if "value" in original_node_data:
+            return {"output": original_node_data["value"]}
+        
+        # 如果原始配置中没有，再从当前输入中获取（兼容旧的单元测试）
         return {"output": node_data.get("value", "")}
 
 class TemplateRuntime(RuntimeInterface):
-    """一个通用的模板渲染运行时，可用于输出或任何需要格式化文本的地方"""
+    """通用的模板渲染运行时。它会查找 'template' 字段。"""
     async def execute(self, node_data: Dict[str, Any], context: ExecutionContext) -> Dict[str, Any]:
-        template_str = node_data.get("template", "")
-        try:
-            template = template_env.from_string(template_str)
-            # 注意这里，我们把整个 state 传给 Jinja2
-            rendered_string = await template.render_async(context.state)
-            return {"output": rendered_string}
-        except Exception as e:
-            # 在未来，这里应该有一个更健壮的错误处理机制
-            raise IOError(f"Template rendering failed: {e}")
+        # 优先从上一步的输出中获取模板，如果找不到，再从节点原始配置中获取
+        template_str = node_data.get("template", node_data.get("node_data", {}).get("template", ""))
+        
+        rendered_string = await render_template(template_str, context)
+        return {"output": rendered_string}
 
 class LLMRuntime(RuntimeInterface):
-    """处理LLM调用的运行时"""
+    """处理LLM调用的运行时。它会查找 'prompt' 字段。"""
     async def execute(self, node_data: Dict[str, Any], context: ExecutionContext) -> Dict[str, Any]:
-        prompt_template_str = node_data.get("prompt", "")
+        # 优先从上一步的输出中获取prompt（可能是上一步TemplateRuntime生成的）
+        # 如果没有，则从节点原始数据中获取prompt模板
+        prompt_template_str = node_data.get("prompt", node_data.get("node_data", {}).get("prompt", ""))
         
-        # 渲染模板，从上下文中注入依赖数据
-        try:
-            template = template_env.from_string(prompt_template_str)
-            rendered_prompt = await template.render_async(context.state)
-        except Exception as e:
-            raise IOError(f"Prompt template rendering failed: {e}")
+        # 如果上一步的输出是 "output" 字段，也接受它作为 prompt
+        if not prompt_template_str and "output" in node_data:
+            prompt_template_str = node_data["output"]
 
+        if not prompt_template_str:
+            raise ValueError("LLMRuntime requires a 'prompt' string from its input or configuration.")
+
+        rendered_prompt = await render_template(prompt_template_str, context)
+        
         # --- 模拟LLM调用 ---
         print(f"  - Calling LLM with Prompt: {rendered_prompt}")
-        await asyncio.sleep(1) # 模拟网络延迟
-        
-        # 真实的LLM调用逻辑会在这里
+        await asyncio.sleep(0.1) # 缩短测试时间
         llm_response = f"LLM_RESPONSE_FOR:[{rendered_prompt}]"
         
-        # LLM运行时可以有多个输出，例如，一个用于对话，一个用于总结
         return {"output": llm_response, "summary": f"Summary of '{rendered_prompt[:20]}...'"}
-```
-
-### backend/runtimes/base_runtimes.py
-```
-
-```
-
-### frontend/src/App.tsx
-```
-import { useState, useCallback } from 'react';
-import ReactFlow, {
-  Controls,
-  Background,
-  applyNodeChanges,
-  applyEdgeChanges,
-  addEdge,
-  // 使用 'type' 关键字显式导入类型
-  type Node,
-  type Edge,
-  type OnNodesChange,
-  type OnEdgesChange,
-  type OnConnect,
-} from 'reactflow';
-import 'reactflow/dist/style.css';
-import axios from 'axios';
-
-// MVP阶段的初始节点和边
-const initialNodes: Node[] = [
-  {
-    id: 'node_A',
-    type: 'input', // React Flow的默认输入节点
-    position: { x: 100, y: 50 },
-    data: { label: 'Input Node' },
-  },
-  {
-    id: 'node_B',
-    type: 'default', // 代表我们的LLMNode
-    position: { x: 100, y: 200 },
-    data: { label: 'LLM Node' },
-  },
-  {
-    id: 'node_C',
-    type: 'output', // React Flow的默认输出节点
-    position: { x: 100, y: 350 },
-    data: { label: 'Output Node' },
-  },
-];
-
-const initialEdges: Edge[] = [
-  { id: 'e1-2', source: 'node_A', target: 'node_B' },
-];
-
-// 我们后端API的地址
-const API_URL = 'http://localhost:8000/api/graphs/execute';
-
-function App() {
-  const [nodes, setNodes] = useState<Node[]>(initialNodes);
-  const [edges, setEdges] = useState<Edge[]>(initialEdges);
-  const [result, setResult] = useState<string>('');
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-
-  const onNodesChange: OnNodesChange = useCallback(
-    (changes) => setNodes((nds) => applyNodeChanges(changes, nds)),
-    []
-  );
-  const onEdgesChange: OnEdgesChange = useCallback(
-    (changes) => setEdges((eds) => applyEdgeChanges(changes, eds)),
-    []
-  );
-  const onConnect: OnConnect = useCallback(
-    (params) => setEdges((eds) => addEdge(params, eds)),
-    []
-  );
-
-  const handleRunGraph = async () => {
-    setIsLoading(true);
-    setResult('Executing graph...');
-
-    // 将React Flow的格式转换为我们后端定义的格式
-    const graphPayload = {
-      nodes: [
-        { id: 'node_A', type: 'InputNode', data: { value: 'Tell me a short story about a robot.' } },
-        { id: 'node_B', type: 'LLMNode', data: { prompt: '{{node_A.output}}' } },
-        { id: 'node_C', type: 'OutputNode', data: { template: 'Final result is: {{node_B.output}}' } },
-      ],
-      edges: edges.map(e => ({ source: e.source, target: e.target })),
-    };
-
-    try {
-      const response = await axios.post(API_URL, graphPayload);
-      // 我们只显示最后一个节点的输出作为最终结果
-      setResult(JSON.stringify(response.data['node_C'], null, 2));
-    } catch (error: any) {
-      setResult(`Error: ${error.response?.data?.detail || error.message}`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  return (
-    <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <header style={{ padding: '10px', background: '#333', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1>Hevno MVP</h1>
-        <button onClick={handleRunGraph} disabled={isLoading}>
-          {isLoading ? 'Running...' : 'Run Graph'}
-        </button>
-      </header>
-      <div style={{ flex: 1, display: 'flex' }}>
-        <div style={{ flex: '2' }}>
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-          >
-            <Controls />
-            <Background />
-          </ReactFlow>
-        </div>
-        <div style={{ flex: '1', padding: '10px', background: '#2a2a2a', overflowY: 'auto' }}>
-          <h2>Result</h2>
-          <pre style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word', color: 'lightgreen' }}>
-            {result}
-          </pre>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export default App;
-```
-
-### frontend/src/main.tsx
-```
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import './index.css'
-import App from './App.tsx'
-
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
-
-```
-
-### frontend/src/index.css
-```
-:root {
-    font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-    line-height: 1.5;
-    font-weight: 400;
-    color-scheme: light dark;
-    color: rgba(255, 255, 255, 0.87);
-    background-color: #242424;
-}
-
-body {
-    margin: 0;
-    display: flex;
-    place-items: center;
-    min-width: 320px;
-    min-height: 100vh;
-}
-
-#root {
-    width: 100%;
-    height: 100vh;
-}
-```
-
-### frontend/src/vite-env.d.ts
-```
-/// <reference types="vite/client" />
-
 ```

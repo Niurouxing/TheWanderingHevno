@@ -29,12 +29,13 @@ async def test_render_session_and_global_vars_access():
     assert result == "User: Alice, Turn: 3"
     
 @pytest.mark.asyncio
-async def test_render_missing_variable_gracefully():
-    """测试当变量不存在时，Jinja2默认返回空字符串，而不是抛出异常"""
+async def test_render_raises_error_on_missing_variable():
+    """测试当变量不存在时，render_template会因为StrictUndefined而抛出IOError。"""
     context = ExecutionContext(state={}, graph=None)
     template_str = "Value is {{ nodes.non_existent.output }}"
-    result = await render_template(template_str, context)
-    assert result == "Value is " # Jinja2 将未定义的变量渲染为空字符串
+
+    with pytest.raises(IOError, match="Template rendering failed: 'dict object' has no attribute 'non_existent'"):
+        await render_template(template_str, context)
 
 @pytest.mark.asyncio
 async def test_render_no_macros():

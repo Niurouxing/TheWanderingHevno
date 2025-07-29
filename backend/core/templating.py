@@ -7,7 +7,8 @@ from backend.core.runtime import ExecutionContext
 def get_jinja_env():
     return jinja2.Environment(
         enable_async=True,
-        undefined=jinja2.ChainableUndefined,
+        # 修复：使用 StrictUndefined，这样当变量不存在时会抛出 UndefinedError
+        undefined=jinja2.StrictUndefined 
     )
 
 async def render_template(template_str: str, context: ExecutionContext) -> str:

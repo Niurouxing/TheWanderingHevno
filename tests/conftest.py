@@ -32,21 +32,17 @@ def simple_linear_graph():
 
 @pytest.fixture
 def parallel_graph():
-    """
-    一个包含并行分支的图。
-    A -> B
-      -> C
-    B和C没有依赖关系，应该并行执行。
-    """
+    """提供一个并行的图，用于测试并发执行"""
     return Graph(
         nodes=[
-            GenericNode(id="A", type="input", data={"runtime": "system.input", "value": "Base Topic"}),
-            GenericNode(id="B", type="default", data={"runtime": "llm.default", "prompt": "Write a poem about {{ A.output }}"}),
-            GenericNode(id="C", type="default", data={"runtime": "llm.default", "prompt": "Write a joke about {{ A.output }}"}),
+            GenericNode(id='A', type='input', data={"runtime": "system.input", "value": "Base Topic"}),
+            # 修复模板变量路径
+            GenericNode(id='B', type='default', data={"runtime": "llm.default", "prompt": "Write a poem about {{ nodes.A.output }}"}),
+            GenericNode(id='C', type='default', data={"runtime": "llm.default", "prompt": "Write a joke about {{ nodes.A.output }}"}),
         ],
         edges=[
-            Edge(source="A", target="B"),
-            Edge(source="A", target="C"),
+            Edge(source='A', target='B'),
+            Edge(source='A', target='C'),
         ]
     )
 

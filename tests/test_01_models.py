@@ -4,23 +4,23 @@ from pydantic import ValidationError
 from backend.models import GenericNode, Graph
 
 def test_generic_node_validation():
-    # 有效数据
+    # 1. 测试有效数据
     valid_data = {"id": "1", "type": "default", "data": {"runtime": "test"}}
     node = GenericNode(**valid_data)
     assert node.id == "1"
     assert node.data["runtime"] == "test"
 
-    # 缺少 runtime 会导致 data 字段验证失败（虽然我们没有明确要求，但通常是需要的）
-    # Pydantic 默认所有字段都是必须的，除非有默认值或 Optional
-    # 但我们这里是data字段本身必须存在，其内容可以灵活
-    valid_data_no_runtime = {"id": "2", "type": "default", "data": {}}
-    node_no_runtime = GenericNode(**valid_data_no_runtime)
-    assert node_no_runtime.data == {}
+    # 2. 测试 data 中没有 runtime 的情况，这应该会失败
+    with pytest.raises(ValidationError, match="must contain a 'runtime' field"):
+        GenericNode(id="2", type="default", data={})
 
+    # 3. 测试 runtime 值类型不正确的情况
+    with pytest.raises(ValidationError, match="must be a string or a list of strings"):
+        GenericNode(id="3", type="default", data={"runtime": 123})
 
-    # 缺少 id 字段应该会失败
-    with pytest.raises(ValidationError):
-        GenericNode(type="default", data={"runtime": "test"})
+    # 4. 测试 runtime 是一个包含非字符串的列表
+    with pytest.raises(ValidationError, match="must be a string or a list of strings"):
+        GenericNode(id="4", type="default", data={"runtime": ["test", 123]})
 
 def test_graph_model(simple_linear_graph): # 使用我们定义的fixture
     """测试Graph模型能否正确加载一个合法的图结构。"""

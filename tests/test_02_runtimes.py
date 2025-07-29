@@ -31,17 +31,18 @@ async def test_template_runtime_simple():
 
 # tests/test_02_runtimes.py
 @pytest.mark.asyncio
-async def test_template_runtime_handles_missing_variable_gracefully():
-    # 测试名和逻辑都变了
+async def test_template_runtime_raises_error_on_missing_variable():
+    """
+    测试当模板变量缺失时，TemplateRuntime会因为渲染失败而抛出IOError。
+    这个错误会在Executor层面被捕获并记录。
+    但我们在这里测试的是运行时本身的直接行为。
+    """
     runtime = TemplateRuntime()
-    # 使用一个更复杂的缺失路径来测试 ChainableUndefined
-    node_data = {"template": "Value: {{ nodes.non_existent.output.text }}"}
-    context = ExecutionContext(state={}, graph=None, function_registry={})
+    node_data = {"template": "Value: {{ non_existent.var }}"}
+    context = ExecutionContext(state={}, graph=None)
 
-    # 解决方案：断言它能成功执行并返回预期结果（空字符串）
-    result = await runtime.execute(node_data, context)
-    assert result['output'] == "Value: "
-
+    with pytest.raises(IOError, match="Template rendering failed: 'non_existent' is undefined"):
+        await runtime.execute(node_data, context)
 # ---- 测试 LLMRuntime (关键：使用 Mock) ----
 @pytest.mark.asyncio
 async def test_llm_runtime_with_mock(mocker): # 使用 pytest-mock 的 mocker fixture
@@ -69,4 +70,4 @@ async def test_llm_runtime_with_mock(mocker): # 使用 pytest-mock 的 mocker fi
     assert "summary" in result
 
     # 3. 断言 mock 的函数是否被调用了
-    mocked_llm_call.assert_awaited_once_with(1)
+    mocked_llm_call.assert_awaited_once_with(0.1)

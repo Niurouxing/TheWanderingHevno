@@ -2,6 +2,7 @@
 import pytest
 import asyncio
 from unittest.mock import call, ANY
+from backend.models import Graph, GenericNode, Edge 
 from backend.core.executor import GraphExecutor
 from backend.core.registry import RuntimeRegistry
 
@@ -29,34 +30,31 @@ async def test_executor_linear_flow(simple_linear_graph, fresh_runtime_registry:
 @pytest.mark.asyncio
 async def test_executor_parallel_flow(parallel_graph, fresh_runtime_registry: RuntimeRegistry, mocker):
     """验证并行节点是否可以被并发执行"""
-    # Mock asyncio.sleep 来跟踪调用顺序
-    # 使用 side_effect 可以在 mock 被调用时执行一个函数
     call_order = []
-    async def mock_sleep(duration, node_id):
-        call_order.append(node_id)
-        await asyncio.sleep(0) # 实际不等待，但保持其异步特性
     
-    # 重新 mock LLMRuntime 的 execute 方法，以便我们传递节点ID
-    original_llm_execute = fresh_runtime_registry.get_runtime("llm.default").execute
-    async def mocked_llm_execute_with_id(node_data, context):
-        node_id = next(n.id for n in context.graph.nodes if n.data == node_data)
-        await mock_sleep(1, node_id)
-        return await original_llm_execute(node_data, context)
+    # 我们直接 mock _execute_node 方法，这样控制力最强
+    original_execute_node = GraphExecutor._execute_node
+    
+    async def mock_execute_node_tracked(self, node, context):
+        # 如果是需要等待的节点，记录其ID
+        if node.id in ['B', 'C']:
+            call_order.append(node.id)
+            await asyncio.sleep(0.1) # 模拟耗时
+        
+        # 调用原始的执行逻辑
+        return await original_execute_node(self, node, context)
 
-    mocker.patch("backend.runtimes.base_runtimes.LLMRuntime.execute", side_effect=mocked_llm_execute_with_id)
-    
+    mocker.patch("backend.core.executor.GraphExecutor._execute_node", side_effect=mock_execute_node_tracked, autospec=True)
+
     executor = GraphExecutor(registry=fresh_runtime_registry)
     final_state = await executor.execute(parallel_graph)
 
     # 断言结果
     assert "B" in final_state and "output" in final_state["B"]
     assert "C" in final_state and "output" in final_state["C"]
-
-    # 关键断言：B和C的执行顺序是不确定的，因为它们是并行的
-    # 所以我们检查它们是否都在A之后执行
-    assert len(call_order) == 2
-    assert "B" in call_order
-    assert "C" in call_order
+    
+    # 断言并行性：我们不关心B和C谁先谁后，只要它们都在A之后
+    assert call_order == ['B', 'C'] or call_order == ['C', 'B']
 
 # --- 测试分支合并 ---
 @pytest.mark.asyncio
@@ -102,3 +100,63 @@ async def test_executor_detects_cycle(cyclic_graph, fresh_runtime_registry: Runt
     # 解决方案：测试代码保持不变，但现在它依赖于 executor 中正确的异常处理
     with pytest.raises(ValueError, match="Graph has a cycle"):
         await executor.execute(cyclic_graph)
+
+@pytest.mark.asyncio
+async def test_node_with_runtime_pipeline(mocker, fresh_runtime_registry: RuntimeRegistry):
+    """测试单个节点内的运行时管道是否按顺序执行。"""
+    mocker.patch("backend.runtimes.base_runtimes.asyncio.sleep", return_value=None)
+    
+    # 这个节点先用template准备prompt，再用llm调用
+    graph = Graph(
+        nodes=[
+            GenericNode(id="A", type="input", data={"runtime": "system.input", "value": "a cheerful dog"}),
+            GenericNode(
+                id="B",
+                type="default",
+                data={
+                    "runtime": ["system.template", "llm.default"],
+                    "template": "Create a story about {{ nodes.A.output }}."
+                }
+            )
+        ],
+        # 关键修复：添加 B 依赖 A 的边
+        edges=[Edge(source="A", target="B")] 
+    )
+
+    executor = GraphExecutor(registry=fresh_runtime_registry)
+    final_state = await executor.execute(graph)
+    
+    assert "B" in final_state
+    assert "error" not in final_state["B"]
+    
+    # 检查最终输出是否是LLM运行时的输出
+    expected_prompt = "Create a story about a cheerful dog."
+    expected_llm_output = f"LLM_RESPONSE_FOR:[{expected_prompt}]"
+    assert final_state["B"]["output"] == expected_llm_output
+
+
+@pytest.mark.asyncio
+async def test_runtime_pipeline_failure(mocker, fresh_runtime_registry: RuntimeRegistry):
+    """测试管道中一步失败时，节点是否正确报告错误。"""
+    # 让TemplateRuntime渲染一个不存在的变量，使其失败
+    graph = Graph(
+        nodes=[
+            GenericNode(
+                id="C",
+                type="default",
+                data={
+                    "runtime": ["system.template", "llm.default"],
+                    "template": "This will fail: {{ non_existent.var }}"
+                }
+            )
+        ],
+        edges=[]
+    )
+    
+    executor = GraphExecutor(registry=fresh_runtime_registry)
+    final_state = await executor.execute(graph)
+
+    assert "C" in final_state
+    assert "error" in final_state["C"]
+    assert "Failed at step 1" in final_state["C"]["error"]
+    assert final_state["C"]["runtime"] == "system.template"
