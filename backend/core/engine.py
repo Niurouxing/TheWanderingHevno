@@ -89,38 +89,105 @@ class GraphRun:
 
 
 class ExecutionEngine:
-    """引擎现在执行的是 'step'，从一个快照到下一个快照。"""
     def __init__(self, registry: RuntimeRegistry, num_workers: int = 5):
         self.registry = registry
         self.num_workers = num_workers
 
     async def step(self, initial_snapshot, triggering_input: Dict[str, Any] = None):
-        from backend.core.types import ExecutionContext
+        """
+        公开的入口点：执行一个完整的步骤，从一个快照到下一个。
+        职责：创建顶层执行上下文，调用核心图执行逻辑。
+        """
         if triggering_input is None:
             triggering_input = {}
+        
+        # 1. 创建顶层上下文
         context = ExecutionContext.from_snapshot(initial_snapshot, {"trigger_input": triggering_input})
+        
+        # 2. 获取入口图
         main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
         if not main_graph_def:
             raise ValueError("'main' graph not found in the initial snapshot.")
-        run = GraphRun(context, main_graph_def)
-        task_queue = asyncio.Queue()
-        for node_id in run.get_nodes_in_state(NodeState.READY):
-            await task_queue.put(node_id)
-        workers = [
-            asyncio.create_task(self._worker(f"worker-{i}", run, task_queue))
-            for i in range(self.num_workers)
-        ]
-        await task_queue.join()
-        for w in workers:
-            w.cancel()
-        await asyncio.gather(*workers, return_exceptions=True)
-        final_node_states = run.get_final_node_states()
+
+        # 3. 调用可重入的图执行器
+        final_node_states = await self._execute_graph(main_graph_def, context)
+
+        # 4. 创建下一个快照
         next_snapshot = context.to_next_snapshot(
             final_node_states=final_node_states,
             triggering_input=triggering_input
         )
         print(f"Step complete. New snapshot {next_snapshot.id} created.")
         return next_snapshot
+
+    async def _execute_graph(
+        self, 
+        graph_def: GraphDefinition, 
+        context: ExecutionContext,
+        inherited_inputs: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        核心的、可重入的图执行逻辑。
+        它可以被 step() 调用，也可以被 map/call 运行时递归调用。
+
+        :param graph_def: 要执行的图的定义。
+        :param context: 共享的、可变的执行上下文。
+        :param inherited_inputs: 从父图（例如 map/call 节点）注入的虚拟节点结果。
+        :return: 此图执行完毕后所有节点的状态字典。
+        """
+        run = GraphRun(context, graph_def)
+
+        # 这是实现 "输入占位符" 的关键！
+        # 在图开始执行前，将继承的输入作为已成功的虚拟节点注入状态。
+        if inherited_inputs:
+            for node_id, result in inherited_inputs.items():
+                # 假设这些虚拟节点都是成功的
+                run.set_node_result(node_id, result)
+                # 注意：我们不需要在 GraphRun 的 node_states 中设置它们的状态，
+                # 因为它们不是真正的待执行节点。依赖它们
+                # 的节点在检查依赖状态时，只会检查 context.node_states 中是否有结果。
+                # 修正：为了让依赖检查更严谨，我们需要让下游节点认为占位符已经“成功”。
+                # 一个简单的策略是直接注入结果，并在依赖检查时只关心结果是否存在。
+                # 让我们检查一下 _process_subscribers 的逻辑...
+                # if run.get_node_state(dep_id) != NodeState.SUCCEEDED:
+                # 啊哈，它确实检查 SUCCEEDED 状态。所以我们需要一个更好的策略。
+
+                # --- 更好的策略 ---
+                # 我们不在 GraphRun 中伪造状态，而是在 context 中预填充结果。
+                # 依赖检查逻辑需要稍微调整，或者我们可以把占位符也加入到 node_map 和 node_states 中。
+                # 最干净的方式是：在创建 GraphRun 时，就告诉它哪些是输入占位符。
+                # 但为了不改动太多，让我们采用一个简单策略：
+                # 在 `_process_subscribers` 中，如果一个依赖 `dep_id` 不在 `run.node_states` 中，
+                # 但在 `run.context.node_states` 中有结果，就认为它是成功的。
+                # 当前的实现不完全支持，所以我们先用注入结果的方式，后续 MapRuntime 再看如何处理。
+                # 最简单的，还是在 GraphRun 中处理：
+                if node_id not in run.node_map: # 确保它是个真正的占位符
+                    run.set_node_state(node_id, NodeState.SUCCEEDED)
+                    run.set_node_result(node_id, result)
+
+        
+        task_queue = asyncio.Queue()
+        for node_id in run.get_nodes_in_state(NodeState.READY):
+            await task_queue.put(node_id)
+        
+        workers = [
+            asyncio.create_task(self._worker(f"worker-{i}", run, task_queue))
+            for i in range(self.num_workers)
+        ]
+        
+        await task_queue.join()
+        for w in workers:
+            w.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
+        
+        # 返回此子图执行的最终节点状态
+        # 这里需要注意：我们应该只返回此 graph_def 中定义的节点的结果
+        final_states = {
+            node_id: run.get_node_result(node_id)
+            for node_id in run.node_map
+            if run.get_node_result(node_id) is not None
+        }
+        return final_states
 
     async def _worker(self, name: str, run: 'GraphRun', queue: asyncio.Queue):
         """工作者协程，从队列中获取并处理节点。"""
@@ -229,7 +296,8 @@ class ExecutionEngine:
                     step_input=step_input,
                     pipeline_state=pipeline_state,
                     context=context,
-                    node=node  # 传递当前节点本身也很有用
+                    node=node,
+                    engine=self
                 )
                     
                 # 检查输出是否为 None 或非字典，以增加健壮性
