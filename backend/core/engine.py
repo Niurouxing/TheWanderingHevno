@@ -1,11 +1,14 @@
 import asyncio
 from enum import Enum, auto
-from typing import Dict, Any, Set, List
+from typing import Dict, Any, Set, List, Optional
 from collections import defaultdict
 
-from backend.models import Graph, GenericNode
+# 导入新的模型和依赖解析器
+from backend.models import GraphCollection, GraphDefinition, GenericNode
+from backend.core.dependency_parser import build_dependency_graph
 from backend.core.registry import RuntimeRegistry
-from backend.core.runtime import ExecutionContext
+# 从新的中心位置导入类型
+from backend.core.types import ExecutionContext
 
 
 class NodeState(Enum):
@@ -18,65 +21,61 @@ class NodeState(Enum):
     SKIPPED = auto()
 
 class GraphRun:
-    """管理一次图执行的所有状态。"""
-    def __init__(self, graph: Graph):
-        self.graph = graph
-        self.node_map: Dict[str, GenericNode] = {n.id: n for n in graph.nodes}
+    """管理一次图执行的状态，现在支持任意 GraphDefinition。"""
+    def __init__(self, context: ExecutionContext, graph_def: GraphDefinition):
+        self.context = context
+        self.graph_def = graph_def
+        if not self.graph_def:
+            raise ValueError("GraphRun must be initialized with a valid GraphDefinition.")
+        self.node_map: Dict[str, GenericNode] = {n.id: n for n in self.graph_def.nodes}
         self.node_states: Dict[str, NodeState] = {}
-        self.node_results: Dict[str, Dict[str, Any]] = {}
-
-        self.dependencies: Dict[str, Set[str]] = defaultdict(set)
-        self.subscribers: Dict[str, Set[str]] = defaultdict(set)
-
-        self._build_dependency_graph()
+        self.dependencies: Dict[str, Set[str]] = build_dependency_graph(
+            [node.model_dump() for node in self.graph_def.nodes]
+        )
+        self.subscribers: Dict[str, Set[str]] = self._build_subscribers()
+        self._detect_cycles()
         self._initialize_node_states()
 
-    def _build_dependency_graph(self):
-        for edge in self.graph.edges:
-            self.dependencies[edge.target].add(edge.source)
-            self.subscribers[edge.source].add(edge.target)
+    def _build_subscribers(self) -> Dict[str, Set[str]]:
+        subscribers = defaultdict(set)
+        for node_id, deps in self.dependencies.items():
+            for dep_id in deps:
+                subscribers[dep_id].add(node_id)
+        return subscribers
 
-        # 改进后的环路检测
-        visiting = set()  # 存储当前递归路径上的节点
-        visited = set()   # 存储所有已访问过的节点
-
-        def detect_cycle_util(node_id, path):
-            visiting.add(node_id)
+    def _detect_cycles(self):
+        path = set()
+        visited = set()
+        def visit(node_id):
+            path.add(node_id)
             visited.add(node_id)
-            
-            for neighbour in self.dependencies.get(node_id, []):
-                if neighbour in visiting:
-                    # 发现了环路
-                    cycle_path = " -> ".join(path + [neighbour])
-                    raise ValueError(f"Cycle detected in graph: {cycle_path}")
+            for neighbour in self.dependencies.get(node_id, set()):
+                if neighbour in path:
+                    raise ValueError(f"Cycle detected involving node {neighbour}")
                 if neighbour not in visited:
-                    detect_cycle_util(neighbour, path + [node_id])
-            
-            visiting.remove(node_id)
-
+                    visit(neighbour)
+            path.remove(node_id)
         for node_id in self.node_map:
             if node_id not in visited:
-                try:
-                    detect_cycle_util(node_id, [node_id])
-                except ValueError as e:
-                    # 重新抛出，让上层能捕获到更清晰的错误
-                    raise e
+                visit(node_id)
 
     def _initialize_node_states(self):
         for node_id in self.node_map:
-            if not self.dependencies[node_id]:
+            if not self.dependencies.get(node_id):
                 self.node_states[node_id] = NodeState.READY
             else:
                 self.node_states[node_id] = NodeState.PENDING
-    
+
     def get_node(self, node_id: str) -> GenericNode:
         return self.node_map[node_id]
     def get_node_state(self, node_id: str) -> NodeState:
         return self.node_states.get(node_id)
     def set_node_state(self, node_id: str, state: NodeState):
         self.node_states[node_id] = state
+    def get_node_result(self, node_id: str) -> Dict[str, Any]:
+        return self.context.node_states.get(node_id)
     def set_node_result(self, node_id: str, result: Dict[str, Any]):
-        self.node_results[node_id] = result
+        self.context.node_states[node_id] = result
     def get_nodes_in_state(self, state: NodeState) -> List[str]:
         return [nid for nid, s in self.node_states.items() if s == state]
     def get_dependencies(self, node_id: str) -> Set[str]:
@@ -84,19 +83,26 @@ class GraphRun:
     def get_subscribers(self, node_id: str) -> Set[str]:
         return self.subscribers[node_id]
     def get_execution_context(self) -> ExecutionContext:
-        return ExecutionContext(state=self.node_results, graph=self.graph)
-    def get_final_state(self) -> Dict[str, Any]:
-        return self.node_results
+        return self.context
+    def get_final_node_states(self) -> Dict[str, Any]:
+        return self.context.node_states
 
 
 class ExecutionEngine:
-    """这是新的、基于事件和工作者的执行引擎。"""
+    """引擎现在执行的是 'step'，从一个快照到下一个快照。"""
     def __init__(self, registry: RuntimeRegistry, num_workers: int = 5):
         self.registry = registry
         self.num_workers = num_workers
 
-    async def execute(self, graph: Graph) -> Dict[str, Any]:
-        run = self._initialize_run(graph)
+    async def step(self, initial_snapshot, triggering_input: Dict[str, Any] = None):
+        from backend.core.types import ExecutionContext
+        if triggering_input is None:
+            triggering_input = {}
+        context = ExecutionContext.from_snapshot(initial_snapshot, {"trigger_input": triggering_input})
+        main_graph_def = context.initial_snapshot.graph_collection.graphs.get("main")
+        if not main_graph_def:
+            raise ValueError("'main' graph not found in the initial snapshot.")
+        run = GraphRun(context, main_graph_def)
         task_queue = asyncio.Queue()
         for node_id in run.get_nodes_in_state(NodeState.READY):
             await task_queue.put(node_id)
@@ -108,14 +114,13 @@ class ExecutionEngine:
         for w in workers:
             w.cancel()
         await asyncio.gather(*workers, return_exceptions=True)
-        print("Graph execution finished.")
-        return run.get_final_state()
-
-    def _initialize_run(self, graph: Graph) -> 'GraphRun':
-        try:
-            return GraphRun(graph)
-        except ValueError as e:
-            raise ValueError(f"Graph has a cycle: {e}") from e
+        final_node_states = run.get_final_node_states()
+        next_snapshot = context.to_next_snapshot(
+            final_node_states=final_node_states,
+            triggering_input=triggering_input
+        )
+        print(f"Step complete. New snapshot {next_snapshot.id} created.")
+        return next_snapshot
 
     async def _worker(self, name: str, run: 'GraphRun', queue: asyncio.Queue):
         """工作者协程，从队列中获取并处理节点。"""

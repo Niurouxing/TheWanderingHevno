@@ -1,7 +1,7 @@
 # backend/core/templating.py (最终正确版)
 import jinja2
 from typing import Any
-from backend.core.runtime import ExecutionContext
+from backend.core.types import ExecutionContext
 
 # create_template_environment 不再需要，可以删除或简化为一个只创建env的函数
 def get_jinja_env():
@@ -21,12 +21,12 @@ async def render_template(template_str: str, context: ExecutionContext) -> str:
     env = get_jinja_env()
     template = env.from_string(template_str)
     
-    # 动态构建完整的渲染上下文
+    # 动态构建完整的渲染上下文，适配新版 ExecutionContext
     render_context = {
-        "nodes": context.state,
-        "vars": context.global_vars,
+        "nodes": context.node_states,
+        "world": context.world_state,
+        "run": context.run_vars,
         "session": context.session_info,
-        # 未来可以在这里注入函数
     }
 
     try:

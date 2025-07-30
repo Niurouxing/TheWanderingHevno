@@ -1,6 +1,8 @@
 # backend/runtimes/base_runtimes.py
 import asyncio 
-from backend.core.runtime import RuntimeInterface, ExecutionContext
+from backend.core.runtime import RuntimeInterface
+# 从新的中心位置导入类型
+from backend.core.types import ExecutionContext
 from backend.core.templating import render_template
 from typing import Dict, Any
 
@@ -46,21 +48,15 @@ class LLMRuntime(RuntimeInterface):
         return {"llm_output": llm_response, "summary": f"Summary of '{rendered_prompt[:20]}...'"}
 
 # 演示一个只关心 context 的新 Runtime
-class SetGlobalVariableRuntime(RuntimeInterface):
-    """我只关心 step_input 和 context，用于将输入设置为全局变量。"""
+class SetWorldVariableRuntime(RuntimeInterface):
+    """设置一个持久化的世界变量。"""
     async def execute(self, **kwargs) -> Dict[str, Any]:
         step_input = kwargs.get("step_input", {})
         context = kwargs.get("context")
-        
         variable_name = step_input.get("variable_name")
         value_to_set = step_input.get("value")
-
         if not variable_name:
-            raise ValueError("SetGlobalVariableRuntime requires 'variable_name'.")
-
-        if context:
-            context.global_vars[variable_name] = value_to_set
-            
-        # 这个 Runtime 不产生新的直接输出，所以返回空字典
-        # 它的作用完全是副作用（修改 context）
+            raise ValueError("SetWorldVariableRuntime requires 'variable_name'.")
+        # 修改的是可变的 world_state
+        context.world_state[variable_name] = value_to_set
         return {}
