@@ -10,7 +10,7 @@ from backend.models import GraphCollection
 from backend.core.engine import ExecutionEngine
 from backend.core.registry import runtime_registry
 from backend.runtimes.base_runtimes import InputRuntime, TemplateRuntime, LLMRuntime, SetWorldVariableRuntime
-from backend.core.sandbox_models import Sandbox, SnapshotStore, StateSnapshot
+from backend.core.state_models import Sandbox, SnapshotStore, StateSnapshot
 from uuid import UUID
 from typing import Dict, Any, List
 

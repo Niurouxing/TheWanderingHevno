@@ -1,10 +1,15 @@
+# backend/core/state_models.py
+
 from __future__ import annotations
 from uuid import uuid4, UUID
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime, timezone
 
+# 导入这个文件所依赖的最基础模型
 from backend.models import GraphCollection
+
+# --- 所有相关的模型都住在这里 ---
 
 class StateSnapshot(BaseModel):
     """
@@ -19,7 +24,6 @@ class StateSnapshot(BaseModel):
     triggering_input: Dict[str, Any] = Field(default_factory=dict)
     run_output: Optional[Dict[str, Any]] = None
 
-    # --- 使用新的 model_config 语法 ---
     model_config = ConfigDict(frozen=True)
 
 class Sandbox(BaseModel):
@@ -32,7 +36,8 @@ class Sandbox(BaseModel):
     head_snapshot_id: Optional[UUID] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    def get_latest_snapshot(self, store: 'SnapshotStore') -> Optional[StateSnapshot]:
+    def get_latest_snapshot(self, store: SnapshotStore) -> Optional[StateSnapshot]:
+        # 现在 SnapshotStore 和 StateSnapshot 都在同一个作用域，类型提示完美工作
         if self.head_snapshot_id:
             return store.get(self.head_snapshot_id)
         return None
@@ -54,5 +59,9 @@ class SnapshotStore:
         return [s for s in self._store.values() if s.sandbox_id == sandbox_id]
 
     def clear(self):
-        """清空存储，用于测试隔离。"""
         self._store = {}
+
+# --- 在文件末尾重建所有模型 ---
+# 这确保了 Pydantic 能够正确处理所有内部引用和向前引用
+StateSnapshot.model_rebuild()
+Sandbox.model_rebuild()

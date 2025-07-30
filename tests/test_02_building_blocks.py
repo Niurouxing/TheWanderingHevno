@@ -7,7 +7,7 @@ from uuid import uuid4
 # ---------------------------------------------------------------------------
 from backend.core.templating import render_template
 from backend.core.types import ExecutionContext
-from backend.core.sandbox_models import StateSnapshot, Sandbox
+from backend.core.state_models import StateSnapshot, Sandbox
 from backend.models import GraphCollection
 from backend.runtimes.base_runtimes import (
     InputRuntime, TemplateRuntime, LLMRuntime, SetWorldVariableRuntime

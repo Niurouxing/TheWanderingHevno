@@ -6,29 +6,23 @@ from typing import Dict, Any, Callable
 from pydantic import BaseModel, Field 
 from datetime import datetime, timezone
 
+# --- 从新的、统一的位置导入状态模型 ---
+from backend.core.state_models import StateSnapshot
 from backend.models import GraphCollection
-# StateSnapshot 在这里被 ExecutionContext 引用，但定义在 sandbox_models.py
-# sandbox_models.py 又引用了 GraphCollection，形成了循环导入的风险。
-# 幸运的是，Python的模块导入机制和 Pydantic 的延迟解析通常能处理好，
-# 但为了更清晰，可以把 StateSnapshot 移动到 types.py 或一个更基础的文件中。
-# 不过目前问题不大，我们先解决重复字段。
-from backend.core.sandbox_models import StateSnapshot 
 
 class ExecutionContext(BaseModel):
     """
     定义一次图执行的完整上下文。
-    这是一个纯数据容器，不包含执行逻辑。
     """
     initial_snapshot: StateSnapshot
     node_states: Dict[str, Any] = Field(default_factory=dict)
     world_state: Dict[str, Any] = Field(default_factory=dict)
     run_vars: Dict[str, Any] = Field(default_factory=dict)
     
-    # 合并后的定义
     function_registry: Dict[str, Callable] = Field(default_factory=dict)
     session_info: Dict[str, Any] = Field(default_factory=lambda: {
         "start_time": datetime.now(timezone.utc),
-        "conversation_turn": 0,  # 保留更完整的定义
+        "conversation_turn": 0,
     })
 
     model_config = {
@@ -77,3 +71,5 @@ class ExecutionContext(BaseModel):
             run_output=final_node_states,
             triggering_input=triggering_input
         )
+        
+ExecutionContext.model_rebuild()

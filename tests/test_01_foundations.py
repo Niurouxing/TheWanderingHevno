@@ -7,7 +7,7 @@ from uuid import uuid4
 # 导入被测试的类
 # ---------------------------------------------------------------------------
 from backend.models import GraphCollection, GenericNode, GraphDefinition
-from backend.core.sandbox_models import StateSnapshot, Sandbox, SnapshotStore
+from backend.core.state_models import StateSnapshot, Sandbox, SnapshotStore
 from backend.core.dependency_parser import build_dependency_graph
 
 
@@ -61,7 +61,7 @@ class TestCoreModels:
 
 
 # ---------------------------------------------------------------------------
-# Section 2: Sandbox Models (`core/sandbox_models.py`)
+# Section 2: Sandbox Models 
 # ---------------------------------------------------------------------------
 
 class TestSandboxModels:

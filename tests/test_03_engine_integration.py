@@ -8,7 +8,7 @@ import json
 # 导入被测试的类和所需的 Fixtures
 # ---------------------------------------------------------------------------
 from backend.core.engine import ExecutionEngine
-from backend.core.sandbox_models import StateSnapshot
+from backend.core.state_models import StateSnapshot
 from backend.models import GraphCollection
 
 # 注意：这个文件中的测试函数会自动接收来自 conftest.py 的 fixtures，
