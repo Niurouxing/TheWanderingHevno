@@ -1,4 +1,5 @@
 # tests/conftest.py
+import json
 import pytest
 from fastapi.testclient import TestClient
 from typing import Generator
@@ -156,15 +157,17 @@ def graph_evolution_collection() -> GraphCollection:
     它会生成一个新的 GraphCollection 定义并将其存储在 world_state 中。
     """
     # 这是新图的定义，我们用 JSON 字符串来表示它，因为节点需要生成它。
-    new_graph_json_string = """
-    {
+    # 1. 定义新图为 Python 字典
+    new_graph_dict = {
       "main": {
         "nodes": [
           { "id": "new_node", "data": { "runtime": "system.input", "value": "This is the evolved graph!" } }
         ]
       }
     }
-    """
+    # 2. 使用 json.dumps 将其序列化为紧凑的 JSON 字符串
+    new_graph_json_string = json.dumps(new_graph_dict)
+    
     return GraphCollection.model_validate({
         "main": {
             "nodes": [
@@ -173,7 +176,8 @@ def graph_evolution_collection() -> GraphCollection:
                     "data": {
                         "runtime": "system.set_world_var",
                         "variable_name": "__graph_collection__",
-                        "value": new_graph_json_string.replace("\n", "").replace(" ", "")
+                        # 3. 使用序列化后的字符串
+                        "value": new_graph_json_string
                     }
                 }
             ]

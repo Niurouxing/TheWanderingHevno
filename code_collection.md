@@ -1,7 +1,7 @@
 ### models.py
 ```
 # backend/models.py
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, RootModel
 from typing import List, Dict, Any
 
 class GenericNode(BaseModel):
@@ -24,28 +24,22 @@ class GenericNode(BaseModel):
         return v
 
 class GraphDefinition(BaseModel):
-    # 移除了 'edges'
+
     nodes: List[GenericNode]
 
-class GraphCollection(BaseModel):
-    # 整个配置文件的顶层模型
-    # key 是 graph_id，value 是 GraphDefinition
-    graphs: Dict[str, GraphDefinition] = Field(..., alias='root')
-
-    @field_validator('graphs')
+class GraphCollection(RootModel[Dict[str, GraphDefinition]]):
+    """
+    整个配置文件的顶层模型。
+    使用 RootModel，模型本身就是一个 `Dict[str, GraphDefinition]`。
+    """
+    
+    @field_validator('root')
     @classmethod
     def check_main_graph_exists(cls, v: Dict[str, GraphDefinition]) -> Dict[str, GraphDefinition]:
+        """验证器现在作用于 'root' 字段，即模型本身。"""
         if "main" not in v:
             raise ValueError("A 'main' graph must be defined as the entry point.")
         return v
-        
-    @classmethod
-    def model_validate(cls, obj: Any, *args, **kwargs) -> 'GraphCollection':
-        # 允许我们直接用一个字典来验证，而不需要 'root' 键
-        # 例如 GraphCollection.model_validate({"main": ...})
-        if isinstance(obj, dict) and 'graphs' not in obj:
-            return super().model_validate({'root': obj}, *args, **kwargs)
-        return super().model_validate(obj, *args, **kwargs)
 ```
 
 ### README.md
@@ -235,8 +229,9 @@ class GraphCollection(BaseModel):
 ### main.py
 ```
 # backend/main.py
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import ValidationError
 
 # 1. 导入新的模型
 from backend.models import GraphCollection
@@ -282,8 +277,20 @@ execution_engine = ExecutionEngine(registry=runtime_registry)
 
 # 新增沙盒相关API
 @app.post("/api/sandboxes", response_model=Sandbox)
-async def create_sandbox(name: str, initial_graph: GraphCollection, initial_state: Dict[str, Any] = None):
+async def create_sandbox(
+    name: str,
+    # 3. 接收一个原始的 dict 作为请求体
+    initial_graph_data: Dict[str, Any] = Body(...),
+    initial_state: Dict[str, Any] = None
+):
     """创建一个新的沙盒，并生成其创世快照。"""
+    try:
+        # 4. 在函数内部手动进行验证
+        initial_graph = GraphCollection.model_validate(initial_graph_data)
+    except ValidationError as e:
+        # 5. 如果验证失败，手动抛出 HTTP 422 异常
+        raise HTTPException(status_code=422, detail=e.errors())
+
     sandbox = Sandbox(name=name)
     genesis_snapshot = StateSnapshot(
         sandbox_id=sandbox.id,
@@ -408,6 +415,7 @@ runtime_registry = RuntimeRegistry()
 # backend/core/types.py (修正版)
 
 from __future__ import annotations
+import json 
 from typing import Dict, Any, Callable
 from pydantic import BaseModel, Field 
 from datetime import datetime, timezone
@@ -463,8 +471,14 @@ class ExecutionContext(BaseModel):
         # 这是一个示例，你可以定义一个特殊的key来存放演化后的图
         if '__graph_collection__' in self.world_state:
             try:
-                # 尝试解析演化后的图
-                evolved_graphs = GraphCollection.model_validate(self.world_state['__graph_collection__'])
+                # 从 world_state 获取的值可能是 JSON 字符串，需要解析。
+                evolved_graph_value = self.world_state['__graph_collection__']
+                if isinstance(evolved_graph_value, str):
+                    evolved_graph_dict = json.loads(evolved_graph_value)
+                else:
+                    evolved_graph_dict = evolved_graph_value # It might already be a dict
+
+                evolved_graphs = GraphCollection.model_validate(evolved_graph_dict)
                 current_graphs = evolved_graphs
             except Exception as e:
                 print(f"Warning: Failed to parse evolved graph collection from world_state: {e}")
@@ -668,7 +682,7 @@ class ExecutionEngine:
         if triggering_input is None:
             triggering_input = {}
         context = ExecutionContext.from_snapshot(initial_snapshot, {"trigger_input": triggering_input})
-        main_graph_def = context.initial_snapshot.graph_collection.graphs.get("main")
+        main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
         if not main_graph_def:
             raise ValueError("'main' graph not found in the initial snapshot.")
         run = GraphRun(context, main_graph_def)

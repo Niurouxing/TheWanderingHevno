@@ -47,9 +47,9 @@ class TestCoreModels:
         # 1. 有效数据
         valid_data = {"main": {"nodes": [{"id": "a", "data": {"runtime": "test"}}]}}
         collection = GraphCollection.model_validate(valid_data)
-        assert "main" in collection.graphs
-        assert isinstance(collection.graphs["main"], GraphDefinition)
-        assert len(collection.graphs["main"].nodes) == 1
+        assert "main" in collection.root
+        assert isinstance(collection.root["main"], GraphDefinition)
+        assert len(collection.root["main"].nodes) == 1
 
         # 2. 缺少 "main" 图应该失败
         with pytest.raises(ValidationError, match="A 'main' graph must be defined"):

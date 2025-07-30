@@ -1,6 +1,7 @@
 # backend/core/types.py (修正版)
 
 from __future__ import annotations
+import json 
 from typing import Dict, Any, Callable
 from pydantic import BaseModel, Field 
 from datetime import datetime, timezone
@@ -56,8 +57,14 @@ class ExecutionContext(BaseModel):
         # 这是一个示例，你可以定义一个特殊的key来存放演化后的图
         if '__graph_collection__' in self.world_state:
             try:
-                # 尝试解析演化后的图
-                evolved_graphs = GraphCollection.model_validate(self.world_state['__graph_collection__'])
+                # 从 world_state 获取的值可能是 JSON 字符串，需要解析。
+                evolved_graph_value = self.world_state['__graph_collection__']
+                if isinstance(evolved_graph_value, str):
+                    evolved_graph_dict = json.loads(evolved_graph_value)
+                else:
+                    evolved_graph_dict = evolved_graph_value # It might already be a dict
+
+                evolved_graphs = GraphCollection.model_validate(evolved_graph_dict)
                 current_graphs = evolved_graphs
             except Exception as e:
                 print(f"Warning: Failed to parse evolved graph collection from world_state: {e}")

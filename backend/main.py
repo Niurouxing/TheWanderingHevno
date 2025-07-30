@@ -1,6 +1,7 @@
 # backend/main.py
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import ValidationError
 
 # 1. 导入新的模型
 from backend.models import GraphCollection
@@ -46,8 +47,20 @@ execution_engine = ExecutionEngine(registry=runtime_registry)
 
 # 新增沙盒相关API
 @app.post("/api/sandboxes", response_model=Sandbox)
-async def create_sandbox(name: str, initial_graph: GraphCollection, initial_state: Dict[str, Any] = None):
+async def create_sandbox(
+    name: str,
+    # 3. 接收一个原始的 dict 作为请求体
+    initial_graph_data: Dict[str, Any] = Body(...),
+    initial_state: Dict[str, Any] = None
+):
     """创建一个新的沙盒，并生成其创世快照。"""
+    try:
+        # 4. 在函数内部手动进行验证
+        initial_graph = GraphCollection.model_validate(initial_graph_data)
+    except ValidationError as e:
+        # 5. 如果验证失败，手动抛出 HTTP 422 异常
+        raise HTTPException(status_code=422, detail=e.errors())
+
     sandbox = Sandbox(name=name)
     genesis_snapshot = StateSnapshot(
         sandbox_id=sandbox.id,

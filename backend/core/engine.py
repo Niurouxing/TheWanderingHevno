@@ -99,7 +99,7 @@ class ExecutionEngine:
         if triggering_input is None:
             triggering_input = {}
         context = ExecutionContext.from_snapshot(initial_snapshot, {"trigger_input": triggering_input})
-        main_graph_def = context.initial_snapshot.graph_collection.graphs.get("main")
+        main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
         if not main_graph_def:
             raise ValueError("'main' graph not found in the initial snapshot.")
         run = GraphRun(context, main_graph_def)

@@ -129,8 +129,8 @@ class TestEngineStateManagement:
         # 验证新快照的 graph_collection 自身已经被更新！
         # 这是因为 ExecutionContext.to_next_snapshot() 的逻辑
         new_graph_def = snapshot_after_evolution.graph_collection
-        assert len(new_graph_def.graphs["main"].nodes) == 1
-        assert new_graph_def.graphs["main"].nodes[0].id == "new_node"
+        assert len(new_graph_def.root["main"].nodes) == 1
+        assert new_graph_def.root["main"].nodes[0].id == "new_node"
         
         # --- Step 2: 使用演化后的图执行 ---
         # 引擎现在应该使用 snapshot_after_evolution 中存储的新图来执行
