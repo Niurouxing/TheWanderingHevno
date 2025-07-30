@@ -1,10 +1,8 @@
 # backend/main.py
-from fastapi import FastAPI, HTTPException, Body, Request 
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError, BaseModel
 from typing import Dict, Any, List, Optional
-from fastapi.exceptions import RequestValidationError # <--- 2. 导入 RequestValidationError
-from fastapi.exception_handlers import request_validation_exception_handler # <--- 3. 导入处理器
 
 
 # 1. 导入新的模型
@@ -57,39 +55,34 @@ execution_engine = ExecutionEngine(registry=runtime_registry)
 
 @app.post("/api/sandboxes", response_model=Sandbox)
 async def create_sandbox(
-    # 'fastapi_request' 是一个临时的变通方法，更优雅的方法见下文
-    fastapi_request: Request, # 接收原始的 FastAPI Request 对象
-    name: str,
-    request: CreateSandboxRequest
+    request: CreateSandboxRequest,
+    name: str  # name 作为查询参数
 ):
-    """创建一个新的沙盒，并生成其创世快照。"""
+    """
+    创建一个新的沙盒，并生成其创世快照。
+    此版本移除了对 FastAPI 内部 Request 对象的依赖，以实现更纯净的代码。
+    """
     try:
-        # Pydantic v2.6+ 引入了 `model_validate` 的严格模式，
-        # 我们可以利用它来强制重新验证。
-        # 即使 request 对象已经存在，我们再次验证它以确保捕获所有错误。
-        # 这一步其实是触发 StateSnapshot 内部验证的关键。
-        # 如果 StateSnapshot 构造失败，我们捕获异常。
-        
+        # 业务逻辑核心保持不变
         sandbox = Sandbox(name=name)
+        
+        # 关键的验证依然在这里发生。
+        # 当 GraphCollection 验证失败时（例如缺少 'main'），
+        # StateSnapshot 的构造会抛出 Pydantic 的 ValidationError。
         genesis_snapshot = StateSnapshot(
             sandbox_id=sandbox.id,
             graph_collection=request.graph_collection,
             world_state=request.initial_state or {}
         )
-        
-        # 为了更明确地触发验证，我们甚至可以这样做：
-        # GraphCollection.model_validate(request.graph_collection.root)
 
     except ValidationError as e:
-        # --- 5. 关键修复 ---
-        # 我们捕获了在函数体内发生的 ValidationError。
-        # 现在，我们不想自己构建 HTTPException，而是想模拟 FastAPI 
-        # 在参数绑定阶段本应做的事情。
-        # 我们将这个 ValidationError 包装成 RequestValidationError，
-        # 然后调用 FastAPI 的标准处理器来生成响应。
-        # 这可以保证响应格式与框架自动生成的完全一致，且不会有序列化问题。
-        return await request_validation_exception_handler(
-            fastapi_request, RequestValidationError(e.errors())
+        # 捕获 Pydantic 验证错误，并将其转换为一个标准的 HTTP 异常。
+        # 这避免了与 FastAPI 内部 API 的耦合。
+        # 我们返回一个 400 错误，因为请求体的内容在业务上是无效的。
+        # 我们将 Pydantic 的错误信息直接放入 detail 中，以方便调试。
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid graph definition provided. Details: {e}"
         )
 
     # 如果代码能执行到这里，说明 StateSnapshot 创建成功
@@ -97,7 +90,6 @@ async def create_sandbox(
     sandbox.head_snapshot_id = genesis_snapshot.id
     sandbox_store[sandbox.id] = sandbox
     return sandbox
-
 
 @app.post("/api/sandboxes/{sandbox_id}/step", response_model=StateSnapshot)
 async def execute_sandbox_step(sandbox_id: UUID, user_input: Dict[str, Any]):

@@ -1,4 +1,5 @@
-# tests/test_04_api_e2e.py
+# tests/test_04_api_e2e.py (完整文件，包含修改)
+
 import pytest
 from fastapi.testclient import TestClient
 from uuid import UUID
@@ -8,11 +9,10 @@ from backend.models import GraphCollection
 class TestApiSandboxLifecycle:
     def test_full_lifecycle(self, test_client: TestClient, linear_collection: GraphCollection):
         # --- 1. 创建沙盒 ---
-        # Body 现在需要是一个键，所以我们将它放入 json 参数中
+        # 这个测试不需要修改，它的调用方式已经是正确的。
         response = test_client.post(
             "/api/sandboxes",
             params={"name": "E2E Test Sandbox"},
-            # 将图数据作为 json 体
             json={
                 "graph_collection": linear_collection.model_dump(),
                 "initial_state": None 
@@ -76,12 +76,19 @@ class TestApiErrorHandling:
                 "graph_collection": invalid_graph_no_main
             }
         )
+
         assert response.status_code == 422
-        # --- 修复：验证 Pydantic 标准错误格式 ---
-        error_detail = response.json()["detail"][0]
-        assert error_detail["type"] == "value_error"
-        assert "A 'main' graph must be defined" in error_detail["msg"]
-        # --- 修复结束 ---
+        error_data = response.json()
+        assert "detail" in error_data
+        assert isinstance(error_data["detail"], list) and len(error_data["detail"]) > 0
+
+        first_error = error_data["detail"][0]
+        assert first_error["type"] == "value_error"
+        assert "A 'main' graph must be defined" in first_error["msg"]
+
+        assert first_error["loc"] == ["body", "graph_collection"]
+
+        assert "graph_collection" in first_error["loc"]
 
     def test_operations_on_nonexistent_sandbox(self, test_client: TestClient):
         nonexistent_id = UUID("00000000-0000-0000-0000-000000000000")
