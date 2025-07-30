@@ -1,7 +1,7 @@
 from __future__ import annotations
 from uuid import uuid4, UUID
 from typing import Dict, Any, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime, timezone
 
 from backend.models import GraphCollection
@@ -19,8 +19,8 @@ class StateSnapshot(BaseModel):
     triggering_input: Dict[str, Any] = Field(default_factory=dict)
     run_output: Optional[Dict[str, Any]] = None
 
-    class Config:
-        frozen = True
+    # --- 使用新的 model_config 语法 ---
+    model_config = ConfigDict(frozen=True)
 
 class Sandbox(BaseModel):
     """

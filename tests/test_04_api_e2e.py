@@ -13,7 +13,10 @@ class TestApiSandboxLifecycle:
             "/api/sandboxes",
             params={"name": "E2E Test Sandbox"},
             # 将图数据作为 json 体
-            json=linear_collection.model_dump()
+            json={
+                "graph_collection": linear_collection.model_dump(),
+                "initial_state": None 
+            }
         )
         assert response.status_code == 200
         sandbox_data = response.json()
@@ -69,7 +72,9 @@ class TestApiErrorHandling:
         response = test_client.post(
             "/api/sandboxes",
             params={"name": "Invalid Sandbox"},
-            json=invalid_graph_no_main
+            json={
+                "graph_collection": invalid_graph_no_main
+            }
         )
         assert response.status_code == 422
         # --- 修复：验证 Pydantic 标准错误格式 ---
@@ -99,7 +104,9 @@ class TestApiErrorHandling:
         response = test_client.post(
             "/api/sandboxes",
             params={"name": "Revert Test"},
-            json=linear_collection.model_dump()
+            json={
+                "graph_collection": linear_collection.model_dump()
+            }
         )
         assert response.status_code == 200
         sandbox_id = response.json()["id"]
