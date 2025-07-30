@@ -98,7 +98,7 @@ class TestSandboxModels:
         
         # 即使是可变类型，也不能在内部修改后改变哈希值（Pydantic 保护）
         snapshot.world_state["a_key"] = "a_value"
-        with pytest.raises(TypeError, match="unhashable type: 'dict'"):
+        with pytest.raises(TypeError, match="unhashable type: 'GraphCollection'"):
              # 尝试将包含可变类型的对象放入集合中会失败，证明其被认为是可变的。
              # 这是 Pydantic v2 `frozen=True` 的行为。
              {snapshot}

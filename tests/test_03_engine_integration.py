@@ -1,4 +1,6 @@
 # tests/test_03_engine_integration.py
+# --- 新增的修复导入 ---
+from uuid import uuid4
 import pytest
 import json
 

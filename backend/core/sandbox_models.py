@@ -52,3 +52,7 @@ class SnapshotStore:
 
     def find_by_sandbox(self, sandbox_id: UUID) -> List[StateSnapshot]:
         return [s for s in self._store.values() if s.sandbox_id == sandbox_id]
+
+    def clear(self):
+        """清空存储，用于测试隔离。"""
+        self._store = {}
