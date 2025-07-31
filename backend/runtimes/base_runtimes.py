@@ -3,7 +3,6 @@ import asyncio
 from backend.core.runtime import RuntimeInterface
 # 从新的中心位置导入类型
 from backend.core.types import ExecutionContext
-from backend.core.templating import render_template
 from typing import Dict, Any
 
 class InputRuntime(RuntimeInterface):
@@ -12,36 +11,21 @@ class InputRuntime(RuntimeInterface):
         step_input = kwargs.get("step_input", {})
         return {"output": step_input.get("value", "")}
 
-class TemplateRuntime(RuntimeInterface):
-    """我需要 step_input (或 pipeline_state) 来获取模板，需要 context 来渲染。"""
-    async def execute(self, **kwargs) -> Dict[str, Any]:
-        step_input = kwargs.get("step_input", {})
-        pipeline_state = kwargs.get("pipeline_state", {})
-        context = kwargs.get("context")
-
-        template_str = step_input.get("template", pipeline_state.get("template", ""))
-        if not template_str:
-            raise ValueError("TemplateRuntime requires a 'template' string.")
-            
-        rendered_string = await render_template(template_str, context)
-        return {"output": rendered_string}
 
 class LLMRuntime(RuntimeInterface):
-    """我需要 step_input/pipeline_state 来获取 prompt，需要 context 来渲染。"""
+    """我需要一个已经完全渲染好的 prompt。"""
     async def execute(self, **kwargs) -> Dict[str, Any]:
         step_input = kwargs.get("step_input", {})
         pipeline_state = kwargs.get("pipeline_state", {})
-        context = kwargs.get("context")
-        
-        prompt_template_str = step_input.get("prompt", step_input.get("output", 
-                                pipeline_state.get("prompt", "")))
-        if not prompt_template_str:
+        # 宏预处理器已经处理了模板，我们直接获取最终的 prompt
+        rendered_prompt = step_input.get("prompt", step_input.get("output", 
+                                 pipeline_state.get("prompt", "")))
+
+        if not rendered_prompt:
             raise ValueError("LLMRuntime requires a 'prompt' or 'output' string.")
 
-        rendered_prompt = await render_template(prompt_template_str, context)
-        
-        # 恢复异步行为，模拟 LLM API 调用延迟
-        await asyncio.sleep(0.1)  # <--- 恢复这一行
+        # 模拟 LLM API 调用延迟
+        await asyncio.sleep(0.1)
         
         llm_response = f"LLM_RESPONSE_FOR:[{rendered_prompt}]"
         

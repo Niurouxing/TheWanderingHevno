@@ -9,7 +9,8 @@ from typing import Dict, Any, List, Optional
 from backend.models import GraphCollection
 from backend.core.engine import ExecutionEngine
 from backend.core.registry import runtime_registry
-from backend.runtimes.base_runtimes import InputRuntime, TemplateRuntime, LLMRuntime, SetWorldVariableRuntime
+from backend.runtimes.base_runtimes import InputRuntime, LLMRuntime, SetWorldVariableRuntime
+from backend.runtimes.control_runtimes import ExecuteRuntime 
 from backend.core.state_models import Sandbox, SnapshotStore, StateSnapshot
 from uuid import UUID
 from typing import Dict, Any, List
@@ -27,9 +28,9 @@ def setup_application():
     )
     
     runtime_registry.register("system.input", InputRuntime)
-    runtime_registry.register("system.template", TemplateRuntime)
     runtime_registry.register("llm.default", LLMRuntime)
     runtime_registry.register("system.set_world_var", SetWorldVariableRuntime)
+    runtime_registry.register("system.execute", ExecuteRuntime)
     # --- 新运行时注册的地方 ---
     # runtime_registry.register("system.map", MapRuntime)
     # runtime_registry.register("system.call", CallRuntime)

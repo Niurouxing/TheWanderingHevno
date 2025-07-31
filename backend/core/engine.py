@@ -7,7 +7,7 @@ from collections import defaultdict
 from backend.models import GraphCollection, GraphDefinition, GenericNode
 from backend.core.dependency_parser import build_dependency_graph
 from backend.core.registry import RuntimeRegistry
-# 从新的中心位置导入类型
+from backend.core.evaluation import build_evaluation_context, evaluate_data
 from backend.core.types import ExecutionContext
 
 
@@ -263,62 +263,65 @@ class ExecutionEngine:
     async def _execute_node(self, node: GenericNode, context: ExecutionContext) -> Dict[str, Any]:
         """
         执行单个节点内的 Runtime 流水线。
-        
-        该方法实现了一个混合数据流模型：
-        1. 转换流 (step_input): 每个 Runtime 的输出成为下一个的输入，实现覆盖式流水线。
-        2. 增强流 (pipeline_state): 所有 Runtime 的输出被持续合并，为后续步骤提供完整的历史上下文。
+        现在包含一个自动化的宏预处理步骤。
         """
         node_id = node.id
-        runtime_spec = node.data.get("runtime")
+
+        # +++ 1. 宏预处理步骤 +++
+        # 在执行任何操作之前，构建宏的执行上下文
+        print(f"[{node_id}] Pre-processing node data with macro evaluation...")
+        eval_context = build_evaluation_context(context)
+        try:
+            # 递归地求值节点 data 中的所有 {{...}} 宏
+            processed_data = await evaluate_data(node.data, eval_context)
+            print(f"[{node_id}] Pre-processing complete.")
+        except Exception as e:
+            # import traceback; traceback.print_exc()
+            error_message = f"Macro evaluation failed for node {node_id}: {e}"
+            print(f"  - Error in pre-processing: {error_message}")
+            return {"error": error_message, "failed_step": "pre-processing"}
+
+        # 从处理过的数据中获取运行时配置
+        runtime_spec = processed_data.get("runtime")
         
         if not runtime_spec:
-            # 如果没有指定 runtime，可以认为该节点是一个纯粹的数据持有者
-            return node.data
+            # 如果没有指定 runtime，返回整个处理过的数据负载
+            return processed_data
 
         runtime_names = [runtime_spec] if isinstance(runtime_spec, str) else runtime_spec
 
-        # 1. 初始化两个数据流的起点
-        #    - `pipeline_state` 用于累积和增强数据
-        #    - `step_input` 用于在步骤间传递和转换数据
-        pipeline_state = node.data.copy()
-        step_input = node.data.copy()
+        # 2. 初始化流水线状态，使用【处理后】的数据
+        pipeline_state = processed_data.copy()
+        step_input = processed_data.copy()
 
         print(f"Executing node: {node_id} with runtime pipeline: {runtime_names}")
         
         for i, runtime_name in enumerate(runtime_names):
             print(f"  - Step {i+1}/{len(runtime_names)}: Running runtime '{runtime_name}'")
             try:
-                # 从注册表获取一个新的 Runtime 实例
                 runtime: RuntimeInterface = self.registry.get_runtime(runtime_name)
                 
-                # 调用 execute，传入两个数据流和全局上下文
                 output = await runtime.execute(
                     step_input=step_input,
                     pipeline_state=pipeline_state,
                     context=context,
-                    node=node,
+                    node=node, # 仍然传递原始节点以供参考
                     engine=self
                 )
                     
-                # 检查输出是否为 None 或非字典，以增加健壮性
                 if not isinstance(output, dict):
                     error_message = f"Runtime '{runtime_name}' did not return a dictionary. Returned: {type(output).__name__}"
                     print(f"  - Error in pipeline: {error_message}")
                     return {"error": error_message, "failed_step": i, "runtime": runtime_name}
 
-                # 2. 更新两个数据流
-                #    - `step_input` 被完全覆盖，用于下一步
                 step_input = output
-                #    - `pipeline_state` 被合并更新，用于累积
                 pipeline_state.update(output)
 
             except Exception as e:
-                # 如果管道中任何一步失败，捕获异常并返回标准错误结构
-                # import traceback; traceback.print_exc() # for debugging
+                # import traceback; traceback.print_exc()
                 error_message = f"Failed at step {i+1} ('{runtime_name}'): {e}"
                 print(f"  - Error in pipeline: {error_message}")
                 return {"error": error_message, "failed_step": i, "runtime": runtime_name}
 
-        # 3. 整个节点流水线成功完成后，返回最终的、最完整的累积状态
         print(f"Node {node_id} pipeline finished successfully.")
         return pipeline_state

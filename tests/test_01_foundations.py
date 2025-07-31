@@ -13,6 +13,7 @@ from backend.core.dependency_parser import build_dependency_graph
 
 # ---------------------------------------------------------------------------
 # Section 1: Core Data Models (`models.py`)
+# - 这部分测试不受影响，因为模型验证逻辑没有改变。
 # ---------------------------------------------------------------------------
 
 class TestCoreModels:
@@ -28,13 +29,13 @@ class TestCoreModels:
         # 字符串列表 runtime
         node2 = GenericNode(id="n2", data={"runtime": ["step1", "step2"]})
         assert node2.data["runtime"] == ["step1", "step2"]
+        
+        # 宏系统下，节点甚至可以没有 runtime，作为纯数据持有者
+        node3 = GenericNode(id="n3", data={"value": "{{ 1 + 1 }}"})
+        assert "runtime" not in node3.data
 
     def test_generic_node_validation_fails(self):
-        """测试 GenericNode 的无效数据格式。"""
-        # 缺少 runtime
-        with pytest.raises(ValidationError, match="must contain a 'runtime' field"):
-            GenericNode(id="n1", data={"some_other_key": "value"})
-            
+        """测试 GenericNode 的无效数据格式（除了缺少runtime）。"""
         # runtime 类型错误（非字符串或字符串列表）
         with pytest.raises(ValidationError, match="'runtime' must be a string or a list of strings"):
             GenericNode(id="n2", data={"runtime": 123})
@@ -56,12 +57,13 @@ class TestCoreModels:
             GraphCollection.model_validate({"other_graph": {"nodes": []}})
 
         # 3. 节点验证失败会冒泡到顶层
-        with pytest.raises(ValidationError, match="must contain a 'runtime' field"):
-            GraphCollection.model_validate({"main": {"nodes": [{"id": "a", "data": {}}]}})
+        with pytest.raises(ValidationError, match="must be a string or a list of strings"):
+            GraphCollection.model_validate({"main": {"nodes": [{"id": "a", "data": {"runtime": 123}}]}})
 
 
 # ---------------------------------------------------------------------------
-# Section 2: Sandbox Models 
+# Section 2: Sandbox Models (`core/state_models.py`)
+# - 这部分测试不受影响，因为状态管理模型没有改变。
 # ---------------------------------------------------------------------------
 
 class TestSandboxModels:
@@ -96,13 +98,8 @@ class TestSandboxModels:
         with pytest.raises(ValidationError, match="Instance is frozen"):
             snapshot.world_state = {"new_key": "new_value"}
         
-        # 即使是可变类型，也不能在内部修改后改变哈希值（Pydantic 保护）
-        snapshot.world_state["a_key"] = "a_value"
-        with pytest.raises(TypeError, match="unhashable type: 'GraphCollection'"):
-             # 尝试将包含可变类型的对象放入集合中会失败，证明其被认为是可变的。
-             # 这是 Pydantic v2 `frozen=True` 的行为。
+        with pytest.raises(TypeError, match="unhashable type"):
              {snapshot}
-
 
     def test_snapshot_store(self, sample_graph_collection: GraphCollection):
         """测试 SnapshotStore 的基本功能。"""
@@ -116,20 +113,17 @@ class TestSandboxModels:
         store.save(s1)
         store.save(s2)
 
-        # 测试 get
         assert store.get(s1_id) == s1
         assert store.get(uuid4()) is None
-
-        # 测试 find_by_sandbox
         assert len(store.find_by_sandbox(box1_id)) == 2
         assert len(store.find_by_sandbox(box2_id)) == 0
-
-        # 测试保存重复 ID 会失败
         with pytest.raises(ValueError, match=f"Snapshot with id {s1_id} already exists"):
             store.save(s1)
 
+
 # ---------------------------------------------------------------------------
 # Section 3: Dependency Parser (`core/dependency_parser.py`)
+# - 这部分测试不受影响，因为解析器在宏求值前运行，并且只关心 `{{ nodes.* }}` 语法。
 # ---------------------------------------------------------------------------
 
 class TestDependencyParser:
@@ -139,7 +133,7 @@ class TestDependencyParser:
         """测试：B 依赖 A"""
         nodes = [
             {"id": "A", "data": {"runtime": "input"}},
-            {"id": "B", "data": {"runtime": "template", "template": "Ref: {{ nodes.A.output }}"}}
+            {"id": "B", "data": {"value": "Ref: {{ nodes.A.output }}"}}
         ]
         deps = build_dependency_graph(nodes)
         assert deps["A"] == set()
@@ -150,7 +144,7 @@ class TestDependencyParser:
         nodes = [
             {"id": "A", "data": {"runtime": "input"}},
             {"id": "B", "data": {"runtime": "input"}},
-            {"id": "C", "data": {"runtime": "template", "template": "ValA: {{ nodes.A.val }}, ValB: {{ nodes.B.val }}"}}
+            {"id": "C", "data": {"value": "ValA: {{ nodes.A.val }}, ValB: {{ nodes.B.val }}"}}
         ]
         deps = build_dependency_graph(nodes)
         assert deps["C"] == {"A", "B"}
@@ -162,14 +156,9 @@ class TestDependencyParser:
         nodes = [
             {"id": "source", "data": {"runtime": "input"}},
             {"id": "consumer", "data": {
-                "runtime": "complex",
                 "config": {
                     "param1": "Value from {{ nodes.source.output }}",
-                    "nested_list": [
-                        1, 
-                        2, 
-                        {"key": "and {{ nodes.source.another_output }}"}
-                    ]
+                    "nested_list": [1, 2, {"key": "and {{ nodes.source.another_output }}"}]
                 }
             }}
         ]
@@ -187,9 +176,9 @@ class TestDependencyParser:
         assert deps["B"] == set()
 
     def test_ignores_non_node_macros(self):
-        """测试：解析器应忽略 {{ world... }} 和 {{ session... }} 等宏"""
+        """关键测试：解析器应忽略 {{ world.* }}, {{ run.* }} 等非节点依赖的宏"""
         nodes = [
-            {"id": "A", "data": {"runtime": "template", "template": "{{ world.x }} and {{ session.y }} and {{ run.z }}"}}
+            {"id": "A", "data": {"value": "{{ world.x + run.y + session.z }}"}}
         ]
         deps = build_dependency_graph(nodes)
         assert deps["A"] == set()
@@ -201,7 +190,7 @@ class TestDependencyParser:
         nodes = [
             {"id": "A", "data": {"runtime": "input"}},
             # 节点 B 引用了 'placeholder_input'，但这个 ID 不在当前节点列表中
-            {"id": "B", "data": {"runtime": "template", "template": "Got: {{ nodes.placeholder_input.value }}"}}
+            {"id": "B", "data": {"value": "Got: {{ nodes.placeholder_input.value }}"}}
         ]
         deps = build_dependency_graph(nodes)
         

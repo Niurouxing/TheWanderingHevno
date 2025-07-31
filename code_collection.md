@@ -1,992 +1,1064 @@
-### models.py
+### conftest.py
 ```
-# backend/models.py
-from pydantic import BaseModel, Field, field_validator, RootModel
-from typing import List, Dict, Any
+# tests/conftest.py
+import json
+import pytest
+from fastapi.testclient import TestClient
+from typing import Generator
 
-class GenericNode(BaseModel):
-    id: str
-    data: Dict[str, Any] = Field(
-        ...,
-        description="节点的核心配置，必须包含 'runtime' 字段来指定执行器"
-    )
-
-    @field_validator('data')
-    @classmethod
-    def check_runtime_exists(cls, v: Dict[str, Any]) -> Dict[str, Any]:
-        # 这个验证器保持不变，依然很好用
-        if 'runtime' not in v:
-            raise ValueError("Node data must contain a 'runtime' field.")
-        runtime_value = v['runtime']
-        if not (isinstance(runtime_value, str) or 
-                (isinstance(runtime_value, list) and all(isinstance(item, str) for item in runtime_value))):
-            raise ValueError("'runtime' must be a string or a list of strings.")
-        return v
-
-class GraphDefinition(BaseModel):
-
-    nodes: List[GenericNode]
-
-class GraphCollection(RootModel[Dict[str, GraphDefinition]]):
-    """
-    整个配置文件的顶层模型。
-    使用 RootModel，模型本身就是一个 `Dict[str, GraphDefinition]`。
-    """
-    
-    @field_validator('root')
-    @classmethod
-    def check_main_graph_exists(cls, v: Dict[str, GraphDefinition]) -> Dict[str, GraphDefinition]:
-        """验证器现在作用于 'root' 字段，即模型本身。"""
-        if "main" not in v:
-            raise ValueError("A 'main' graph must be defined as the entry point.")
-        return v
-```
-
-### README.md
-```
-
-# Hevno Backend Engine
-
-欢迎来到 Hevno 项目的后端引擎！这是一个高度可扩展、由配置驱动的图执行引擎，旨在为复杂的、多步骤的LLM应用提供动力。
-
-## 核心设计哲学
-
-本项目的构建基于一个核心哲学：**“拒绝类型爆炸，拥抱配置组合”**。
-
-在许多工作流或节点编辑器系统中，功能的增加往往伴随着新节点类型（`If-Else Node`, `Loop Node`, `Sub-Flow Node` 等）的涌入。这种方式虽然初看直观，但长期来看会导致系统变得复杂、僵化，并增加用户的学习成本。
-
-我们采取了截然不同的方法：
-
-1.  **极简的节点结构**: 我们只有一个通用的节点模型 (`GenericNode`)。一个节点是“LLM调用”还是“代码执行”，不由其类型决定。
-
-2.  **行为由运行时配置决定**: 节点是一个“变色龙”，其具体行为完全由其数据负载中的 `runtime` 字段指定。这意味着我们可以通过增加新的`runtime`实现来无限扩展功能，而无需修改或增加基础节点结构。
-
-    *   **旧方式 (我们避免的)**:
-        ```json
-        {"type": "LLMNode", "prompt": "..."}
-        {"type": "CodeNode", "code": "..."}
-        ```
-
-    *   **Hevno 的方式 (我们采用的)**:
-        ```json
-        {"type": "default", "data": {"runtime": "llm.default", "prompt": "..."}}
-        {"type": "default", "data": {"runtime": "code.python", "code": "..."}}
-        ```
-
-3.  **元能力下沉为核心函数**: 像“修改流图”或“创建新节点”这样的系统级“元能力”，我们不将其实现为特殊的节点类型。相反，它们将被实现为可供任何运行时调用的内置核心函数。这使得系统的核心功能和用户自定义功能在结构上完全等价，极大地增强了统一性和灵活性。
-
-这种设计使得 Hevno 不仅仅是一个应用，更是一个构建AI原生工作流的**框架**。
-
-
-
-
-# Hevno Engine: JSON 格式与 Map 功能设计规范
-
-本文档定义了 Hevno 引擎的图（Graph）数据格式，并重点阐述了 `map` 和 `call` 这两个核心运行时的设计与实现约定。我们的核心设计哲学是**约定优于配置 (Convention over Configuration)**，旨在通过隐式约定和自动化推断，最大化框架的易用性和表达力。
-
-## 1. 核心数据结构：图集合（Graph Collection）
-
-系统中只有一个顶层概念：**可被命名的图（Graph）的集合**。一个完整的工作流定义就是一个包含一个或多个图的JSON对象。
-
--   整个配置文件是一个JSON对象，其`key`为图的唯一名称（`Graph ID`），`value`为图的定义。
--   **约定入口图的名称必须为 `"main"`**。引擎执行时将从此图开始。
--   **不再需要 `edges` 字段**。节点间的依赖关系由引擎通过解析宏引用自动推断。
-
-**示例结构:**
-
-```json
-{
-  "main": {
-    "nodes": [
-      // ... main graph's nodes ...
-    ]
-  },
-  "process_character_arc": {
-    "nodes": [
-      // ... nodes for a reusable character processing graph ...
-    ]
-  }
-}
-```
-
-## 2. 节点（Node）
-
-节点是图的基本执行单元。
-
-```json
-{
-  "id": "unique_node_id",
-  "data": {
-    "runtime": "runtime_name"_or_["runtime_A", "runtime_B"],
-    // ... other key-value pairs for runtime configuration ...
-  }
-}
-```
-
--   `id`: 在其所在的图（Graph）内必须唯一。
--   `data.runtime`: 指定该节点执行一个或一个流水线（pipeline）的运行时。
--   `data` 中的其他字段为运行时的配置参数。
-
-## 3. 宏与依赖推断
-
-引擎通过静态解析节点 `data` 中字符串值的宏 `{{ ... }}` 来自动构建依赖图。
-
--   **语法:** `{{ <expression> }}`
--   **核心对象:** `nodes`, `vars`, `session` 等。
--   **依赖推断规则:**
-    -   当宏的格式为 `{{ nodes.<node_id>.<...> }}` 时，引擎会自动建立从 `<node_id>` 到当前节点的执行依赖。
-    -   **重要限制**: 用于依赖推断的 `<node_id>` **目前必须是静态的字面量字符串**。动态的节点引用（如 `{{ nodes[vars.dynamic_id].output }}`）不用于构建初始依赖图，其依赖关系只能在运行时解析，可能导致执行时因依赖未就绪而失败。这将在未来版本中改进。
-
-## 4. 核心运行时
-
-### 4.1 `map` 运行时：Fan-out / Scatter-Gather
-
-`map` 运行时是实现并行迭代的核心。它将一个子图（subgraph）并发地应用到输入列表的每个元素上。
-
-#### **调用格式**
-
-```json
-{
-  "id": "map_characters",
-  "data": {
-    "runtime": "system.map",
-    // 1. 指定要迭代的列表
-    "list": "{{ nodes.data_provider.characters_list }}",
-    // 2. 指定要调用的图的名称
-    "graph": "process_character_arc",
-    // 3. (可选) 精细化地聚合输出
-    "collect": "{{ nodes.internal_summary_node.summary }}",
-    // 4. 定义如何将外部数据映射到子图的输入占位符
-    "using": {
-      "character_input": "{{ source.item }}",
-      "iteration_info": "{{ source.index }}",
-      "external_data": "{{ nodes.some_other_node.value }}"
-    }
-  }
-}
-```
-
-#### **核心概念与引擎行为**
-
-1.  **输入占位符 (Input Placeholder):**
-    -   在一个被调用的子图（如 `"process_character_arc"`）中，如果一个宏引用了一个**在该图内部不存在的节点ID**（如 `{{ nodes.character_input.name }}`），这个ID (`character_input`) 就被引擎自动识别为一个**输入占位符**。
-
-2.  **输入映射 (`using`):**
-    -   `using` 字段的作用是告诉 `map` 运行时如何**满足**子图的输入占位符。
-    -   `key` (e.g., `"character_input"`): 必须匹配子图中的输入占位符ID。
-    -   `value` (e.g., `"{{ source.item }}"`): 是一个表达式，其值将被注入。
-    -   **`source` 对象:** 这是一个特殊的、**只在 `using` 字段的宏表达式中有效**的保留对象，它代表了当前的迭代状态。它包含以下属性：
-        -   `source.item`: 当前正在迭代的列表元素。
-        -   `source.index`: 当前迭代的从0开始的索引。
-        -   `source.list`: 对整个原始迭代列表的引用。
-
-3.  **执行流程:**
-    a. `map` 运行时获取 `list` 中的列表。
-    b. 对于列表中的每一个 `item`，引擎在内存中创建一个子图的独立执行实例。
-    c. 根据 `using` 映射规则，在子图实例的初始状态中**创建虚拟的、已成功的占位符节点**。
-    d. 并发地执行所有这些独立的子图实例。
-    e. **ID 命名空间:** 为避免冲突，引擎在内部会自动为子图中的节点ID添加唯一前缀。子图内部的宏引用会由引擎自动解析到正确的命名空间。
-
-4.  **输出聚合:**
-    -   `map` 运行时会等待所有子图实例执行完毕，并根据 `collect` 字段决定聚合方式：
-        -   **如果 `collect` 字段未提供 (默认行为):**
-            -   `map` 节点的 `output` 将是一个**列表**，每个元素是对应子图执行的**完整最终状态**。
-        -   **如果 `collect` 字段已提供:**
-            -   `map` 节点的 `output` 将是一个根据 `collect` 表达式从每个子图提取的值所组成的**扁平列表**。
-            -   `collect` 表达式中的 `nodes` 对象指向其所在子图的内部节点。
-
-### 4.2 `call` 运行时：子图调用
-
-`call` 运行时用于实现非迭代式的、单一的子图调用，是代码复用的基础。
-
-#### **调用格式**
-
-```json
-{
-  "id": "process_main_character",
-  "data": {
-    "runtime": "system.call",
-    "graph": "process_character_arc",
-    "using": {
-      "character_data": "{{ nodes.main_character_provider.output }}"
-    }
-  }
-}
-```
-
-#### **核心概念与引擎行为**
-
--   **执行流程:**
-    -   行为与 `map` 类似，但只执行一次。
-    -   根据 `using` 映射，创建虚拟输入节点。
-    -   执行 `process_character_arc` 图。
--   **输出:**
-    -   `call` 节点的 `output` 就是被调用子图的**完整的最终状态字典**。下游节点可以通过 `{{ nodes.process_main_character.output.internal_summary_node.summary }}` 访问其内部结果。
-
----
-```
-
-### main.py
-```
-# backend/main.py
-from fastapi import FastAPI, HTTPException, Body
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import ValidationError, BaseModel
-from typing import Dict, Any, List, Optional
-
-
-# 1. 导入新的模型
+# ---------------------------------------------------------------------------
+# 从你的应用代码中导入核心类和函数
+# ---------------------------------------------------------------------------
+from backend.main import app, sandbox_store, snapshot_store
 from backend.models import GraphCollection
+from backend.core.registry import RuntimeRegistry
 from backend.core.engine import ExecutionEngine
-from backend.core.registry import runtime_registry
-from backend.runtimes.base_runtimes import InputRuntime, TemplateRuntime, LLMRuntime, SetWorldVariableRuntime
-from backend.core.state_models import Sandbox, SnapshotStore, StateSnapshot
-from uuid import UUID
-from typing import Dict, Any, List
+# --- 导入新的和更新后的运行时 ---
+from backend.runtimes.base_runtimes import (
+    InputRuntime, LLMRuntime, SetWorldVariableRuntime
+)
+from backend.runtimes.control_runtimes import ExecuteRuntime
 
-class CreateSandboxRequest(BaseModel):
-    graph_collection: GraphCollection
-    initial_state: Optional[Dict[str, Any]] = None
+# ---------------------------------------------------------------------------
+# Fixtures for Core Components (Engine, Registry, API Client)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def populated_registry() -> RuntimeRegistry:
+    """
+    提供一个预先填充了所有【新版】运行时的注册表实例。
+    - 移除了 TemplateRuntime
+    - 新增了 ExecuteRuntime
+    """
+    registry = RuntimeRegistry()
+    registry.register("system.input", InputRuntime)
+    registry.register("llm.default", LLMRuntime)
+    registry.register("system.set_world_var", SetWorldVariableRuntime)
+    registry.register("system.execute", ExecuteRuntime)
+    # 当添加 map/call 运行时后，在这里注册它们
+    # registry.register("system.map", MapRuntime)
+    # registry.register("system.call", CallRuntime)
+    print("\n--- Populated Registry Created (Session Scope) ---")
+    return registry
 
 
-def setup_application():
-    app = FastAPI(
-        title="Hevno Backend Engine",
-        description="The core execution engine for Hevno project, supporting implicit dependency graphs.",
-        version="0.2.0-implicit"
-    )
+@pytest.fixture(scope="function")
+def test_engine(populated_registry: RuntimeRegistry) -> ExecutionEngine:
+    """提供一个配置了标准运行时的 ExecutionEngine 实例。"""
+    return ExecutionEngine(registry=populated_registry)
+
+
+@pytest.fixture(scope="session")
+def test_client() -> Generator[TestClient, None, None]:
+    """提供一个 FastAPI TestClient 用于端到端 API 测试。"""
+    sandbox_store.clear()
+    snapshot_store.clear()
     
-    runtime_registry.register("system.input", InputRuntime)
-    runtime_registry.register("system.template", TemplateRuntime)
-    runtime_registry.register("llm.default", LLMRuntime)
-    runtime_registry.register("system.set_world_var", SetWorldVariableRuntime)
-    # --- 新运行时注册的地方 ---
-    # runtime_registry.register("system.map", MapRuntime)
-    # runtime_registry.register("system.call", CallRuntime)
+    with TestClient(app) as client:
+        print("\n--- TestClient Created (Session Scope) ---")
+        yield client
     
-    origins = ["http://localhost:5173"]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    return app
+    print("\n--- TestClient Teardown ---")
+    sandbox_store.clear()
+    snapshot_store.clear()
 
 
-app = setup_application()
-# 全局单例存储 (在生产中应替换为 Redis/DB)
-sandbox_store: Dict[UUID, Sandbox] = {}
-snapshot_store = SnapshotStore()
-execution_engine = ExecutionEngine(registry=runtime_registry)
+# ---------------------------------------------------------------------------
+# Fixtures for Graph Collections (Test Data) - 重写以适应宏系统
+# ---------------------------------------------------------------------------
 
+# --- 基本流程 ---
 
-
-@app.post("/api/sandboxes", response_model=Sandbox)
-async def create_sandbox(
-    request: CreateSandboxRequest,
-    name: str  # name 作为查询参数
-):
+@pytest.fixture
+def linear_collection() -> GraphCollection:
+    """一个简单的三节点线性图：A -> B -> C。
+    节点B不再需要 template 运行时，直接在 prompt 字段中使用宏。
     """
-    创建一个新的沙盒，并生成其创世快照。
-    此版本移除了对 FastAPI 内部 Request 对象的依赖，以实现更纯净的代码。
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {"id": "A", "data": {"runtime": "system.input", "value": "a story about a cat"}},
+                # B现在直接在prompt字段中使用f-string宏
+                {"id": "B", "data": {"runtime": "llm.default", "prompt": "{{ f'The story is: {nodes.A.output}' }}"}},
+                # C依赖B的输出
+                {"id": "C", "data": {"runtime": "llm.default", "prompt": "{{ nodes.B.llm_output }}"}}
+            ]
+        }
+    })
+
+
+@pytest.fixture
+def parallel_collection() -> GraphCollection:
+    """一个扇出再扇入的图 (A, B) -> C，使用 f-string 宏合并结果。"""
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {"id": "source_A", "data": {"runtime": "system.input", "value": "Value A"}},
+                {"id": "source_B", "data": {"runtime": "system.input", "value": "Value B"}},
+                {
+                    "id": "merger",
+                    "data": {
+                        # 这个节点甚至不需要运行时，宏在预处理阶段就完成了所有工作
+                        "merged_value": "{{ f'Merged: {nodes.source_A.output} and {nodes.source_B.output}' }}"
+                    }
+                }
+            ]
+        }
+    })
+
+
+@pytest.fixture
+def pipeline_collection() -> GraphCollection:
+    """一个包含节点内运行时管道的图。
+    现在宏系统是隐式的步骤0，所以我们测试一个显式的管道 `set_var | llm`。
     """
-    try:
-        # 业务逻辑核心保持不变
-        sandbox = Sandbox(name=name)
-        
-        # 关键的验证依然在这里发生。
-        # 当 GraphCollection 验证失败时（例如缺少 'main'），
-        # StateSnapshot 的构造会抛出 Pydantic 的 ValidationError。
-        genesis_snapshot = StateSnapshot(
-            sandbox_id=sandbox.id,
-            graph_collection=request.graph_collection,
-            world_state=request.initial_state or {}
-        )
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "A",
+                    "data": {
+                        "runtime": ["system.set_world_var", "llm.default"],
+                        # 这个宏会在预处理阶段被执行
+                        "character_name": "{{ 'Sir Reginald' }}",
+                        # set_world_var 的配置
+                        "variable_name": "main_character",
+                        "value": "{{ f'The brave knight, {self.character_name}' }}",
+                        # llm.default 的配置
+                        "prompt": "{{ f'Tell a story about {world.main_character}.' }}"
+                    }
+                }
+            ]
+        }
+    })
 
-    except ValidationError as e:
-        # 捕获 Pydantic 验证错误，并将其转换为一个标准的 HTTP 异常。
-        # 这避免了与 FastAPI 内部 API 的耦合。
-        # 我们返回一个 400 错误，因为请求体的内容在业务上是无效的。
-        # 我们将 Pydantic 的错误信息直接放入 detail 中，以方便调试。
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid graph definition provided. Details: {e}"
-        )
+# --- 状态管理与宏功能 ---
 
-    # 如果代码能执行到这里，说明 StateSnapshot 创建成功
-    snapshot_store.save(genesis_snapshot)
-    sandbox.head_snapshot_id = genesis_snapshot.id
-    sandbox_store[sandbox.id] = sandbox
-    return sandbox
+@pytest.fixture
+def world_vars_collection() -> GraphCollection:
+    """一个测试世界变量（world_state）设置和读取的图。"""
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {"id": "setter", "data": {
+                    "runtime": "system.set_world_var",
+                    "variable_name": "theme",
+                    "value": "cyberpunk"
+                }},
+                # reader 节点不再需要 template 运行时
+                {"id": "reader", "data": {
+                    "output": "{{ f'The theme is: {world.theme}' }}"
+                }}
+            ]
+        }
+    })
 
-@app.post("/api/sandboxes/{sandbox_id}/step", response_model=StateSnapshot)
-async def execute_sandbox_step(sandbox_id: UUID, user_input: Dict[str, Any]):
-    """在沙盒中执行一个步骤，并返回新的状态快照。"""
-    sandbox = sandbox_store.get(sandbox_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Sandbox not found.")
-    latest_snapshot = sandbox.get_latest_snapshot(snapshot_store)
-    if not latest_snapshot:
-        raise HTTPException(status_code=409, detail="Sandbox has no initial state.")
-    new_snapshot = await execution_engine.step(latest_snapshot, user_input)
-    snapshot_store.save(new_snapshot)
-    sandbox.head_snapshot_id = new_snapshot.id
-    return new_snapshot
+@pytest.fixture
+def macro_collection() -> GraphCollection:
+    """一个专门用于测试宏系统多种功能的图。"""
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                # 节点A：使用宏进行计算和修改 world state
+                {
+                    "id": "A_modify_world",
+                    "data": {
+                        "script": "{{ world.update({'initial_hp': 100, 'is_ready': True}) }}",
+                        "damage": "{{ 10 + random.randint(5, 15) }}"
+                    }
+                },
+                # 节点B：依赖A，读取 world state 和 A 的结果
+                {
+                    "id": "B_read_and_decide",
+                    "data": {
+                        "prompt": """{{
+'The player is ready. ' if world.is_ready else 'The player is not ready. ' +
+f'Initial HP was {world.initial_hp}. ' +
+f'Took {nodes.A_modify_world.damage} damage.'
+                        }}"""
+                    }
+                }
+            ]
+        }
+    })
 
-@app.get("/api/sandboxes/{sandbox_id}/history", response_model=List[StateSnapshot])
-async def get_sandbox_history(sandbox_id: UUID):
-    """获取一个沙盒的所有历史快照。"""
-    return snapshot_store.find_by_sandbox(sandbox_id)
+@pytest.fixture
+def execute_runtime_collection() -> GraphCollection:
+    """一个测试 system.execute 运行时的图，用于二次求值。"""
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                # 节点A: 产生一个包含可执行代码的字符串
+                {
+                    "id": "A_generate_code",
+                    "data": {"output": "{{ 'world.player_status = \"empowered\"' }}"}
+                },
+                # 节点B: 使用 system.execute 运行来自 A 的代码
+                {
+                    "id": "B_execute_code",
+                    "data": {
+                        "runtime": "system.execute",
+                        "code": "{{ nodes.A_generate_code.output }}"
+                    }
+                }
+            ]
+        }
+    })
 
-@app.put("/api/sandboxes/{sandbox_id}/revert")
-async def revert_sandbox_to_snapshot(sandbox_id: UUID, snapshot_id: UUID):
-    """将沙盒回滚到指定的历史快照。"""
-    sandbox = sandbox_store.get(sandbox_id)
-    target_snapshot = snapshot_store.get(snapshot_id)
-    if not sandbox or not target_snapshot or target_snapshot.sandbox_id != sandbox.id:
-        raise HTTPException(status_code=404, detail="Sandbox or Snapshot not found.")
-    sandbox.head_snapshot_id = snapshot_id
-    return {"message": f"Sandbox reverted to snapshot {snapshot_id}"}
-        
-@app.get("/")
-def read_root():
-    return {"message": "Hevno Backend is running on implicit-dependency architecture!"}
+# --- 错误与边界情况 ---
 
-```
+@pytest.fixture
+def cyclic_collection() -> GraphCollection:
+    """一个包含环路的图，用于测试环路检测。此 fixture 无需修改。"""
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {"id": "A", "data": {"prompt": "{{ nodes.C.output }}"}},
+                {"id": "B", "data": {"prompt": "{{ nodes.A.output }}"}},
+                {"id": "C", "data": {"prompt": "{{ nodes.B.output }}"}}
+            ]
+        }
+    })
 
-### core/templating.py
-```
-# backend/core/templating.py (最终正确版)
-import jinja2
-from typing import Any
-from backend.core.types import ExecutionContext
 
-# create_template_environment 不再需要，可以删除或简化为一个只创建env的函数
-def get_jinja_env():
-    return jinja2.Environment(
-        enable_async=True,
-        # 修复：使用 StrictUndefined，这样当变量不存在时会抛出 UndefinedError
-        undefined=jinja2.StrictUndefined 
-    )
+@pytest.fixture
+def failing_node_collection() -> GraphCollection:
+    """一个包含注定会失败的节点的图。失败原因从Jinja2错误改为Python NameError。"""
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {"id": "A_ok", "data": {"runtime": "system.input", "value": "start"}},
+                # 节点 B 会因为引用未定义的 Python 变量而失败
+                {"id": "B_fail", "data": {"output": "{{ non_existent_variable }}"}},
+                # 节点 C 依赖于失败的节点 B，应该被跳过
+                {"id": "C_skip", "data": {"output": "{{ nodes.B_fail.output }}"}},
+                # 节点 D 不依赖于失败的分支，应该成功执行
+                {"id": "D_independent", "data": {"runtime": "system.input", "value": "independent"}}
+            ]
+        }
+    })
 
-async def render_template(template_str: str, context: ExecutionContext) -> str:
-    """
-    一个辅助函数，使用最新的上下文来渲染模板。
-    """
-    if '{{' not in template_str:
-        return template_str
-        
-    env = get_jinja_env()
-    template = env.from_string(template_str)
-    
-    # 动态构建完整的渲染上下文，适配新版 ExecutionContext
-    render_context = {
-        "nodes": context.node_states,
-        "world": context.world_state,
-        "run": context.run_vars,
-        "session": context.session_info,
+
+@pytest.fixture
+def invalid_graph_no_main() -> dict:
+    """一个无效的图定义，缺少 'main' 入口点。此 fixture 无需修改。"""
+    return {
+      "not_main": {
+        "nodes": [
+          {"id": "a", "data": {"runtime": "test"}}
+        ]
+      }
     }
 
-    try:
-        return await template.render_async(render_context)
-    except Exception as e:
-        raise IOError(f"Template rendering failed: {e}")
+
+# --- 图演化 (保持不变，因为其逻辑与宏系统正交) ---
+
+@pytest.fixture
+def graph_evolution_collection() -> GraphCollection:
+    """
+    一个用于测试图演化的特殊图。
+    它会生成一个新的 GraphCollection 定义并将其存储在 world_state 中。
+    """
+    new_graph_dict = {
+      "main": {
+        "nodes": [
+          { "id": "new_node", "data": { "output": "This is the evolved graph!" } }
+        ]
+      }
+    }
+    new_graph_json_string = json.dumps(new_graph_dict)
+    
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "graph_generator",
+                    "data": {
+                        "runtime": "system.set_world_var",
+                        "variable_name": "__graph_collection__",
+                        "value": new_graph_json_string
+                    }
+                }
+            ]
+        }
+    })
 ```
 
-### core/registry.py
+### test_02_evaluation_unit.py
 ```
-# backend/core/registry.py
-from typing import Dict, Type
-from backend.core.runtime import RuntimeInterface
+# tests/test_02_evaluation_unit.py
+import pytest
+from uuid import uuid4
 
-class RuntimeRegistry:
-    def __init__(self):
-        # 只存储类，不存储实例
-        self._registry: Dict[str, Type[RuntimeInterface]] = {}
+# ---------------------------------------------------------------------------
+# 导入被测试的类和函数
+# ---------------------------------------------------------------------------
+from backend.core.evaluation import (
+    evaluate_expression, evaluate_data, build_evaluation_context
+)
+from backend.core.types import ExecutionContext
+from backend.core.state_models import StateSnapshot
+from backend.models import GraphCollection
+from backend.runtimes.base_runtimes import (
+    InputRuntime, LLMRuntime, SetWorldVariableRuntime
+)
+from backend.runtimes.control_runtimes import ExecuteRuntime
 
-    def register(self, name: str, runtime_class: Type[RuntimeInterface]):
-        if name in self._registry:
-            print(f"Warning: Overwriting runtime registration for '{name}'.")
-        self._registry[name] = runtime_class
-        print(f"Runtime class '{name}' registered.")
 
-    def get_runtime(self, name: str) -> RuntimeInterface:
-        runtime_class = self._registry.get(name)
-        if runtime_class is None:
-            raise ValueError(f"Runtime '{name}' not found.")
+# ---------------------------------------------------------------------------
+# Section 1: Core Fixture for Testing
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def mock_exec_context() -> ExecutionContext:
+    """
+    提供一个可复用的、模拟的 ExecutionContext。
+    这是本测试文件的核心 fixture，用于构建宏的求值环境。
+    """
+    graph_collection = GraphCollection.model_validate({"main": {"nodes": []}})
+    snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=graph_collection)
+    context = ExecutionContext.from_snapshot(snapshot)
+    
+    # 预填充一些数据以供测试
+    context.node_states = {"node_A": {"output": "Success"}}
+    context.world_state = {"user_name": "Alice", "hp": 100}
+    context.run_vars = {"trigger_input": {"message": "Do it!"}}
+    
+    return context
+
+@pytest.fixture
+def mock_eval_context(mock_exec_context: ExecutionContext) -> dict:
+    """提供一个扁平化的、用于宏执行的字典上下文。"""
+    return build_evaluation_context(mock_exec_context)
+
+
+# ---------------------------------------------------------------------------
+# Section 2: Macro Evaluation Core (`core/evaluation.py`)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestEvaluationCore:
+    """对宏求值核心 `evaluate_expression` 进行深度单元测试。"""
+
+    async def test_simple_expressions(self, mock_eval_context):
+        """测试简单的 Python 表达式求值。"""
+        assert await evaluate_expression("1 + 1", mock_eval_context) == 2
+        assert await evaluate_expression("'hello' + ' ' + 'world'", mock_eval_context) == "hello world"
+        assert await evaluate_expression("True and False", mock_eval_context) is False
+
+    async def test_context_access(self, mock_eval_context):
+        """测试宏能否正确访问所有上下文对象：nodes, world, run, session。"""
+        code = "f'{nodes.node_A.output}, {world.user_name}, {run.trigger_input.message}'"
+        result = await evaluate_expression(code, mock_eval_context)
+        assert result == "Success, Alice, Do it!"
+
+    async def test_side_effects_on_world_state(self, mock_eval_context):
+        """关键测试：验证宏可以修改传入的上下文（特别是 world_state）。"""
+        assert mock_eval_context["world"]["hp"] == 100
+        # 这个宏没有返回值，但有副作用
+        await evaluate_expression("world['hp'] -= 10", mock_eval_context)
+        assert mock_eval_context["world"]["hp"] == 90
+
+    async def test_multiline_script_with_return(self, mock_eval_context):
+        """测试多行脚本，并验证最后一行表达式作为返回值。"""
+        code = """
+x = 10
+y = 20
+if world.hp > 50:
+    x + y
+else:
+    x - y
+"""
+        mock_eval_context["world"]["hp"] = 80
+        assert await evaluate_expression(code, mock_eval_context) == 30
         
-        # 总是返回一个新的实例
-        return runtime_class()
+        mock_eval_context["world"]["hp"] = 40
+        assert await evaluate_expression(code, mock_eval_context) == -10
 
-# 全局单例保持不变
-runtime_registry = RuntimeRegistry()
+    async def test_pre_imported_modules(self, mock_eval_context):
+        """测试是否可以无需导入就直接使用预置模块。"""
+        # 测试 random
+        assert await evaluate_expression("random.randint(1, 1)", mock_eval_context) == 1
+        # 测试 math
+        assert await evaluate_expression("math.floor(3.9)", mock_eval_context) == 3
+        # 测试 json
+        json_str = await evaluate_expression("json.dumps({'a': 1})", mock_eval_context)
+        assert json_str == '{"a": 1}'
+
+    async def test_syntax_error_handling(self, mock_eval_context):
+        """测试 Python 语法错误会被捕获并引发 ValueError。"""
+        with pytest.raises(ValueError, match="Macro syntax error"):
+            await evaluate_expression("1 +", mock_eval_context)
+
+    async def test_runtime_error_handling(self, mock_eval_context):
+        """测试 Python 运行时错误（如 NameError）会直接抛出。"""
+        with pytest.raises(NameError):
+            await evaluate_expression("non_existent_variable", mock_eval_context)
+
+@pytest.mark.asyncio
+class TestRecursiveEvaluation:
+    """对递归求值函数 `evaluate_data` 进行测试。"""
+
+    async def test_evaluate_data_recursively(self, mock_eval_context):
+        """测试 `evaluate_data` 能否正确处理嵌套的字典和列表。"""
+        data_structure = {
+            "static_string": "I am static.",
+            "direct_macro": "{{ 1 + 2 }}",
+            "nested_list": [
+                10,
+                "{{ world.user_name }}",
+                {"deep_macro": "{{ nodes.node_A.output.lower() }}"}
+            ],
+            "nested_dict": {
+                "another_macro": "{{ 'nested ' * 2 }}"
+            }
+        }
+        
+        result = await evaluate_data(data_structure, mock_eval_context)
+        
+        expected = {
+            "static_string": "I am static.",
+            "direct_macro": 3,
+            "nested_list": [
+                10,
+                "Alice",
+                {"deep_macro": "success"}
+            ],
+            "nested_dict": {
+                "another_macro": "nested nested "
+            }
+        }
+        assert result == expected
+
+    async def test_evaluate_data_non_macro_string(self, mock_eval_context):
+        """测试不符合宏格式的字符串应该原样返回。"""
+        assert await evaluate_data("Just a string", mock_eval_context) == "Just a string"
+        assert await evaluate_data("{ not a macro }", mock_eval_context) == "{ not a macro }"
+
+
+# ---------------------------------------------------------------------------
+# Section 3: Runtimes Unit Tests (New Architecture)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestRuntimesWithMacros:
+    """对每个运行时进行独立的单元测试，假设宏预处理已完成。"""
+
+    async def test_input_runtime(self):
+        """InputRuntime 的行为不变。"""
+        runtime = InputRuntime()
+        result = await runtime.execute(step_input={"value": "Hello Input"})
+        assert result == {"output": "Hello Input"}
+
+    async def test_llm_runtime_simplified(self):
+        """测试 LLMRuntime，它现在接收的是【已渲染好】的 prompt。"""
+        runtime = LLMRuntime()
+        
+        # 宏预处理器已经完成了工作，LLMRuntime 接收到的就是最终字符串。
+        result = await runtime.execute(
+            step_input={"prompt": "A fully rendered prompt about Mars."},
+            pipeline_state={"prompt": "A fully rendered prompt about Mars."},
+            context=None # LLMRuntime 不再直接使用 context
+        )
+        
+        assert result["llm_output"] == "LLM_RESPONSE_FOR:[A fully rendered prompt about Mars.]"
+        assert "summary" in result
+
+    async def test_set_world_variable_runtime(self, mock_exec_context: ExecutionContext):
+        """测试 SetWorldVariableRuntime，它的输入值现在由宏预先计算。"""
+        runtime = SetWorldVariableRuntime()
+        
+        assert "character_name" not in mock_exec_context.world_state
+        
+        # 模拟引擎调用，step_input 已经是宏求值后的结果。
+        result = await runtime.execute(
+            step_input={"variable_name": "character_name", "value": "Hacker"},
+            context=mock_exec_context
+        )
+        
+        assert result == {}
+        assert mock_exec_context.world_state["character_name"] == "Hacker"
+
+    async def test_execute_runtime(self, mock_exec_context: ExecutionContext):
+        """关键测试：测试 ExecuteRuntime 进行二次求值。"""
+        runtime = ExecuteRuntime()
+        
+        # 初始 hp 是 100
+        assert mock_exec_context.world_state["hp"] == 100
+        
+        # step_input 包含一个需要被二次执行的字符串
+        code_str = "world['hp'] -= 25"
+        result = await runtime.execute(
+            step_input={"code": code_str},
+            context=mock_exec_context
+        )
+
+        # 验证副作用：上下文中的 world_state 已被修改
+        assert mock_exec_context.world_state["hp"] == 75
+        # 验证返回值：副作用宏的返回值为 None
+        assert result == {"output": None}
+
+        # 测试带返回值的二次求值
+        code_str_with_return = "f'New HP is {world.hp}'"
+        result_with_return = await runtime.execute(
+            step_input={"code": code_str_with_return},
+            context=mock_exec_context
+        )
+        assert result_with_return == {"output": "New HP is 75"}
 ```
 
-### core/__init__.py
+### test_01_foundations.py
+```
+# tests/test_01_foundations.py
+import pytest
+from pydantic import ValidationError
+from uuid import uuid4
+
+# ---------------------------------------------------------------------------
+# 导入被测试的类
+# ---------------------------------------------------------------------------
+from backend.models import GraphCollection, GenericNode, GraphDefinition
+from backend.core.state_models import StateSnapshot, Sandbox, SnapshotStore
+from backend.core.dependency_parser import build_dependency_graph
+
+
+# ---------------------------------------------------------------------------
+# Section 1: Core Data Models (`models.py`)
+# - 这部分测试不受影响，因为模型验证逻辑没有改变。
+# ---------------------------------------------------------------------------
+
+class TestCoreModels:
+    """测试核心数据模型：GenericNode, GraphDefinition, GraphCollection"""
+
+    def test_generic_node_validation_success(self):
+        """测试 GenericNode 的有效数据格式。"""
+        # 字符串 runtime
+        node1 = GenericNode(id="n1", data={"runtime": "test.runtime"})
+        assert node1.id == "n1"
+        assert node1.data["runtime"] == "test.runtime"
+        
+        # 字符串列表 runtime
+        node2 = GenericNode(id="n2", data={"runtime": ["step1", "step2"]})
+        assert node2.data["runtime"] == ["step1", "step2"]
+        
+        # 宏系统下，节点甚至可以没有 runtime，作为纯数据持有者
+        node3 = GenericNode(id="n3", data={"value": "{{ 1 + 1 }}"})
+        assert "runtime" not in node3.data
+
+    def test_generic_node_validation_fails(self):
+        """测试 GenericNode 的无效数据格式（除了缺少runtime）。"""
+        # runtime 类型错误（非字符串或字符串列表）
+        with pytest.raises(ValidationError, match="'runtime' must be a string or a list of strings"):
+            GenericNode(id="n2", data={"runtime": 123})
+            
+        with pytest.raises(ValidationError, match="'runtime' must be a string or a list of strings"):
+            GenericNode(id="n3", data={"runtime": ["step1", 2]})
+
+    def test_graph_collection_validation(self):
+        """测试 GraphCollection 模型的验证逻辑。"""
+        # 1. 有效数据
+        valid_data = {"main": {"nodes": [{"id": "a", "data": {"runtime": "test"}}]}}
+        collection = GraphCollection.model_validate(valid_data)
+        assert "main" in collection.root
+        assert isinstance(collection.root["main"], GraphDefinition)
+        assert len(collection.root["main"].nodes) == 1
+
+        # 2. 缺少 "main" 图应该失败
+        with pytest.raises(ValidationError, match="A 'main' graph must be defined"):
+            GraphCollection.model_validate({"other_graph": {"nodes": []}})
+
+        # 3. 节点验证失败会冒泡到顶层
+        with pytest.raises(ValidationError, match="must be a string or a list of strings"):
+            GraphCollection.model_validate({"main": {"nodes": [{"id": "a", "data": {"runtime": 123}}]}})
+
+
+# ---------------------------------------------------------------------------
+# Section 2: Sandbox Models (`core/state_models.py`)
+# - 这部分测试不受影响，因为状态管理模型没有改变。
+# ---------------------------------------------------------------------------
+
+class TestSandboxModels:
+    """测试沙盒相关的数据模型：StateSnapshot, Sandbox, SnapshotStore"""
+
+    @pytest.fixture
+    def sample_graph_collection(self) -> GraphCollection:
+        """提供一个简单的 GraphCollection 用于创建快照。"""
+        return GraphCollection.model_validate({
+            "main": {"nodes": [{"id": "a", "data": {"runtime": "test"}}]}
+        })
+
+    def test_state_snapshot_creation(self, sample_graph_collection: GraphCollection):
+        """测试 StateSnapshot 的创建和默认值。"""
+        sandbox_id = uuid4()
+        snapshot = StateSnapshot(
+            sandbox_id=sandbox_id,
+            graph_collection=sample_graph_collection
+        )
+        assert snapshot.sandbox_id == sandbox_id
+        assert snapshot.id is not None
+        assert snapshot.created_at is not None
+        assert snapshot.parent_snapshot_id is None
+        assert snapshot.world_state == {}
+
+    def test_state_snapshot_is_immutable(self, sample_graph_collection: GraphCollection):
+        """关键测试：验证 StateSnapshot 是不可变的。"""
+        snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=sample_graph_collection
+        )
+        with pytest.raises(ValidationError, match="Instance is frozen"):
+            snapshot.world_state = {"new_key": "new_value"}
+        
+        with pytest.raises(TypeError, match="unhashable type"):
+             {snapshot}
+
+    def test_snapshot_store(self, sample_graph_collection: GraphCollection):
+        """测试 SnapshotStore 的基本功能。"""
+        store = SnapshotStore()
+        s1_id, s2_id = uuid4(), uuid4()
+        box1_id, box2_id = uuid4(), uuid4()
+
+        s1 = StateSnapshot(id=s1_id, sandbox_id=box1_id, graph_collection=sample_graph_collection)
+        s2 = StateSnapshot(id=s2_id, sandbox_id=box1_id, graph_collection=sample_graph_collection)
+
+        store.save(s1)
+        store.save(s2)
+
+        assert store.get(s1_id) == s1
+        assert store.get(uuid4()) is None
+        assert len(store.find_by_sandbox(box1_id)) == 2
+        assert len(store.find_by_sandbox(box2_id)) == 0
+        with pytest.raises(ValueError, match=f"Snapshot with id {s1_id} already exists"):
+            store.save(s1)
+
+
+# ---------------------------------------------------------------------------
+# Section 3: Dependency Parser (`core/dependency_parser.py`)
+# - 这部分测试不受影响，因为解析器在宏求值前运行，并且只关心 `{{ nodes.* }}` 语法。
+# ---------------------------------------------------------------------------
+
+class TestDependencyParser:
+    """测试依赖解析器 build_dependency_graph 的各种情况。"""
+
+    def test_simple_dependency(self):
+        """测试：B 依赖 A"""
+        nodes = [
+            {"id": "A", "data": {"runtime": "input"}},
+            {"id": "B", "data": {"value": "Ref: {{ nodes.A.output }}"}}
+        ]
+        deps = build_dependency_graph(nodes)
+        assert deps["A"] == set()
+        assert deps["B"] == {"A"}
+
+    def test_multiple_dependencies(self):
+        """测试：C 依赖 A 和 B"""
+        nodes = [
+            {"id": "A", "data": {"runtime": "input"}},
+            {"id": "B", "data": {"runtime": "input"}},
+            {"id": "C", "data": {"value": "ValA: {{ nodes.A.val }}, ValB: {{ nodes.B.val }}"}}
+        ]
+        deps = build_dependency_graph(nodes)
+        assert deps["C"] == {"A", "B"}
+        assert deps["A"] == set()
+        assert deps["B"] == set()
+
+    def test_dependency_in_nested_structure(self):
+        """测试：依赖项在深层嵌套的字典和列表中"""
+        nodes = [
+            {"id": "source", "data": {"runtime": "input"}},
+            {"id": "consumer", "data": {
+                "config": {
+                    "param1": "Value from {{ nodes.source.output }}",
+                    "nested_list": [1, 2, {"key": "and {{ nodes.source.another_output }}"}]
+                }
+            }}
+        ]
+        deps = build_dependency_graph(nodes)
+        assert deps["consumer"] == {"source"}
+
+    def test_no_dependencies(self):
+        """测试：节点不依赖于任何其他节点"""
+        nodes = [
+            {"id": "A", "data": {"runtime": "input"}},
+            {"id": "B", "data": {"runtime": "input"}},
+        ]
+        deps = build_dependency_graph(nodes)
+        assert deps["A"] == set()
+        assert deps["B"] == set()
+
+    def test_ignores_non_node_macros(self):
+        """关键测试：解析器应忽略 {{ world.* }}, {{ run.* }} 等非节点依赖的宏"""
+        nodes = [
+            {"id": "A", "data": {"value": "{{ world.x + run.y + session.z }}"}}
+        ]
+        deps = build_dependency_graph(nodes)
+        assert deps["A"] == set()
+
+    def test_dependency_on_nonexistent_node_is_ignored(self):
+        """
+        关键测试：依赖于图中不存在的节点（即子图的输入占位符）不应被视为依赖。
+        """
+        nodes = [
+            {"id": "A", "data": {"runtime": "input"}},
+            # 节点 B 引用了 'placeholder_input'，但这个 ID 不在当前节点列表中
+            {"id": "B", "data": {"value": "Got: {{ nodes.placeholder_input.value }}"}}
+        ]
+        deps = build_dependency_graph(nodes)
+        
+        # 节点 B 的依赖集应该为空，因为它引用的节点不是当前图的一部分。
+        assert deps["A"] == set()
+        assert deps["B"] == set()
+```
+
+### __init__.py
 ```
 
 ```
 
-### core/types.py
+### test_04_api_e2e.py
 ```
-# backend/core/types.py (修正版)
+# tests/test_04_api_e2e.py
+import pytest
+from fastapi.testclient import TestClient
+from uuid import UUID, uuid4
 
-from __future__ import annotations
-import json 
-from typing import Dict, Any, Callable
-from pydantic import BaseModel, Field 
-from datetime import datetime, timezone
+from backend.models import GraphCollection
 
-# --- 从新的、统一的位置导入状态模型 ---
+# ---------------------------------------------------------------------------
+# Section 1: Sandbox Lifecycle E2E Tests
+# ---------------------------------------------------------------------------
+
+class TestApiSandboxLifecycle:
+    """测试沙盒从创建、执行、查询到回滚的完整生命周期。"""
+    
+    def test_full_lifecycle(self, test_client: TestClient, linear_collection: GraphCollection):
+        """
+        一个完整的端到端 happy path 测试。
+        这个测试的逻辑基本不变，因为它不关心图内部的实现，只关心 API 交互。
+        """
+        # --- 1. 创建沙盒 ---
+        response = test_client.post(
+            "/api/sandboxes",
+            params={"name": "E2E Test Sandbox"},
+            json={
+                "graph_collection": linear_collection.model_dump(),
+                "initial_state": {"player": "Humphrey"} 
+            }
+        )
+        assert response.status_code == 200
+        sandbox_data = response.json()
+        assert sandbox_data["name"] == "E2E Test Sandbox"
+        sandbox_id = sandbox_data["id"]
+        
+        assert sandbox_data["head_snapshot_id"] is not None
+        genesis_snapshot_id = sandbox_data["head_snapshot_id"]
+
+        # --- 2. 执行一个步骤 ---
+        response = test_client.post(
+            f"/api/sandboxes/{sandbox_id}/step",
+            json={"user_message": "A test input"} # Body 现在是 user_input
+        )
+        assert response.status_code == 200
+        step1_snapshot_data = response.json()
+        
+        assert step1_snapshot_data["id"] != genesis_snapshot_id
+        assert step1_snapshot_data["parent_snapshot_id"] == genesis_snapshot_id
+        step1_snapshot_id = step1_snapshot_data["id"]
+        
+        # 验证执行结果是否符合预期（可选，但推荐）
+        run_output = step1_snapshot_data.get("run_output", {})
+        assert "C" in run_output
+        assert "LLM_RESPONSE_FOR" in run_output["C"]["llm_output"]
+
+        # --- 3. 获取历史记录 ---
+        response = test_client.get(f"/api/sandboxes/{sandbox_id}/history")
+        assert response.status_code == 200
+        history = response.json()
+        
+        assert len(history) == 2
+        history_ids = {item["id"] for item in history}
+        assert genesis_snapshot_id in history_ids
+        assert step1_snapshot_id in history_ids
+
+        # --- 4. 回滚到创世快照 ---
+        response = test_client.put(
+            f"/api/sandboxes/{sandbox_id}/revert",
+            params={"snapshot_id": genesis_snapshot_id}
+        )
+        assert response.status_code == 200
+        assert response.json() == {"message": f"Sandbox reverted to snapshot {genesis_snapshot_id}"}
+        
+        # --- 5. 验证回滚后的状态 ---
+        response = test_client.post(
+            f"/api/sandboxes/{sandbox_id}/step",
+            json={"user_message": "A different input"}
+        )
+        assert response.status_code == 200
+        step2_snapshot_data = response.json()
+        
+        # 验证新快照的父节点是回滚后的创世快照
+        assert step2_snapshot_data["parent_snapshot_id"] == genesis_snapshot_id
+
+
+# ---------------------------------------------------------------------------
+# Section 2: API Error Handling E2E Tests
+# ---------------------------------------------------------------------------
+
+class TestApiErrorHandling:
+    """测试 API 在各种错误情况下的响应。"""
+
+    def test_create_sandbox_with_invalid_graph(self, test_client: TestClient, invalid_graph_no_main: dict):
+        """
+        关键修改：测试当图定义无效时（如缺少 main），API 返回 422 错误。
+        """
+        response = test_client.post(
+            "/api/sandboxes",
+            params={"name": "Invalid Sandbox"},
+            json={
+                "graph_collection": invalid_graph_no_main,
+                "initial_state": {}
+            }
+        )
+
+        # FastAPI 对 Pydantic RootModel 的验证失败会返回 422
+        assert response.status_code == 422 
+        error_data = response.json()
+        
+        # 检查 FastAPI 标准的 validation error 响应体结构
+        assert "detail" in error_data
+        assert isinstance(error_data["detail"], list) and len(error_data["detail"]) > 0
+
+        first_error = error_data["detail"][0]
+        assert first_error["type"] == "value_error"
+        assert "A 'main' graph must be defined as the entry point." in first_error["msg"]
+        
+        # 验证错误位置指向了请求体中的正确字段
+        assert first_error["loc"] == ["body", "graph_collection", "root"]
+
+    def test_create_sandbox_with_invalid_pydantic_payload(self, test_client: TestClient):
+        """测试一个在 Pydantic 层就无法解析的请求体。"""
+        response = test_client.post(
+            "/api/sandboxes",
+            params={"name": "Invalid Payload"},
+            json={
+                "graph_collection": "this-should-be-a-dict", # 错误类型
+                "initial_state": "this-should-be-a-dict"
+            }
+        )
+
+        assert response.status_code == 422
+        error_data = response.json()["detail"]
+        assert any("Input should be a valid dictionary" in e["msg"] for e in error_data)
+        assert any(["body", "graph_collection"] == e["loc"] for e in error_data)
+
+    def test_operations_on_nonexistent_sandbox(self, test_client: TestClient):
+        """测试对不存在的沙盒进行操作。"""
+        nonexistent_id = uuid4()
+        
+        response = test_client.post(f"/api/sandboxes/{nonexistent_id}/step", json={})
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Sandbox not found."
+        
+        response = test_client.get(f"/api/sandboxes/{nonexistent_id}/history")
+        # GET 历史通常返回空列表而不是 404，这是一种常见实践
+        assert response.status_code == 200
+        assert response.json() == []
+
+        response = test_client.put(
+            f"/api/sandboxes/{nonexistent_id}/revert",
+            params={"snapshot_id": uuid4()}
+        )
+        assert response.status_code == 404
+        assert "Sandbox or Snapshot not found" in response.json()["detail"]
+    
+    def test_revert_to_nonexistent_snapshot(self, test_client: TestClient, linear_collection: GraphCollection):
+        """测试回滚到一个不存在的快照。"""
+        # 先创建一个有效的沙盒
+        response = test_client.post(
+            "/api/sandboxes",
+            params={"name": "Revert Test"},
+            json={"graph_collection": linear_collection.model_dump()}
+        )
+        assert response.status_code == 200
+        sandbox_id = response.json()["id"]
+        
+        nonexistent_id = uuid4()
+        
+        # 尝试回滚
+        response = test_client.put(
+            f"/api/sandboxes/{sandbox_id}/revert",
+            params={"snapshot_id": nonexistent_id}
+        )
+        assert response.status_code == 404
+        assert "Sandbox or Snapshot not found" in response.json()["detail"]
+```
+
+### test_03_engine_integration.py
+```
+# tests/test_03_engine_integration.py
+import pytest
+from uuid import uuid4
+
+# ---------------------------------------------------------------------------
+# 导入被测试的类和所需的 Fixtures
+# ---------------------------------------------------------------------------
+from backend.core.engine import ExecutionEngine
 from backend.core.state_models import StateSnapshot
 from backend.models import GraphCollection
 
-class ExecutionContext(BaseModel):
-    """
-    定义一次图执行的完整上下文。
-    """
-    initial_snapshot: StateSnapshot
-    node_states: Dict[str, Any] = Field(default_factory=dict)
-    world_state: Dict[str, Any] = Field(default_factory=dict)
-    run_vars: Dict[str, Any] = Field(default_factory=dict)
-    
-    function_registry: Dict[str, Callable] = Field(default_factory=dict)
-    session_info: Dict[str, Any] = Field(default_factory=lambda: {
-        "start_time": datetime.now(timezone.utc),
-        "conversation_turn": 0,
-    })
+# 注意：这个文件中的测试函数会自动接收来自 conftest.py 的 fixtures，
+# 例如 test_engine, linear_collection, parallel_collection 等。
 
-    model_config = {
-        "arbitrary_types_allowed": True
-    }
+# ---------------------------------------------------------------------------
+# Section 1: Core Execution Flow Integration Tests
+# ---------------------------------------------------------------------------
 
-    @classmethod
-    def from_snapshot(cls, snapshot: StateSnapshot, run_vars: Dict[str, Any] = None) -> 'ExecutionContext':
-        """工厂方法：从一个快照创建执行上下文。"""
-        # 将 run_vars 也作为初始化的一部分
-        return cls(
-            initial_snapshot=snapshot,
-            world_state=snapshot.world_state.copy(),
-            run_vars=run_vars or {}
+@pytest.mark.asyncio
+class TestEngineCoreFlows:
+    """测试引擎的核心执行流程，如线性、并行和管道，使用新的宏系统。"""
+
+    async def test_engine_linear_flow(self, test_engine: ExecutionEngine, linear_collection: GraphCollection):
+        """测试简单的线性工作流 A -> B -> C，验证数据在宏之间正确传递。"""
+        initial_snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=linear_collection)
+        
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        run_output = final_snapshot.run_output
+        assert "A" in run_output
+        assert run_output["A"]["output"] == "a story about a cat"
+        
+        assert "B" in run_output
+        expected_prompt_b = "The story is: a story about a cat"
+        # 验证宏已执行，prompt 字段是最终结果
+        assert run_output["B"]["prompt"] == expected_prompt_b
+        assert run_output["B"]["llm_output"] == f"LLM_RESPONSE_FOR:[{expected_prompt_b}]"
+        
+        assert "C" in run_output
+        expected_prompt_c = run_output["B"]["llm_output"]
+        assert run_output["C"]["prompt"] == expected_prompt_c
+        assert run_output["C"]["llm_output"] == f"LLM_RESPONSE_FOR:[{expected_prompt_c}]"
+
+    async def test_engine_parallel_flow(self, test_engine: ExecutionEngine, parallel_collection: GraphCollection):
+        """测试并行分支的图，验证扇出和扇入。"""
+        initial_snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=parallel_collection)
+        
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        run_output = final_snapshot.run_output
+        assert len(run_output) == 3
+        # 验证 merger 节点，它的 merged_value 字段应该已经被宏计算好
+        assert run_output["merger"]["merged_value"] == "Merged: Value A and Value B"
+
+    async def test_engine_runtime_pipeline(self, test_engine: ExecutionEngine, pipeline_collection: GraphCollection):
+        """测试单个节点内的运行时管道，并验证宏预处理与运行时的交互。"""
+        initial_snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=pipeline_collection)
+        
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+
+        # 验证 world_state 被 set_world_var 运行时修改
+        assert final_snapshot.world_state["main_character"] == "The brave knight, Sir Reginald"
+
+        # 验证 llm.default 运行时使用了被修改后的 world_state
+        run_output = final_snapshot.run_output
+        node_a_result = run_output["A"]
+        
+        expected_prompt = "Tell a story about The brave knight, Sir Reginald."
+        assert node_a_result["prompt"] == expected_prompt
+        assert node_a_result["llm_output"] == f"LLM_RESPONSE_FOR:[{expected_prompt}]"
+
+
+# ---------------------------------------------------------------------------
+# Section 2: State and Macro Advanced Integration Tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestEngineStateAndMacros:
+    """测试引擎如何处理持久化状态，以及更高级的宏功能。"""
+
+    async def test_world_state_persists_and_macros_read_it(self, test_engine: ExecutionEngine, world_vars_collection: GraphCollection):
+        """验证 world_state 能被设置，并能被后续节点的宏读取。"""
+        initial_snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=world_vars_collection)
+        
+        snapshot_after_set = await test_engine.step(initial_snapshot, {})
+        
+        assert snapshot_after_set.world_state == {"theme": "cyberpunk"}
+        # 验证 reader 节点通过宏成功读取了 world_state
+        assert snapshot_after_set.run_output["reader"]["output"] == "The theme is: cyberpunk"
+
+    async def test_graph_evolution(self, test_engine: ExecutionEngine, graph_evolution_collection: GraphCollection):
+        """高级测试：验证图可以修改自己的逻辑并影响后续执行。此测试逻辑不变。"""
+        genesis_snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=graph_evolution_collection)
+        
+        snapshot_after_evolution = await test_engine.step(genesis_snapshot, {})
+        
+        assert "__graph_collection__" in snapshot_after_evolution.world_state
+        
+        new_graph_def = snapshot_after_evolution.graph_collection
+        assert len(new_graph_def.root["main"].nodes) == 1
+        assert new_graph_def.root["main"].nodes[0].id == "new_node"
+        
+        final_snapshot = await test_engine.step(snapshot_after_evolution, {})
+
+        run_output = final_snapshot.run_output
+        assert "new_node" in run_output
+        assert run_output["new_node"]["output"] == "This is the evolved graph!"
+
+    async def test_execute_runtime_integration(self, test_engine: ExecutionEngine, execute_runtime_collection: GraphCollection):
+        """集成测试：验证 system.execute 能在引擎流程中正确执行二次求值。"""
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(), 
+            graph_collection=execute_runtime_collection,
+            world_state={"player_status": "normal"}
         )
 
-    def to_next_snapshot(
-        self,
-        final_node_states: Dict[str, Any],
-        triggering_input: Dict[str, Any]
-    ) -> StateSnapshot:
-        """从当前上下文的状态创建下一个快照。"""
-        # 你的文档中提到图可以演化，这意味着 graph_collection 应该从 world_state 中获取
-        # 如果它被修改了的话。
-        current_graphs = self.initial_snapshot.graph_collection
-        # 这是一个示例，你可以定义一个特殊的key来存放演化后的图
-        if '__graph_collection__' in self.world_state:
-            try:
-                # 从 world_state 获取的值可能是 JSON 字符串，需要解析。
-                evolved_graph_value = self.world_state['__graph_collection__']
-                if isinstance(evolved_graph_value, str):
-                    evolved_graph_dict = json.loads(evolved_graph_value)
-                else:
-                    evolved_graph_dict = evolved_graph_value # It might already be a dict
+        final_snapshot = await test_engine.step(initial_snapshot, {})
 
-                evolved_graphs = GraphCollection.model_validate(evolved_graph_dict)
-                current_graphs = evolved_graphs
-            except Exception as e:
-                print(f"Warning: Failed to parse evolved graph collection from world_state: {e}")
+        # 验证 B_execute_code 的输出
+        run_output = final_snapshot.run_output
+        # 副作用宏返回 None
+        assert run_output["B_execute_code"]["output"] is None
 
-        return StateSnapshot(
-            sandbox_id=self.initial_snapshot.sandbox_id,
-            graph_collection=current_graphs,
-            world_state=self.world_state,
-            parent_snapshot_id=self.initial_snapshot.id,
-            run_output=final_node_states,
-            triggering_input=triggering_input
-        )
+        # 最关键的验证：world_state 是否被二次求值的代码所修改
+        assert final_snapshot.world_state["player_status"] == "empowered"
+
+# ---------------------------------------------------------------------------
+# Section 3: Error and Edge Case Integration Tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestEngineErrorHandling:
+    """测试引擎在错误和边界情况下的鲁棒性。"""
+
+    async def test_engine_detects_cycle(self, test_engine: ExecutionEngine, cyclic_collection: GraphCollection):
+        """测试引擎在图运行初始化时能正确检测到环路。此测试逻辑不变。"""
+        initial_snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=cyclic_collection)
         
-ExecutionContext.model_rebuild()
-```
+        with pytest.raises(ValueError, match="Cycle detected"):
+            await test_engine.step(initial_snapshot, {})
 
-### core/runtime.py
-```
-# backend/core/runtime.py
-
-from abc import ABC, abstractmethod
-from typing import Dict, Any
-
-class RuntimeInterface(ABC):
-    """
-    定义所有运行时都必须遵守的接口。
-    这是一个纯粹的抽象，不依赖于任何具体的上下文实现。
-    """
-    @abstractmethod
-    async def execute(self, **kwargs) -> Dict[str, Any]:
-        """
-        执行节点逻辑的核心方法。
+    async def test_engine_handles_failure_and_skips_downstream(self, test_engine: ExecutionEngine, failing_node_collection: GraphCollection):
+        """测试当一个节点因宏执行失败时，下游节点被正确跳过。"""
+        initial_snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=failing_node_collection)
         
-        通过关键字参数 (kwargs) 接收所有上下文信息。
-        具体的可用关键字参数由 ExecutionEngine 在调用时提供。
-        """
-        pass
-```
-
-### core/engine.py
-```
-import asyncio
-from enum import Enum, auto
-from typing import Dict, Any, Set, List, Optional
-from collections import defaultdict
-
-# 导入新的模型和依赖解析器
-from backend.models import GraphCollection, GraphDefinition, GenericNode
-from backend.core.dependency_parser import build_dependency_graph
-from backend.core.registry import RuntimeRegistry
-# 从新的中心位置导入类型
-from backend.core.types import ExecutionContext
-
-
-class NodeState(Enum):
-    """定义节点在执行过程中的所有可能状态。"""
-    PENDING = auto()
-    READY = auto()
-    RUNNING = auto()
-    SUCCEEDED = auto()
-    FAILED = auto()
-    SKIPPED = auto()
-
-class GraphRun:
-    """管理一次图执行的状态，现在支持任意 GraphDefinition。"""
-    def __init__(self, context: ExecutionContext, graph_def: GraphDefinition):
-        self.context = context
-        self.graph_def = graph_def
-        if not self.graph_def:
-            raise ValueError("GraphRun must be initialized with a valid GraphDefinition.")
-        self.node_map: Dict[str, GenericNode] = {n.id: n for n in self.graph_def.nodes}
-        self.node_states: Dict[str, NodeState] = {}
-        self.dependencies: Dict[str, Set[str]] = build_dependency_graph(
-            [node.model_dump() for node in self.graph_def.nodes]
-        )
-        self.subscribers: Dict[str, Set[str]] = self._build_subscribers()
-        self._detect_cycles()
-        self._initialize_node_states()
-
-    def _build_subscribers(self) -> Dict[str, Set[str]]:
-        subscribers = defaultdict(set)
-        for node_id, deps in self.dependencies.items():
-            for dep_id in deps:
-                subscribers[dep_id].add(node_id)
-        return subscribers
-
-    def _detect_cycles(self):
-        path = set()
-        visited = set()
-        def visit(node_id):
-            path.add(node_id)
-            visited.add(node_id)
-            for neighbour in self.dependencies.get(node_id, set()):
-                if neighbour in path:
-                    raise ValueError(f"Cycle detected involving node {neighbour}")
-                if neighbour not in visited:
-                    visit(neighbour)
-            path.remove(node_id)
-        for node_id in self.node_map:
-            if node_id not in visited:
-                visit(node_id)
-
-    def _initialize_node_states(self):
-        for node_id in self.node_map:
-            if not self.dependencies.get(node_id):
-                self.node_states[node_id] = NodeState.READY
-            else:
-                self.node_states[node_id] = NodeState.PENDING
-
-    def get_node(self, node_id: str) -> GenericNode:
-        return self.node_map[node_id]
-    def get_node_state(self, node_id: str) -> NodeState:
-        return self.node_states.get(node_id)
-    def set_node_state(self, node_id: str, state: NodeState):
-        self.node_states[node_id] = state
-    def get_node_result(self, node_id: str) -> Dict[str, Any]:
-        return self.context.node_states.get(node_id)
-    def set_node_result(self, node_id: str, result: Dict[str, Any]):
-        self.context.node_states[node_id] = result
-    def get_nodes_in_state(self, state: NodeState) -> List[str]:
-        return [nid for nid, s in self.node_states.items() if s == state]
-    def get_dependencies(self, node_id: str) -> Set[str]:
-        return self.dependencies[node_id]
-    def get_subscribers(self, node_id: str) -> Set[str]:
-        return self.subscribers[node_id]
-    def get_execution_context(self) -> ExecutionContext:
-        return self.context
-    def get_final_node_states(self) -> Dict[str, Any]:
-        return self.context.node_states
-
-
-class ExecutionEngine:
-    """引擎现在执行的是 'step'，从一个快照到下一个快照。"""
-    def __init__(self, registry: RuntimeRegistry, num_workers: int = 5):
-        self.registry = registry
-        self.num_workers = num_workers
-
-    async def step(self, initial_snapshot, triggering_input: Dict[str, Any] = None):
-        from backend.core.types import ExecutionContext
-        if triggering_input is None:
-            triggering_input = {}
-        context = ExecutionContext.from_snapshot(initial_snapshot, {"trigger_input": triggering_input})
-        main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
-        if not main_graph_def:
-            raise ValueError("'main' graph not found in the initial snapshot.")
-        run = GraphRun(context, main_graph_def)
-        task_queue = asyncio.Queue()
-        for node_id in run.get_nodes_in_state(NodeState.READY):
-            await task_queue.put(node_id)
-        workers = [
-            asyncio.create_task(self._worker(f"worker-{i}", run, task_queue))
-            for i in range(self.num_workers)
-        ]
-        await task_queue.join()
-        for w in workers:
-            w.cancel()
-        await asyncio.gather(*workers, return_exceptions=True)
-        final_node_states = run.get_final_node_states()
-        next_snapshot = context.to_next_snapshot(
-            final_node_states=final_node_states,
-            triggering_input=triggering_input
-        )
-        print(f"Step complete. New snapshot {next_snapshot.id} created.")
-        return next_snapshot
-
-    async def _worker(self, name: str, run: 'GraphRun', queue: asyncio.Queue):
-        """工作者协程，从队列中获取并处理节点。"""
-        while True:
-            try:
-                node_id = await queue.get()
-                print(f"[{name}] Picked up node: {node_id}")
-
-                node = run.get_node(node_id)
-                context = run.get_execution_context()
-                
-                run.set_node_state(node_id, NodeState.RUNNING)
-                
-                try:
-                    output = await self._execute_node(node, context)
-                    
-                    # 检查返回的 output 是否是一个我们定义的错误结构
-                    if isinstance(output, dict) and "error" in output:
-                        # 这是 _execute_node 内部捕获并返回的错误（例如，管道失败）
-                        print(f"[{name}] Node {node_id} FAILED (internally): {output['error']}")
-                        run.set_node_result(node_id, output)
-                        run.set_node_state(node_id, NodeState.FAILED)
-                    else:
-                        # 这是正常的成功执行
-                        run.set_node_result(node_id, output)
-                        run.set_node_state(node_id, NodeState.SUCCEEDED)
-                        print(f"[{name}] Node {node_id} SUCCEEDED.")
-
-                    # 无论成功或内部失败，都通知下游节点
-                    self._process_subscribers(node_id, run, queue)
-
-                except Exception as e:
-                    # 这是 _execute_node 执行期间发生的意外异常
-                    error_message = f"Unexpected error in worker for node {node_id}: {e}"
-                    print(f"[{name}] Node {node_id} FAILED (unexpectedly): {error_message}")
-                    run.set_node_result(node_id, {"error": error_message})
-                    run.set_node_state(node_id, NodeState.FAILED)
-                    
-                    # 同样通知下游节点
-                    self._process_subscribers(node_id, run, queue)
-
-                finally:
-                    queue.task_done()
-            
-            except asyncio.CancelledError:
-                print(f"[{name}] shutting down.")
-                break
-    
-    def _process_subscribers(self, completed_node_id: str, run: 'GraphRun', queue: asyncio.Queue):
-        completed_node_state = run.get_node_state(completed_node_id)
-        for sub_id in run.get_subscribers(completed_node_id):
-            if run.get_node_state(sub_id) != NodeState.PENDING:
-                continue
-            if completed_node_state == NodeState.FAILED:
-                run.set_node_state(sub_id, NodeState.SKIPPED)
-                # 为下游节点记录跳过的原因
-                run.set_node_result(sub_id, {
-                    "status": "skipped",
-                    "reason": f"Upstream failure of node {completed_node_id}."
-                })
-                self._process_subscribers(sub_id, run, queue)
-                continue
-            is_ready = True
-            for dep_id in run.get_dependencies(sub_id):
-                if run.get_node_state(dep_id) != NodeState.SUCCEEDED:
-                    is_ready = False
-                    break
-            if is_ready:
-                run.set_node_state(sub_id, NodeState.READY)
-                queue.put_nowait(sub_id)
-
-
-    async def _execute_node(self, node: GenericNode, context: ExecutionContext) -> Dict[str, Any]:
-        """
-        执行单个节点内的 Runtime 流水线。
+        final_snapshot = await test_engine.step(initial_snapshot, {})
         
-        该方法实现了一个混合数据流模型：
-        1. 转换流 (step_input): 每个 Runtime 的输出成为下一个的输入，实现覆盖式流水线。
-        2. 增强流 (pipeline_state): 所有 Runtime 的输出被持续合并，为后续步骤提供完整的历史上下文。
-        """
-        node_id = node.id
-        runtime_spec = node.data.get("runtime")
+        run_output = final_snapshot.run_output
+
+        # 验证成功和独立的节点
+        assert "error" not in run_output.get("A_ok", {})
+        assert "error" not in run_output.get("D_independent", {})
+        assert run_output["D_independent"]["output"] == "independent"
+
+        # 验证失败的节点
+        assert "error" in run_output.get("B_fail", {})
+        # 错误原因现在是宏预处理失败
+        assert run_output["B_fail"]["failed_step"] == "pre-processing"
+        # 错误信息现在是 Python 的 NameError
+        assert "Macro evaluation failed" in run_output["B_fail"]["error"]
+        assert "name 'non_existent_variable' is not defined" in run_output["B_fail"]["error"]
         
-        if not runtime_spec:
-            # 如果没有指定 runtime，可以认为该节点是一个纯粹的数据持有者
-            return node.data
-
-        runtime_names = [runtime_spec] if isinstance(runtime_spec, str) else runtime_spec
-
-        # 1. 初始化两个数据流的起点
-        #    - `pipeline_state` 用于累积和增强数据
-        #    - `step_input` 用于在步骤间传递和转换数据
-        pipeline_state = node.data.copy()
-        step_input = node.data.copy()
-
-        print(f"Executing node: {node_id} with runtime pipeline: {runtime_names}")
-        
-        for i, runtime_name in enumerate(runtime_names):
-            print(f"  - Step {i+1}/{len(runtime_names)}: Running runtime '{runtime_name}'")
-            try:
-                # 从注册表获取一个新的 Runtime 实例
-                runtime: RuntimeInterface = self.registry.get_runtime(runtime_name)
-                
-                # 调用 execute，传入两个数据流和全局上下文
-                output = await runtime.execute(
-                    step_input=step_input,
-                    pipeline_state=pipeline_state,
-                    context=context,
-                    node=node  # 传递当前节点本身也很有用
-                )
-                    
-                # 检查输出是否为 None 或非字典，以增加健壮性
-                if not isinstance(output, dict):
-                    error_message = f"Runtime '{runtime_name}' did not return a dictionary. Returned: {type(output).__name__}"
-                    print(f"  - Error in pipeline: {error_message}")
-                    return {"error": error_message, "failed_step": i, "runtime": runtime_name}
-
-                # 2. 更新两个数据流
-                #    - `step_input` 被完全覆盖，用于下一步
-                step_input = output
-                #    - `pipeline_state` 被合并更新，用于累积
-                pipeline_state.update(output)
-
-            except Exception as e:
-                # 如果管道中任何一步失败，捕获异常并返回标准错误结构
-                # import traceback; traceback.print_exc() # for debugging
-                error_message = f"Failed at step {i+1} ('{runtime_name}'): {e}"
-                print(f"  - Error in pipeline: {error_message}")
-                return {"error": error_message, "failed_step": i, "runtime": runtime_name}
-
-        # 3. 整个节点流水线成功完成后，返回最终的、最完整的累积状态
-        print(f"Node {node_id} pipeline finished successfully.")
-        return pipeline_state
-```
-
-### core/state_models.py
-```
-# backend/core/state_models.py
-
-from __future__ import annotations
-from uuid import uuid4, UUID
-from typing import Dict, Any, List, Optional
-from pydantic import BaseModel, Field, ConfigDict
-from datetime import datetime, timezone
-
-# 导入这个文件所依赖的最基础模型
-from backend.models import GraphCollection
-
-# --- 所有相关的模型都住在这里 ---
-
-class StateSnapshot(BaseModel):
-    """
-    一个不可变的快照，代表 Sandbox 在某个时间点的完整状态。
-    """
-    id: UUID = Field(default_factory=uuid4)
-    sandbox_id: UUID
-    graph_collection: GraphCollection
-    world_state: Dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    parent_snapshot_id: Optional[UUID] = None
-    triggering_input: Dict[str, Any] = Field(default_factory=dict)
-    run_output: Optional[Dict[str, Any]] = None
-
-    model_config = ConfigDict(frozen=True)
-
-class Sandbox(BaseModel):
-    """
-    一个交互式模拟环境的容器。
-    它管理着一系列的状态快照。
-    """
-    id: UUID = Field(default_factory=uuid4)
-    name: str
-    head_snapshot_id: Optional[UUID] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-    def get_latest_snapshot(self, store: SnapshotStore) -> Optional[StateSnapshot]:
-        # 现在 SnapshotStore 和 StateSnapshot 都在同一个作用域，类型提示完美工作
-        if self.head_snapshot_id:
-            return store.get(self.head_snapshot_id)
-        return None
-
-class SnapshotStore:
-    """一个简单的内存快照存储。"""
-    def __init__(self):
-        self._store: Dict[UUID, StateSnapshot] = {}
-
-    def save(self, snapshot: StateSnapshot):
-        if snapshot.id in self._store:
-            raise ValueError(f"Snapshot with id {snapshot.id} already exists.")
-        self._store[snapshot.id] = snapshot
-
-    def get(self, snapshot_id: UUID) -> Optional[StateSnapshot]:
-        return self._store.get(snapshot_id)
-
-    def find_by_sandbox(self, sandbox_id: UUID) -> List[StateSnapshot]:
-        return [s for s in self._store.values() if s.sandbox_id == sandbox_id]
-
-    def clear(self):
-        self._store = {}
-
-# --- 在文件末尾重建所有模型 ---
-# 这确保了 Pydantic 能够正确处理所有内部引用和向前引用
-StateSnapshot.model_rebuild()
-Sandbox.model_rebuild()
-```
-
-### core/dependency_parser.py
-```
-# backend/core/dependency_parser.py
-import re
-from typing import Set, Dict, Any, List
-
-# 正则表达式，用于匹配 {{ nodes.node_id... }} 格式的宏
-# - 匹配 '{{' 和 '}}'
-# - 捕获 'nodes.' 后面的第一个标识符 (node_id)
-# - 这是一个非贪婪匹配，以处理嵌套宏等情况
-NODE_DEP_REGEX = re.compile(r'{{\s*nodes\.([a-zA-Z0-9_]+)')
-
-def extract_dependencies_from_string(s: str) -> Set[str]:
-    """从单个字符串中提取所有节点依赖。"""
-    if not isinstance(s, str):
-        return set()
-    return set(NODE_DEP_REGEX.findall(s))
-
-def extract_dependencies_from_value(value: Any) -> Set[str]:
-    """递归地从任何值（字符串、列表、字典）中提取依赖。"""
-    deps = set()
-    if isinstance(value, str):
-        deps.update(extract_dependencies_from_string(value))
-    elif isinstance(value, list):
-        for item in value:
-            deps.update(extract_dependencies_from_value(item))
-    elif isinstance(value, dict):
-        for k, v in value.items():
-            # 递归地检查 key 和 value
-            deps.update(extract_dependencies_from_value(k))
-            deps.update(extract_dependencies_from_value(v))
-    return deps
-
-def build_dependency_graph(nodes: List[Dict[str, Any]]) -> Dict[str, Set[str]]:
-    """
-    根据节点列表自动构建依赖图。
-    
-    返回一个字典，key 是节点ID，value 是其依赖的节点ID集合。
-    """
-    dependency_map: Dict[str, Set[str]] = {}
-    node_ids = {node['id'] for node in nodes}
-
-    for node in nodes:
-        node_id = node['id']
-        node_data = node.get('data', {})
-        
-        # 递归地从节点的整个 data 负载中提取依赖
-        dependencies = extract_dependencies_from_value(node_data)
-        
-        # 过滤掉不存在的节点ID，这可能是子图的输入占位符
-        valid_dependencies = {dep for dep in dependencies if dep in node_ids}
-        
-        dependency_map[node_id] = valid_dependencies
-    
-    return dependency_map
-
-```
-
-### runtimes/__init__.py
-```
-
-```
-
-### runtimes/base_runtimes.py
-```
-# backend/runtimes/base_runtimes.py
-import asyncio 
-from backend.core.runtime import RuntimeInterface
-# 从新的中心位置导入类型
-from backend.core.types import ExecutionContext
-from backend.core.templating import render_template
-from typing import Dict, Any
-
-class InputRuntime(RuntimeInterface):
-    """我只关心 step_input。"""
-    async def execute(self, **kwargs) -> Dict[str, Any]:
-        step_input = kwargs.get("step_input", {})
-        return {"output": step_input.get("value", "")}
-
-class TemplateRuntime(RuntimeInterface):
-    """我需要 step_input (或 pipeline_state) 来获取模板，需要 context 来渲染。"""
-    async def execute(self, **kwargs) -> Dict[str, Any]:
-        step_input = kwargs.get("step_input", {})
-        pipeline_state = kwargs.get("pipeline_state", {})
-        context = kwargs.get("context")
-
-        template_str = step_input.get("template", pipeline_state.get("template", ""))
-        if not template_str:
-            raise ValueError("TemplateRuntime requires a 'template' string.")
-            
-        rendered_string = await render_template(template_str, context)
-        return {"output": rendered_string}
-
-class LLMRuntime(RuntimeInterface):
-    """我需要 step_input/pipeline_state 来获取 prompt，需要 context 来渲染。"""
-    async def execute(self, **kwargs) -> Dict[str, Any]:
-        step_input = kwargs.get("step_input", {})
-        pipeline_state = kwargs.get("pipeline_state", {})
-        context = kwargs.get("context")
-        
-        prompt_template_str = step_input.get("prompt", step_input.get("output", 
-                                pipeline_state.get("prompt", "")))
-        if not prompt_template_str:
-            raise ValueError("LLMRuntime requires a 'prompt' or 'output' string.")
-
-        rendered_prompt = await render_template(prompt_template_str, context)
-        
-        # 恢复异步行为，模拟 LLM API 调用延迟
-        await asyncio.sleep(0.1)  # <--- 恢复这一行
-        
-        llm_response = f"LLM_RESPONSE_FOR:[{rendered_prompt}]"
-        
-        return {"llm_output": llm_response, "summary": f"Summary of '{rendered_prompt[:20]}...'"}
-
-# 演示一个只关心 context 的新 Runtime
-class SetWorldVariableRuntime(RuntimeInterface):
-    """设置一个持久化的世界变量。"""
-    async def execute(self, **kwargs) -> Dict[str, Any]:
-        step_input = kwargs.get("step_input", {})
-        context = kwargs.get("context")
-        variable_name = step_input.get("variable_name")
-        value_to_set = step_input.get("value")
-        if not variable_name:
-            raise ValueError("SetWorldVariableRuntime requires 'variable_name'.")
-        # 修改的是可变的 world_state
-        context.world_state[variable_name] = value_to_set
-        return {}
+        # 验证被跳过的下游节点
+        assert "status" in run_output.get("C_skip", {})
+        assert run_output["C_skip"]["status"] == "skipped"
+        assert run_output["C_skip"]["reason"] == "Upstream failure of node B_fail."
 ```
