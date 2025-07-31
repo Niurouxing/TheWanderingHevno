@@ -107,8 +107,8 @@ def parallel_collection() -> GraphCollection:
 
 @pytest.fixture
 def pipeline_collection() -> GraphCollection:
-    """一个包含节点内运行时管道的图。
-    现在宏系统是隐式的步骤0，所以我们测试一个显式的管道 `set_var | llm`。
+    """
+    一个测试节点内运行时管道数据流的图。
     """
     return GraphCollection.model_validate({
         "main": {
@@ -116,14 +116,18 @@ def pipeline_collection() -> GraphCollection:
                 {
                     "id": "A",
                     "data": {
+                        # 运行时管道保持不变
                         "runtime": ["system.set_world_var", "llm.default"],
-                        # 'self' 在宏上下文中无定义。直接使用值。
-                        # "character_name": "{{ 'Sir Reginald' }}", # 这个字段现在是多余的
-                        # set_world_var 的配置
+                        
+                        # 为第一个 runtime (set_world_var) 提供配置
+                        # 这些值可以在节点开始时就确定
                         "variable_name": "main_character",
-                        # 直接构造值，不再依赖不存在的 self.character_name
                         "value": "The brave knight, Sir Reginald",
-                        # llm.default 的配置
+
+                        # 为第二个 runtime (llm.default) 提供配置
+                        # 关键：prompt 现在引用了 world 状态，
+                        # 它期望这个状态在管道的前一步被设置好。
+                        # 我们甚至可以定义 llm.default 的参数就叫 'prompt'
                         "prompt": "{{ f'Tell a story about {world.main_character}.' }}"
                     }
                 }

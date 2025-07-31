@@ -44,20 +44,22 @@
   "id": "simple_llm",
   "data": {
     "runtime": "llm.default", 
-    "prompt": "你好，世界！"
+    "prompt": "你好，世界！" 
   }
 }
 
-// 先模板渲染，再调用 LLM 的复杂行为
+// 复杂的运行时管道：先设置世界变量，再根据该变量调用 LLM
 {
-  "id": "advanced_llm",
+  "id": "advanced_logic",
   "data": {
-    "runtime": ["system.template", "llm.default"], 
-    "template": "根据角色的心情 '{{ world.character_mood }}'，生成一句问候。"
+    "runtime": ["system.set_world_var", "llm.default"], 
+    "variable_name": "character_mood",
+    "value": "happy",
+    "prompt": "{{ f'根据角色心情 {world.character_mood}，生成一句问候。' }}"
   }
 }
 ```
-这种设计将功能正交分解，提供了无与伦比的灵活性和可组合性。
+这种设计将功能正交分解，提供了无与伦比的灵活性和可组合性。引擎的宏系统（见下文）会自动处理管道内的数据流和状态演化。
 
 ### 2.2 哲学二：状态先行，计算短暂
 
@@ -82,7 +84,7 @@
 这种架构天然地带来了巨大的好处：
 1.  **完美的回溯能力**: “读档”操作变成了简单地将沙盒的指针指向一个历史快照。
 2.  **健壮的并发与调试**: 不可变性消除了大量的并发问题，并使得追踪状态变化变得异常简单。
-3.  **动态的逻辑演化**: 因为图的定义本身也是状态的一部分，所以图可以被它自己执行的逻辑所修改（例如，一个节点可以执行 `system.set_world_var` 来更新 `world_state` 中存储的图定义），实现世界的“自我进化”。
+3.  **动态的逻辑演化**: 因为图的定义本身也是状态的一部分，所以图可以被它自己执行的逻辑所修改，实现世界的“自我进化”。
 
 ### 2.3 哲学三：约定优于配置，隐式推断依赖
 
@@ -92,81 +94,136 @@
 
 *   **无边图 (`Edgeless Graph`)**: 在我们的图定义中，你找不到 `edges` 字段。
 *   **宏引用即依赖**: 当一个节点在其配置中通过宏 `{{ nodes.A.output }}` 引用了另一个节点 `A` 时，引擎会自动建立一条从 `A` 到当前节点的执行依赖。
-
-这种设计将开发者的精力从繁琐的工程细节中解放出来，让他们能专注于设计智能体的行为逻辑。
-
----
-
-## 3. 图定义格式与核心概念
-
-### 3.1 顶层结构：图集合 (Graph Collection)
-
-一个完整的工作流定义是一个 JSON 对象，其 `key` 为图的名称，`value` 为图的定义。
-
--   **约定入口图的名称必须为 `"main"`**。
--   这允许多个可复用的图存在于同一个配置文件中。
-
-**示例:**
-```json
-{
-  "main": {
-    "nodes": [
-      // ... 主图的节点 ...
-    ]
-  },
-  "process_character_arc": {
-    "nodes": [
-      // ... 一个可复用子图的节点 ...
-    ]
-  }
-}
-```
-
-### 3.2 节点 (Node)
-
-节点是图的基本执行单元。
-
-```json
-{
-  "id": "unique_node_id_within_graph",
-  "data": {
-    "runtime": "runtime_name"_or_["runtime_A", "runtime_B"],
-    // ... 其他 key-value pairs 作为运行时的配置 ...
-  }
-}
-```
-
-### 3.3 宏模板与依赖推断
-
-参见专门文档
-
+*   **状态依赖需明确**: 如果一个节点 `B` 的逻辑依赖于另一个节点 `A` 修改 `world` 状态所产生的**副作用**，你**必须**也通过 `{{ nodes.A }}` 引用来明确建立执行顺序。
 
 ---
 
-## 4. 核心运行时详解
+## 3. Hevno 宏系统：可编程的配置 2.0
 
-### 4.1 `system.call`: 子图调用
+这是让您的静态图定义变得鲜活、动态和智能的核心引擎。我们摒弃了简单的模板替换，转而拥抱一种更强大、更符合逻辑流的理念。
 
-`call` 运行时用于实现非迭代式的、单一的子图调用，是代码复用的基础。
+### 3.1 核心理念：阶段性感知的求值
 
-#### **调用格式**
+> **"A node's configuration is evaluated just-in-time for each step in its runtime pipeline."**
+
+宏系统与运行时管道（Runtime Pipeline）紧密集成，实现了强大的节点内数据流。
+
+*   **唯一的语法**: `{{ ... }}`。任何被双大括号包裹的内容，都会被视为一段可执行的 Python 代码。
+*   **阶段性求值 (Staged Evaluation)**: 引擎**不再**一次性预处理节点的所有宏。取而代之的是，在执行管道中的**每一个** `runtime` **之前**，引擎会：
+    1.  收集当前 `runtime` 所需的参数（例如，从节点的 `data` 负载中获取 `prompt` 字段）。
+    2.  对这些参数的值进行**宏求值**。此时，宏可以访问到所有**之前**步骤产生的结果。
+    3.  将求值后的、最终的参数传递给 `runtime` 执行。
+    4.  `runtime` 的输出会被捕获，并可供管道中**后续**的步骤使用。
+
+这个“即时求值”模型，让节点内部的行为像一个迷你脚本，前一步的输出可以无缝地成为后一步的输入。
+
+### 3.2 上下文对象：你的世界交互窗口
+
+在 `{{ ... }}` 内部，你可以访问一个包含了**所有可用上下文信息**的全局命名空间。这些对象支持点符号访问（如 `world.player_hp`）。
+
+*   **持久化世界状态 (`world`)**: 整个沙盒的长期记忆。
+    *   **用途**: 存储玩家属性、任务进度、世界环境等。
+    *   **读写**: `{{ world.player_hp }}`，`{{ world.player_hp -= 10 }}`。修改会记录在下一个状态快照中。
+
+*   **已完成节点的结果 (`nodes`)**: 一个只读对象，包含了所有在当前节点**之前**，已经成功完成的节点所产生的结果。
+    *   **用途**: 实现**节点间**的数据流动。
+    *   **示例**: `{{ nodes.get_character_name.output.upper() }}`
+
+*   **管道内部变量 (`pipe`)**: **（新）** 这是一个特殊的、可变的上下文对象，其生命周期仅限于**单个节点**的运行时管道执行期间。
+    *   **用途**: 实现**节点内**、不同 `runtime` 步骤之间的数据流动。
+    *   **工作模式**:
+        1.  在管道开始时，`pipe` 包含了节点 `data` 中所有非 `runtime` 的初始字段。
+        2.  每个 `runtime` 执行完毕后，其返回的字典会被合并（`update`）到 `pipe` 对象中。
+        3.  后续的 `runtime` 就可以通过 `pipe` 访问到前面步骤的结果。
+    *   **示例**:
+        ```json
+        {
+          "id": "process_image",
+          "data": {
+            "runtime": ["image.load_from_url", "image.get_caption"],
+            "url": "http://example.com/cat.jpg",
+            // get_caption 的 'image_data' 参数将使用上一步的结果
+            "image_data": "{{ pipe.loaded_image_bytes }}"
+          }
+        }
+        ```
+
+*   **其他上下文**: `run` (本次运行的临时数据), `session` (会话元信息)。
+
+### 3.3 实用示例
+
+#### 示例 1: 动态生成 NPC 对话
+
+宏直接在 `prompt` 字段中执行逻辑，无需独立的 `template` 步骤。
+
 ```json
 {
-  "id": "process_main_character",
+  "id": "npc_greeting",
   "data": {
-    "runtime": "system.call",
-    "graph": "process_character_arc",
-    "using": {
-      "character_input": "{{ nodes.main_character_provider.output }}",
-      "global_context": "{{ world.story_setting }}"
-    }
+    "runtime": "llm.default",
+    "prompt": "{{
+      rep = world.player_reputation
+      if rep > 50:
+          f'欢迎，尊敬的 {world.player_name}！'
+      else:
+          '哦，是你啊。'
+    }}"
   }
 }
 ```
--   `graph`: 要调用的子图的名称。
--   `using`: 一个字典，用于将当前图的数据**映射**到子图的**输入占位符**。
-    -   在被调用的子图 (`process_character_arc`) 中，任何对未定义节点（如 `character_input`）的引用，都会被视作一个输入占位符。
--   **输出**: `call` 节点的输出就是被调用子图的**完整的最终状态字典**。下游节点可以通过 `{{ nodes.process_main_character.output.internal_summary_node.summary }}` 访问其内部结果。
+
+#### 示例 2: 强大的节点内管道
+
+这个例子展示了新的阶段性求值和 `pipe` 变量的威力。
+
+```json
+{
+  "id": "complex_analysis",
+  "data": {
+    "runtime": ["api.fetch_user_data", "system.execute", "llm.summarize"],
+    
+    // 1. api.fetch_user_data 的参数
+    "user_id": "{{ run.trigger_input.user_id }}",
+
+    // 2. system.execute 的参数
+    //    它的 code 输入，引用了上一步 fetch_user_data 的输出
+    "code": "{{ f'processed_name = pipe.user_data.name.upper()' }}",
+
+    // 3. llm.summarize 的参数
+    //    它的 content 输入，引用了第二步 execute 的结果
+    "content": "{{ f'分析用户 {pipe.processed_name} 的数据: {pipe.user_data}' }}"
+  }
+}
+```
+**执行流程拆解:**
+1.  `api.fetch_user_data` 运行，其输出（如 `{"user_data": {"name": "alice"}}`）被并入 `pipe`。
+2.  `system.execute` 的 `code` 宏被求值，此时 `pipe.user_data` 可用。`execute` 运行后，`pipe` 中新增了 `processed_name: "ALICE"`。
+3.  `llm.summarize` 的 `content` 宏被求值，此时 `pipe.processed_name` 和 `pipe.user_data` 均可用。
+4.  整个节点的最终输出是 `pipe` 的最终状态。
+
+### 3.4 高级功能：执行 LLM 返回的指令
+
+通过转义和 `system.execute`，你可以让 LLM 动态修改世界。
+
+1.  **向 LLM 发送指令模板**:
+    ```json
+    { "id": "instruct_llm", "data": {
+        "runtime": "llm.default",
+        "prompt": "要将玩家能量设为100，请返回: '{{ world.player.energy = 100 }}'"
+    }}
+    ```
+2.  **执行返回的指令**:
+    假设上一步 LLM 的输出在 `pipe.llm_output` 中（因为它是上一步的结果）。
+    ```json
+    { "id": "master_node", "data": {
+        "runtime": ["instruct_llm_runtime", "system.execute"],
+        // instruct_llm_runtime 的定义省略...
+        "code": "{{ pipe.llm_output }}"
+    }}
+    ```
+    `system.execute` 会接收到字符串 `"{{ world.player.energy = 100 }}"` 并执行它，从而修改世界状态。
+
+---
 
 ### 4.2 `system.map`: 并行迭代 (Fan-out / Scatter-Gather)
 
