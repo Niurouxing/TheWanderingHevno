@@ -31,22 +31,28 @@ def extract_dependencies_from_value(value: Any) -> Set[str]:
 def build_dependency_graph(nodes: List[Dict[str, Any]]) -> Dict[str, Set[str]]:
     """
     根据节点列表自动构建依赖图。
-    新版本从节点的 `run` 指令列表中提取依赖。
+    会合并从宏中自动推断的依赖和从 `depends_on` 字段中明确声明的依赖。
     """
     dependency_map: Dict[str, Set[str]] = {}
     node_ids = {node['id'] for node in nodes}
 
     for node in nodes:
         node_id = node['id']
-        all_dependencies = set()
-
-        # 遍历节点 `run` 列表中的每个指令
+        
+        # 1. 从宏中自动推断依赖 
+        auto_inferred_deps = set()
         for instruction in node.get('run', []):
             instruction_config = instruction.get('config', {})
             dependencies = extract_dependencies_from_value(instruction_config)
-            all_dependencies.update(dependencies)
+            auto_inferred_deps.update(dependencies)
         
-        # 过滤掉不存在的节点ID，这可能是子图的输入占位符
+        # 2. 从 `depends_on` 字段中获取明确的依赖 
+        explicit_deps = set(node.get('depends_on') or [])
+
+        # 3. 合并两种依赖
+        all_dependencies = auto_inferred_deps.union(explicit_deps)
+        
+        # 4. 过滤掉不存在的节点ID
         valid_dependencies = {dep for dep in all_dependencies if dep in node_ids}
         dependency_map[node_id] = valid_dependencies
     

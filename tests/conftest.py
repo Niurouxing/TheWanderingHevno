@@ -207,13 +207,13 @@ def graph_evolution_collection() -> GraphCollection:
 @pytest.fixture
 def advanced_macro_collection() -> GraphCollection:
     """
-    【已修正】一个用于测试高级宏功能的图。
-    - 添加了明确的依赖声明来解决竞态条件。
+    一个用于测试高级宏功能的图。
+    使用新的 `depends_on` 字段来明确声明隐式依赖，代码更清晰。
     """
     return GraphCollection.model_validate({
         "main": {
             "nodes": [
-                # 步骤1: 在 world 上定义一个可复用的函数
+                # 步骤1: 定义函数，无变化
                 {
                     "id": "teach_skill",
                     "run": [{
@@ -229,38 +229,33 @@ world.math_utils.hypot = calculate_hypotenuse
                         }
                     }]
                 },
-                # 步骤2: 调用函数，并添加【明确的依赖】
+                # 步骤2: 调用函数，并使用 `depends_on`
                 {
                     "id": "use_skill",
+                    # 【关键修正】明确声明依赖
+                    "depends_on": ["teach_skill"],
                     "run": [{
                         "runtime": "system.input",
-                        "config": {
-                            # 关键修正：添加 nodes.teach_skill 的引用来创建依赖边。
-                            # `if nodes.teach_skill is not None else 0` 是一个无害的引用。
-                            "value": "{{ world.math_utils.hypot(3, 4) if nodes.teach_skill is not None else 0 }}"
-                        }
+                        # 宏现在非常干净，只包含业务逻辑
+                        "config": {"value": "{{ world.math_utils.hypot(3, 4) }}"}
                     }]
                 },
-                # 步骤3: 模拟 LLM 返回代码字符串
+                # 步骤3: 模拟 LLM，无变化
                 {
                     "id": "llm_propose_change",
                     "run": [{
                         "runtime": "system.input",
-                        "config": {
-                            # 统一使用单引号，避免断言失败
-                            "value": "world.game_difficulty = 'hard'"
-                        }
+                        "config": {"value": "world.game_difficulty = 'hard'"}
                     }]
                 },
-                # 步骤4: 执行 LLM 代码，并添加【明确的依赖】
+                # 步骤4: 执行 LLM 代码，它已经有明确的宏依赖，无需 `depends_on`
                 {
                     "id": "execute_change",
+                    # 这里的依赖是自动推断的，所以 `depends_on` 不是必需的
+                    # 但为了演示，也可以添加： "depends_on": ["llm_propose_change"]
                     "run": [{
                         "runtime": "system.execute",
-                        "config": {
-                            # 关键修正：这里已经有对 nodes.llm_propose_change 的引用，所以依赖是正确的。
-                            "code": "{{ nodes.llm_propose_change.output }}"
-                        }
+                        "config": {"code": "{{ nodes.llm_propose_change.output }}"}
                     }]
                 }
             ]

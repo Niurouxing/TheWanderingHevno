@@ -69,12 +69,27 @@
 
 **执行流程示意：**
 ```
-                                        +---------------------+
-                                        |  Execution Engine   |
-(Old StateSnapshot) ------------------> | (State Transition)  | ------------------> (New StateSnapshot)
-  - world_state                         |                     |                       - world_state (updated)
-  - graph_collection                    |     run_graph()     |                       - graph_collection (possibly evolved)
-                                        +---------------------+
++---------------------------------------+
+|          (Old StateSnapshot)          |
+|  - world_state                        |
+|  - graph_collection                   |
++---------------------------------------+
+                   |
+                   |
+                   v
++---------------------------------------+
+|           Execution Engine            |
+|          (State Transition)           |
+|              run_graph()              |
++---------------------------------------+
+                   |
+                   |
+                   v
++---------------------------------------+
+|          (New StateSnapshot)          |
+|  - world_state (updated)              |
+|  - graph_collection (possibly evolved)|
++---------------------------------------+
 ```
 
 这种架构天然地带来了巨大的好处：
@@ -82,16 +97,46 @@
 2.  **健壮的并发与调试**: 不可变性消除了大量的并发问题，并使得追踪状态变化变得异常简单。
 3.  **动态的逻辑演化**: 因为图的定义本身也是状态的一部分，所以图可以被它自己执行的逻辑所修改（例如，一个指令可以更新 `world_state` 中存储的图定义），实现世界的“自我进化”。
 
-### 2.3 哲学三：约定优于配置，隐式推断依赖
+### 2.3 哲学三：约定与配置相结合，智能推断与明确声明并存
 
-> **"Be smart, so the user doesn't have to be."**
+> **"Be smart, but provide an escape hatch."**
 
-我们力求为图的创建者提供最流畅的体验，减少样板代码和手动配置。
+我们力求为图的创建者提供最流畅的体验，在大多数情况下，你无需关心节点间的连接。但我们也承认，在复杂场景下，明确性优于魔法。
 
-*   **无边图 (`Edgeless Graph`)**: 在我们的图定义中，你找不到 `edges` 字段。
-*   **宏引用即依赖**: 当一个节点的指令在其 `config` 中通过宏 `{{ nodes.A.output }}` 引用了另一个节点 `A` 时，引擎会自动建立一条从 `A` 到当前节点的执行依赖。
+*   **智能的依赖推断 (约定)**: 在我们的图定义中，你通常找不到 `edges` 字段。当一个节点的指令在其 `config` 中通过宏 `{{ nodes.A.output }}` 引用了另一个节点 `A` 时，引擎会自动建立一条从 `A` 到当前节点的执行依赖。这是我们的主要约定，能处理 90% 的场景。
 
-这种设计将开发者的精力从繁琐的工程细节中解放出来，让他们能专注于设计智能体的行为逻辑。
+*   **明确的依赖声明 (配置)**: 对于那些无法通过宏自动推断的**隐式依赖**（例如，一个节点通过副作用修改了 `world` 状态，而另一个节点依赖这个状态），我们提供了一个明确的 `depends_on` 字段。这让你可以在需要时精确控制执行顺序，消除竞态条件。
+
+**依赖推断示例:**
+```json
+// 节点 B 自动依赖节点 A，因为它的宏引用了 nodes.A
+{
+  "id": "B",
+  "run": [{
+    "runtime": "llm.default",
+    "config": { "prompt": "{{ f'基于A的结果: {nodes.A.output}' }}" }
+  }]
+}
+```
+
+**明确声明依赖示例:**
+```json
+// B 节点读取由 A 节点设置的世界变量，这是一种隐式依赖。
+// 我们使用 depends_on 来确保 A 在 B 之前执行。
+{
+  "id": "A_set_state",
+  "run": [{ "runtime": "system.set_world_var", "config": { "variable_name": "theme", "value": "fantasy" }}]
+},
+{
+  "id": "B_read_state",
+  "depends_on": ["A_set_state"],
+  "run": [{
+    "runtime": "llm.default",
+    "config": { "prompt": "{{ f'生成一个关于 {world.theme} 世界的故事。' }}" }
+  }]
+}
+```
+这种“约定为主，配置为辅”的设计，将开发者的精力从繁琐的工程细节中解放出来，同时在关键时刻给予他们完全的控制权。
 
 ---
 
@@ -123,12 +168,13 @@
 ```json
 {
   "id": "unique_node_id_within_graph",
+  "depends_on": ["another_node_id"],
   "run": [
     {
       "runtime": "runtime_name_A",
       "config": {
         "param1": "value1",
-        "param2": "{{ nodes.another_node.output }}" 
+        "param2": "{{ nodes.data_provider.output }}" 
       }
     },
     {
@@ -140,6 +186,9 @@
   ]
 }
 ```
+*   `id`: 节点在图内的唯一标识符。
+*   `run`: 一个**有序的**指令列表，定义节点的行为。
+*   `depends_on` (可选): 一个节点 ID 的列表。用于明确声明当前节点必须在列表中的所有节点成功执行后才能开始，解决了无法自动推断的隐式依赖问题。
 
 ### 3.3 Hevno 宏系统
 

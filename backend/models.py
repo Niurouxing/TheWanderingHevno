@@ -1,6 +1,6 @@
 # backend/models.py 
 from pydantic import BaseModel, Field, RootModel, field_validator
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional # <-- 导入 Optional
 
 class RuntimeInstruction(BaseModel):
     """
@@ -21,6 +21,10 @@ class GenericNode(BaseModel):
     run: List[RuntimeInstruction] = Field(
         ...,
         description="定义节点执行逻辑的有序指令列表。"
+    )
+    depends_on: Optional[List[str]] = Field(
+        default=None,
+        description="一个可选的列表，用于明确声明此节点在执行前必须等待的其他节点的ID。用于处理无法通过宏自动推断的隐式依赖。"
     )
 
 class GraphDefinition(BaseModel):
