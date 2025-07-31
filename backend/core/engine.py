@@ -110,16 +110,33 @@ class ExecutionEngine:
 
     async def _execute_graph(self, graph_def: GraphDefinition, context: ExecutionContext, inherited_inputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         run = GraphRun(context, graph_def)
+        task_queue = asyncio.Queue()
 
+        # --- 新增逻辑：处理继承的输入 ---
         if inherited_inputs:
             for node_id, result in inherited_inputs.items():
-                if node_id not in run.node_map:
-                    run.set_node_state(node_id, NodeState.SUCCEEDED)
-                    run.set_node_result(node_id, result)
+                # 将占位符节点的状态设置为 SUCCEEDED 并存储其结果
+                # 即使 node_id 不在 run.node_map 中，这也能正常工作
+                run.set_node_state(node_id, NodeState.SUCCEEDED)
+                run.set_node_result(node_id, result)
 
-        task_queue = asyncio.Queue()
+        # --- 修改后的逻辑：确定初始的 READY 节点 ---
+        # 扫描所有 PENDING 节点，看它们的依赖是否已经满足（包括被注入的依赖）
+        for node_id in run.get_nodes_in_state(NodeState.PENDING):
+            dependencies = run.get_dependencies(node_id)
+            if all(run.get_node_state(dep_id) == NodeState.SUCCEEDED for dep_id in dependencies):
+                run.set_node_state(node_id, NodeState.READY)
+
+        # 将所有初始状态为 READY 的节点（无论是无依赖还是依赖已满足）放入队列
         for node_id in run.get_nodes_in_state(NodeState.READY):
             await task_queue.put(node_id)
+        
+        if task_queue.empty() and not any(s in (NodeState.SUCCEEDED, NodeState.RUNNING) for s in run.node_states.values()):
+            # 如果队列为空且图中没有任何节点运行或成功，这可能意味着图是空的或无法启动
+             if not run.node_map:
+                 print("Graph is empty, finishing immediately.")
+             else:
+                 print("Warning: No nodes could be made ready to run in the graph.")
         
         workers = [asyncio.create_task(self._worker(f"worker-{i}", run, task_queue)) for i in range(self.num_workers)]
         
@@ -128,8 +145,10 @@ class ExecutionEngine:
             w.cancel()
         await asyncio.gather(*workers, return_exceptions=True)
         
+        # 返回所有已定义节点的最终状态
         final_states = {nid: run.get_node_result(nid) for nid in run.node_map if run.get_node_result(nid) is not None}
         return final_states
+
 
     async def _worker(self, name: str, run: 'GraphRun', queue: asyncio.Queue):
         while True:

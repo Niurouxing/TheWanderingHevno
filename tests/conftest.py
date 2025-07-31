@@ -14,7 +14,7 @@ from backend.core.engine import ExecutionEngine
 from backend.runtimes.base_runtimes import (
     InputRuntime, LLMRuntime, SetWorldVariableRuntime
 )
-from backend.runtimes.control_runtimes import ExecuteRuntime
+from backend.runtimes.control_runtimes import ExecuteRuntime, CallRuntime
 
 # ---------------------------------------------------------------------------
 # Fixtures for Core Components (Engine, Registry, API Client)
@@ -28,6 +28,7 @@ def populated_registry() -> RuntimeRegistry:
     registry.register("llm.default", LLMRuntime)
     registry.register("system.set_world_var", SetWorldVariableRuntime)
     registry.register("system.execute", ExecuteRuntime)
+    registry.register("system.call", CallRuntime)
     print("\n--- Populated Registry Created (Session Scope) ---")
     return registry
 
@@ -260,4 +261,177 @@ world.math_utils.hypot = calculate_hypotenuse
                 }
             ]
         }
+    })
+
+# ---------------------------------------------------------------------------
+# 用于测试 Subgraph Call 的 Fixtures
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def subgraph_call_collection() -> GraphCollection:
+    """
+    一个包含主图和可复用子图的集合，用于测试 system.call。
+    - main 图调用 process_item 子图。
+    - process_item 子图依赖一个名为 'item_input' 的占位符。
+    - process_item 子图还会读取 world 状态。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "data_provider",
+                    "run": [{"runtime": "system.input", "config": {"value": "Hello from main"}}]
+                },
+                {
+                    "id": "main_caller",
+                    "run": [{
+                        "runtime": "system.call",
+                        "config": {
+                            "graph": "process_item",
+                            "using": {
+                                "item_input": "{{ nodes.data_provider.output }}"
+                            }
+                        }
+                    }]
+                }
+            ]
+        },
+        "process_item": {
+            "nodes": [
+                {
+                    "id": "processor",
+                    "run": [{
+                        "runtime": "system.input",
+                        "config": {
+                            "value": "{{ f'Processed: {nodes.item_input.output} with world state: {world.global_setting}' }}"
+                        }
+                    }]
+                }
+            ]
+        }
+    })
+
+@pytest.fixture
+def nested_subgraph_collection() -> GraphCollection:
+    """一个测试嵌套调用的图：main -> sub1 -> sub2。"""
+    return GraphCollection.model_validate({
+        "main": {"nodes": [{
+            "id": "main_caller",
+            "run": [{"runtime": "system.call", "config": {"graph": "sub1", "using": {"input_from_main": "level 0"}}}]
+        }]},
+        "sub1": {"nodes": [{
+            "id": "sub1_caller",
+            "run": [{"runtime": "system.call", "config": {"graph": "sub2", "using": {"input_from_sub1": "{{ nodes.input_from_main.output }}"}}}]
+        }]},
+        "sub2": {"nodes": [{
+            "id": "final_processor",
+            "run": [{"runtime": "system.input", "config": {"value": "{{ f'Reached level 2 from: {nodes.input_from_sub1.output}' }}"}}]
+        }]}
+    })
+
+@pytest.fixture
+def subgraph_call_to_nonexistent_graph_collection() -> GraphCollection:
+    """一个尝试调用不存在子图的图，用于测试错误处理。"""
+    return GraphCollection.model_validate({
+        "main": {"nodes": [{
+            "id": "bad_caller",
+            "run": [{"runtime": "system.call", "config": {"graph": "i_do_not_exist"}}]
+        }]}
+    })
+
+@pytest.fixture
+def subgraph_modifies_world_collection() -> GraphCollection:
+    """
+    一个子图会修改 world 状态的集合。
+    - main 调用 modifier 子图。
+    - modifier 子图根据输入修改 world.counter。
+    - main 中的后续节点 reader 会读取这个被修改后的状态。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "caller",
+                    "run": [{"runtime": "system.call", "config": {"graph": "modifier", "using": {"amount": 10}}}]
+                },
+                {
+                    "id": "reader",
+                    # 这里的宏依赖会自动创建从 caller 到 reader 的依赖
+                    "run": [{
+                        "runtime": "system.input",
+                        "config": {"value": "{{ f'Final counter: {world.counter}, Subgraph raw output: {nodes.caller.output}' }}"}
+                    }]
+                }
+            ]
+        },
+        "modifier": {
+            "nodes": [
+                {
+                    "id": "incrementer",
+                    # 这是一个隐式依赖，我们用 depends_on 来确保执行顺序
+                    # 子图无法通过宏推断它依赖于父图设置的 world.counter
+                    # 但在这里，我们假设初始状态设置了 counter
+                    "run": [{
+                        "runtime": "system.execute",
+                        "config": {"code": "world.counter += nodes.amount.output"}
+                    }]
+                }
+            ]
+        }
+    })
+
+@pytest.fixture
+def subgraph_with_failure_collection() -> GraphCollection:
+    """
+    一个子图内部会失败的集合。
+    - main 调用 failing_subgraph。
+    - failing_subgraph 中的一个节点会因为宏错误而失败。
+    - main 中的后续节点 downstream_of_fail 应该被跳过。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "caller",
+                    "run": [{"runtime": "system.call", "config": {"graph": "failing_subgraph"}}]
+                },
+                {
+                    "id": "downstream_of_fail",
+                    "run": [{"runtime": "system.input", "config": {"value": "{{ nodes.caller.output }}"}}]
+                }
+            ]
+        },
+        "failing_subgraph": {
+            "nodes": [
+                {"id": "A_ok", "run": [{"runtime": "system.input", "config": {"value": "ok"}}]},
+                {"id": "B_fail", "run": [{"runtime": "system.input", "config": {"value": "{{ non_existent.var }}"}}]}
+            ]
+        }
+    })
+
+@pytest.fixture
+def dynamic_subgraph_call_collection() -> GraphCollection:
+    """
+    一个动态决定调用哪个子图的集合。
+    - main 根据 world.target_graph 的值来调用 sub_a 或 sub_b。
+    """
+    return GraphCollection.model_validate({
+        "main": {"nodes": [{
+            "id": "dynamic_caller",
+            "run": [{
+                "runtime": "system.call",
+                "config": {
+                    "graph": "{{ world.target_graph }}",
+                    "using": {"data": "dynamic data"}
+                }
+            }]
+        }]},
+        # 【关键修正】在子图内部使用正确的 f-string 宏格式
+        "sub_a": {"nodes": [{
+            "id": "processor_a",
+            "run": [{"runtime": "system.input", "config": {"value": "{{ f'Processed by A: {nodes.data.output}' }}"}}]
+        }]},
+        "sub_b": {"nodes": [{
+            "id": "processor_b",
+            "run": [{"runtime": "system.input", "config": {"value": "{{ f'Processed by B: {nodes.data.output}' }}"}}]
+        }]}
     })

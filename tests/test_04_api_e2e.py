@@ -76,3 +76,38 @@ class TestApiErrorHandling:
 
         response = test_client.put(f"/api/sandboxes/{nonexistent_id}/revert", params={"snapshot_id": uuid4()})
         assert response.status_code == 404
+
+
+class TestApiWithComplexGraphs:
+    """测试涉及更复杂图逻辑（如子图调用）的 API 端点。"""
+
+    def test_e2e_with_subgraph_call(self, test_client: TestClient, subgraph_call_collection: GraphCollection):
+        """
+        通过 API 端到端测试一个包含 system.call 的图。
+        """
+        # 1. 创建沙盒
+        response = test_client.post(
+            "/api/sandboxes",
+            params={"name": "E2E Subgraph Test"},
+            json={
+                "graph_collection": subgraph_call_collection.model_dump(),
+                "initial_state": {"global_setting": "Omega"}
+            }
+        )
+        assert response.status_code == 200
+        sandbox_id = response.json()["id"]
+
+        # 2. 执行一步
+        response = test_client.post(f"/api/sandboxes/{sandbox_id}/step", json={})
+        assert response.status_code == 200
+        
+        # 3. 验证结果
+        snapshot_data = response.json()
+        run_output = snapshot_data.get("run_output", {})
+        
+        assert "main_caller" in run_output
+        subgraph_output = run_output["main_caller"]["output"]
+        processor_output = subgraph_output["processor"]["output"]
+        
+        expected_str = "Processed: Hello from main with world state: Omega"
+        assert processor_output == expected_str

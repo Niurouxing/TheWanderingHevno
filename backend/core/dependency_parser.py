@@ -34,7 +34,6 @@ def build_dependency_graph(nodes: List[Dict[str, Any]]) -> Dict[str, Set[str]]:
     会合并从宏中自动推断的依赖和从 `depends_on` 字段中明确声明的依赖。
     """
     dependency_map: Dict[str, Set[str]] = {}
-    node_ids = {node['id'] for node in nodes}
 
     for node in nodes:
         node_id = node['id']
@@ -52,8 +51,7 @@ def build_dependency_graph(nodes: List[Dict[str, Any]]) -> Dict[str, Set[str]]:
         # 3. 合并两种依赖
         all_dependencies = auto_inferred_deps.union(explicit_deps)
         
-        # 4. 过滤掉不存在的节点ID
-        valid_dependencies = {dep for dep in all_dependencies if dep in node_ids}
-        dependency_map[node_id] = valid_dependencies
+        # 4. 不再过滤掉不存在的节点ID。这对于支持子图的输入占位符至关重要。
+        dependency_map[node_id] = all_dependencies
     
     return dependency_map

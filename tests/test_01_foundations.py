@@ -94,7 +94,12 @@ class TestDependencyParser:
         deps = build_dependency_graph(nodes)
         assert deps["A"] == set()
 
-    def test_dependency_on_nonexistent_node_is_ignored(self):
-        nodes = [{"id": "A", "run": [{"config": {"value": "{{ nodes.placeholder.val }}"}}]}]
+    def test_dependency_on_placeholder_node_is_preserved(self):
+        """
+        验证对图中不存在的节点（即子图的输入占位符）的依赖会被保留。
+        这对于 system.call 功能至关重要。
+        """
+        nodes = [{"id": "A", "run": [{"config": {"value": "{{ nodes.placeholder_input.val }}"}}]}]
         deps = build_dependency_graph(nodes)
-        assert deps["A"] == set()
+        # 之前这里断言 deps["A"] == set()，现在它必须保留依赖
+        assert deps["A"] == {"placeholder_input"}

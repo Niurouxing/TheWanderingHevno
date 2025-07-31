@@ -10,7 +10,7 @@ from backend.models import GraphCollection
 from backend.core.engine import ExecutionEngine
 from backend.core.registry import runtime_registry
 from backend.runtimes.base_runtimes import InputRuntime, LLMRuntime, SetWorldVariableRuntime
-from backend.runtimes.control_runtimes import ExecuteRuntime 
+from backend.runtimes.control_runtimes import ExecuteRuntime, CallRuntime
 from backend.core.state_models import Sandbox, SnapshotStore, StateSnapshot
 
 class CreateSandboxRequest(BaseModel):
@@ -22,13 +22,17 @@ def setup_application():
     app = FastAPI(
         title="Hevno Backend Engine",
         description="The core execution engine for Hevno project, supporting runtime-centric, sequential node execution.",
-        version="0.3.0-runtime-centric"
+        version="0.3.1-subgraph-call" 
     )
     
+    # 基础运行时
     runtime_registry.register("system.input", InputRuntime)
     runtime_registry.register("llm.default", LLMRuntime)
     runtime_registry.register("system.set_world_var", SetWorldVariableRuntime)
+    
+    # 控制流运行时
     runtime_registry.register("system.execute", ExecuteRuntime)
+    runtime_registry.register("system.call", CallRuntime)
     
     origins = ["http://localhost:5173"]
     app.add_middleware(
