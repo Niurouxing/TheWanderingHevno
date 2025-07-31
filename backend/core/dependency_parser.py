@@ -3,7 +3,6 @@ import re
 from typing import Set, Dict, Any, List
 
 # 正则表达式，用于匹配 {{...}} 宏内部的 `nodes.node_id` 模式
-# 它不再关心 `nodes.` 是否紧跟在 `{{` 之后。
 NODE_DEP_REGEX = re.compile(r'nodes\.([a-zA-Z0-9_]+)')
 
 def extract_dependencies_from_string(s: str) -> Set[str]:
@@ -25,8 +24,6 @@ def extract_dependencies_from_value(value: Any) -> Set[str]:
             deps.update(extract_dependencies_from_value(item))
     elif isinstance(value, dict):
         for k, v in value.items():
-            # 递归地检查 key 和 value
-            # 注意：在真实的JSON中，key不可能是宏。但为了稳健，还是检查。
             deps.update(extract_dependencies_from_value(k))
             deps.update(extract_dependencies_from_value(v))
     return deps
@@ -34,22 +31,23 @@ def extract_dependencies_from_value(value: Any) -> Set[str]:
 def build_dependency_graph(nodes: List[Dict[str, Any]]) -> Dict[str, Set[str]]:
     """
     根据节点列表自动构建依赖图。
-    
-    返回一个字典，key 是节点ID，value 是其依赖的节点ID集合。
+    新版本从节点的 `run` 指令列表中提取依赖。
     """
     dependency_map: Dict[str, Set[str]] = {}
     node_ids = {node['id'] for node in nodes}
 
     for node in nodes:
         node_id = node['id']
-        node_data = node.get('data', {})
-        
-        # 递归地从节点的整个 data 负载中提取依赖
-        dependencies = extract_dependencies_from_value(node_data)
+        all_dependencies = set()
+
+        # 遍历节点 `run` 列表中的每个指令
+        for instruction in node.get('run', []):
+            instruction_config = instruction.get('config', {})
+            dependencies = extract_dependencies_from_value(instruction_config)
+            all_dependencies.update(dependencies)
         
         # 过滤掉不存在的节点ID，这可能是子图的输入占位符
-        valid_dependencies = {dep for dep in dependencies if dep in node_ids}
-        
+        valid_dependencies = {dep for dep in all_dependencies if dep in node_ids}
         dependency_map[node_id] = valid_dependencies
     
     return dependency_map

@@ -1,28 +1,30 @@
-# backend/models.py
-from pydantic import BaseModel, Field, field_validator, RootModel
+# backend/models.py 
+from pydantic import BaseModel, Field, RootModel
 from typing import List, Dict, Any
 
-class GenericNode(BaseModel):
-    id: str
-    data: Dict[str, Any] = Field(
-        ...,
-        description="节点的核心配置。如果提供了 'runtime' 字段，它将指定执行器。"
+class RuntimeInstruction(BaseModel):
+    """
+    一个运行时指令，封装了运行时名称及其隔离的配置。
+    这是节点执行逻辑的基本单元。
+    """
+    runtime: str
+    config: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="该运行时专属的、隔离的配置字典。"
     )
 
-    @field_validator('data')
-    @classmethod
-    def check_runtime_if_exists(cls, v: Dict[str, Any]) -> Dict[str, Any]:
-        # 3. 修改验证器逻辑：只在 'runtime' 存在时检查它
-        if 'runtime' in v:
-            runtime_value = v['runtime']
-            if not (isinstance(runtime_value, str) or 
-                    (isinstance(runtime_value, list) and all(isinstance(item, str) for item in runtime_value))):
-                raise ValueError("'runtime' must be a string or a list of strings.")
-        # 如果 'runtime' 不存在，则节点是有效的，直接返回
-        return v
-
+class GenericNode(BaseModel):
+    """
+    节点模型，现在以一个有序的运行时指令列表为核心。
+    """
+    id: str
+    run: List[RuntimeInstruction] = Field(
+        ...,
+        description="定义节点执行逻辑的有序指令列表。"
+    )
 
 class GraphDefinition(BaseModel):
+    """图定义，包含一个节点列表。"""
     nodes: List[GenericNode]
 
 class GraphCollection(RootModel[Dict[str, GraphDefinition]]):
@@ -34,7 +36,7 @@ class GraphCollection(RootModel[Dict[str, GraphDefinition]]):
     @field_validator('root')
     @classmethod
     def check_main_graph_exists(cls, v: Dict[str, GraphDefinition]) -> Dict[str, GraphDefinition]:
-        """验证器现在作用于 'root' 字段，即模型本身。"""
+        """验证器，确保存在一个 'main' 图作为入口点。"""
         if "main" not in v:
             raise ValueError("A 'main' graph must be defined as the entry point.")
         return v

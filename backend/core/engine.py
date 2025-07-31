@@ -1,3 +1,4 @@
+# backend/core/engine.py
 import asyncio
 from enum import Enum, auto
 from typing import Dict, Any, Set, List, Optional
@@ -9,6 +10,7 @@ from backend.core.dependency_parser import build_dependency_graph
 from backend.core.registry import RuntimeRegistry
 from backend.core.evaluation import build_evaluation_context, evaluate_data
 from backend.core.types import ExecutionContext
+from backend.core.runtime import RuntimeInterface # 显式导入
 
 
 class NodeState(Enum):
@@ -29,6 +31,7 @@ class GraphRun:
             raise ValueError("GraphRun must be initialized with a valid GraphDefinition.")
         self.node_map: Dict[str, GenericNode] = {n.id: n for n in self.graph_def.nodes}
         self.node_states: Dict[str, NodeState] = {}
+        # 使用新的模型结构进行依赖解析
         self.dependencies: Dict[str, Set[str]] = build_dependency_graph(
             [node.model_dump() for node in self.graph_def.nodes]
         )
@@ -94,144 +97,68 @@ class ExecutionEngine:
         self.num_workers = num_workers
 
     async def step(self, initial_snapshot, triggering_input: Dict[str, Any] = None):
-        """
-        公开的入口点：执行一个完整的步骤，从一个快照到下一个。
-        职责：创建顶层执行上下文，调用核心图执行逻辑。
-        """
-        if triggering_input is None:
-            triggering_input = {}
-        
-        # 1. 创建顶层上下文
+        if triggering_input is None: triggering_input = {}
         context = ExecutionContext.from_snapshot(initial_snapshot, {"trigger_input": triggering_input})
-        
-        # 2. 获取入口图
         main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
-        if not main_graph_def:
-            raise ValueError("'main' graph not found in the initial snapshot.")
-
-        # 3. 调用可重入的图执行器
+        if not main_graph_def: raise ValueError("'main' graph not found.")
+        
         final_node_states = await self._execute_graph(main_graph_def, context)
 
-        # 4. 创建下一个快照
-        next_snapshot = context.to_next_snapshot(
-            final_node_states=final_node_states,
-            triggering_input=triggering_input
-        )
+        next_snapshot = context.to_next_snapshot(final_node_states, triggering_input)
         print(f"Step complete. New snapshot {next_snapshot.id} created.")
         return next_snapshot
 
-    async def _execute_graph(
-        self, 
-        graph_def: GraphDefinition, 
-        context: ExecutionContext,
-        inherited_inputs: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """
-        核心的、可重入的图执行逻辑。
-        它可以被 step() 调用，也可以被 map/call 运行时递归调用。
-
-        :param graph_def: 要执行的图的定义。
-        :param context: 共享的、可变的执行上下文。
-        :param inherited_inputs: 从父图（例如 map/call 节点）注入的虚拟节点结果。
-        :return: 此图执行完毕后所有节点的状态字典。
-        """
+    async def _execute_graph(self, graph_def: GraphDefinition, context: ExecutionContext, inherited_inputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         run = GraphRun(context, graph_def)
 
-        # 这是实现 "输入占位符" 的关键！
-        # 在图开始执行前，将继承的输入作为已成功的虚拟节点注入状态。
         if inherited_inputs:
             for node_id, result in inherited_inputs.items():
-                # 假设这些虚拟节点都是成功的
-                run.set_node_result(node_id, result)
-                # 注意：我们不需要在 GraphRun 的 node_states 中设置它们的状态，
-                # 因为它们不是真正的待执行节点。依赖它们
-                # 的节点在检查依赖状态时，只会检查 context.node_states 中是否有结果。
-                # 修正：为了让依赖检查更严谨，我们需要让下游节点认为占位符已经“成功”。
-                # 一个简单的策略是直接注入结果，并在依赖检查时只关心结果是否存在。
-                # 让我们检查一下 _process_subscribers 的逻辑...
-                # if run.get_node_state(dep_id) != NodeState.SUCCEEDED:
-                # 啊哈，它确实检查 SUCCEEDED 状态。所以我们需要一个更好的策略。
-
-                # --- 更好的策略 ---
-                # 我们不在 GraphRun 中伪造状态，而是在 context 中预填充结果。
-                # 依赖检查逻辑需要稍微调整，或者我们可以把占位符也加入到 node_map 和 node_states 中。
-                # 最干净的方式是：在创建 GraphRun 时，就告诉它哪些是输入占位符。
-                # 但为了不改动太多，让我们采用一个简单策略：
-                # 在 `_process_subscribers` 中，如果一个依赖 `dep_id` 不在 `run.node_states` 中，
-                # 但在 `run.context.node_states` 中有结果，就认为它是成功的。
-                # 当前的实现不完全支持，所以我们先用注入结果的方式，后续 MapRuntime 再看如何处理。
-                # 最简单的，还是在 GraphRun 中处理：
-                if node_id not in run.node_map: # 确保它是个真正的占位符
+                if node_id not in run.node_map:
                     run.set_node_state(node_id, NodeState.SUCCEEDED)
                     run.set_node_result(node_id, result)
 
-        
         task_queue = asyncio.Queue()
         for node_id in run.get_nodes_in_state(NodeState.READY):
             await task_queue.put(node_id)
         
-        workers = [
-            asyncio.create_task(self._worker(f"worker-{i}", run, task_queue))
-            for i in range(self.num_workers)
-        ]
+        workers = [asyncio.create_task(self._worker(f"worker-{i}", run, task_queue)) for i in range(self.num_workers)]
         
         await task_queue.join()
         for w in workers:
             w.cancel()
         await asyncio.gather(*workers, return_exceptions=True)
         
-        # 返回此子图执行的最终节点状态
-        # 这里需要注意：我们应该只返回此 graph_def 中定义的节点的结果
-        final_states = {
-            node_id: run.get_node_result(node_id)
-            for node_id in run.node_map
-            if run.get_node_result(node_id) is not None
-        }
+        final_states = {nid: run.get_node_result(nid) for nid in run.node_map if run.get_node_result(nid) is not None}
         return final_states
 
     async def _worker(self, name: str, run: 'GraphRun', queue: asyncio.Queue):
-        """工作者协程，从队列中获取并处理节点。"""
         while True:
             try:
                 node_id = await queue.get()
                 print(f"[{name}] Picked up node: {node_id}")
-
                 node = run.get_node(node_id)
                 context = run.get_execution_context()
-                
                 run.set_node_state(node_id, NodeState.RUNNING)
                 
                 try:
                     output = await self._execute_node(node, context)
-                    
-                    # 检查返回的 output 是否是一个我们定义的错误结构
                     if isinstance(output, dict) and "error" in output:
-                        # 这是 _execute_node 内部捕获并返回的错误（例如，管道失败）
                         print(f"[{name}] Node {node_id} FAILED (internally): {output['error']}")
                         run.set_node_result(node_id, output)
                         run.set_node_state(node_id, NodeState.FAILED)
                     else:
-                        # 这是正常的成功执行
                         run.set_node_result(node_id, output)
                         run.set_node_state(node_id, NodeState.SUCCEEDED)
                         print(f"[{name}] Node {node_id} SUCCEEDED.")
-
-                    # 无论成功或内部失败，都通知下游节点
                     self._process_subscribers(node_id, run, queue)
-
                 except Exception as e:
-                    # 这是 _execute_node 执行期间发生的意外异常
                     error_message = f"Unexpected error in worker for node {node_id}: {e}"
                     print(f"[{name}] Node {node_id} FAILED (unexpectedly): {error_message}")
                     run.set_node_result(node_id, {"error": error_message})
                     run.set_node_state(node_id, NodeState.FAILED)
-                    
-                    # 同样通知下游节点
                     self._process_subscribers(node_id, run, queue)
-
                 finally:
                     queue.task_done()
-            
             except asyncio.CancelledError:
                 print(f"[{name}] shutting down.")
                 break
@@ -239,88 +166,60 @@ class ExecutionEngine:
     def _process_subscribers(self, completed_node_id: str, run: 'GraphRun', queue: asyncio.Queue):
         completed_node_state = run.get_node_state(completed_node_id)
         for sub_id in run.get_subscribers(completed_node_id):
-            if run.get_node_state(sub_id) != NodeState.PENDING:
-                continue
+            if run.get_node_state(sub_id) != NodeState.PENDING: continue
             if completed_node_state == NodeState.FAILED:
                 run.set_node_state(sub_id, NodeState.SKIPPED)
-                # 为下游节点记录跳过的原因
-                run.set_node_result(sub_id, {
-                    "status": "skipped",
-                    "reason": f"Upstream failure of node {completed_node_id}."
-                })
+                run.set_node_result(sub_id, {"status": "skipped", "reason": f"Upstream failure of node {completed_node_id}."})
                 self._process_subscribers(sub_id, run, queue)
                 continue
-            is_ready = True
-            for dep_id in run.get_dependencies(sub_id):
-                if run.get_node_state(dep_id) != NodeState.SUCCEEDED:
-                    is_ready = False
-                    break
+            is_ready = all(run.get_node_state(dep_id) == NodeState.SUCCEEDED for dep_id in run.get_dependencies(sub_id))
             if is_ready:
                 run.set_node_state(sub_id, NodeState.READY)
                 queue.put_nowait(sub_id)
 
-
+    # --- THE CORE REFACTORED METHOD ---
     async def _execute_node(self, node: GenericNode, context: ExecutionContext) -> Dict[str, Any]:
         """
-        【新架构】执行单个节点，支持阶段性宏求值和运行时管道。
+        【新】按顺序执行节点内的运行时指令，在每一步之前进行宏求值。
         """
         node_id = node.id
-        
-        # 1. 准备初始数据和运行时列表
-        initial_data = node.data.copy()
-        runtime_spec = initial_data.pop("runtime", None)
-        
-        # 处理没有 runtime 的节点 (纯宏节点)
-        if not runtime_spec:
-            print(f"[{node_id}] Pre-processing a runtime-less node...")
-            # 即使没有 runtime，也需要进行一次宏预处理
-            eval_context = build_evaluation_context(context)
+        print(f"Executing node: {node_id}")
+
+        # pipeline_state 在指令间传递和累积
+        pipeline_state: Dict[str, Any] = {}
+
+        if not node.run:
+            print(f"Node {node_id} has no run instructions, finishing.")
+            return {}
+
+        for i, instruction in enumerate(node.run):
+            runtime_name = instruction.runtime
+            print(f"  - Step {i+1}/{len(node.run)}: Running runtime '{runtime_name}'")
+            
             try:
-                processed_data = await evaluate_data(initial_data, eval_context)
-                print(f"[{node_id}] Runtime-less node pre-processing complete.")
-                return processed_data
-            except Exception as e:
-                error_message = f"Macro evaluation failed for runtime-less node {node_id}: {e}"
-                print(f"  - Error: {error_message}")
-                return {"error": error_message, "failed_step": "pre-processing"}
+                # 1. 对当前指令的 config 进行宏求值
+                eval_context = build_evaluation_context(context)
+                processed_config = await evaluate_data(instruction.config, eval_context)
 
-        # 处理有 runtime 的节点
-        runtime_names = [runtime_spec] if isinstance(runtime_spec, str) else runtime_spec
-        print(f"Executing node: {node_id} with runtime pipeline: {runtime_names}")
-
-        # 2. 初始化管道变量 (pipe)
-        # 它的初始状态是节点 data 中除了 'runtime' 之外的所有静态值
-        pipe_vars = initial_data.copy()
-
-        # 3. 按顺序迭代运行时管道
-        for i, runtime_name in enumerate(runtime_names):
-            print(f"  - Step {i+1}/{len(runtime_names)}: Running runtime '{runtime_name}'")
-            try:
-                # 4. 【核心变更】步骤级宏求值
-                #    a. 构建包含 pipe 变量的当前步骤的求值上下文
-                eval_context = build_evaluation_context(context, pipe_vars)
-
-                #    b. 对整个 pipe_vars 进行宏求值，得到当前 runtime 的输入
-                #       这允许 runtime 的参数引用之前步骤的结果，例如 `{{ pipe.previous_output }}`
-                evaluated_step_input = await evaluate_data(pipe_vars, eval_context)
-                
-                # 5. 执行当前步骤的 runtime
+                # 2. 获取运行时实例
                 runtime: RuntimeInterface = self.registry.get_runtime(runtime_name)
-                runtime_output = await runtime.execute(
-                    step_input=evaluated_step_input,
+                
+                # 3. 执行运行时
+                output = await runtime.execute(
+                    config=processed_config,
+                    pipeline_state=pipeline_state,
                     context=context,
-                    # 传递额外信息供高级 runtime 使用
                     node=node,
                     engine=self
                 )
                 
-                if not isinstance(runtime_output, dict):
-                    error_message = f"Runtime '{runtime_name}' did not return a dictionary. Returned: {type(output).__name__}"
+                if not isinstance(output, dict):
+                    error_message = f"Runtime '{runtime_name}' did not return a dictionary. Got: {type(output).__name__}"
                     print(f"  - Error in pipeline: {error_message}")
                     return {"error": error_message, "failed_step": i, "runtime": runtime_name}
 
-                # 6. 更新管道变量
-                pipe_vars.update(runtime_output)
+                # 4. 更新管道状态，为下一个指令做准备
+                pipeline_state.update(output)
 
             except Exception as e:
                 import traceback
@@ -330,5 +229,4 @@ class ExecutionEngine:
                 return {"error": error_message, "failed_step": i, "runtime": runtime_name}
 
         print(f"Node {node_id} pipeline finished successfully.")
-        # 7. 返回最终的管道状态作为节点结果
-        return pipe_vars
+        return pipeline_state

@@ -88,7 +88,7 @@ def main(directory, output_file="code_collection.md"):
 
 if __name__ == "__main__":
     # Example usage: replace with your directory path
-    directory_path = "./tests"  # Adjust this path as needed
+    directory_path = "./backend"  # Adjust this path as needed
     output_path = "code_collection.md"
     result = main(directory_path, output_path)
     print(result)

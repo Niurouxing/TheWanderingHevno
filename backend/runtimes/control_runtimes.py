@@ -8,15 +8,11 @@ class ExecuteRuntime(RuntimeInterface):
     一个特殊的运行时，用于二次执行代码。
     它接收一个 'code' 字段，并对其内容进行求值。
     """
-    async def execute(self, **kwargs) -> Dict[str, Any]:
-        step_input = kwargs.get("step_input", {})
+    async def execute(self, config: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         context = kwargs.get("context")
-
-        code_to_execute = step_input.get("code")
+        code_to_execute = config.get("code")
 
         if not isinstance(code_to_execute, str):
-            # 如果 code 字段不是字符串 (可能是 None 或其他类型)，
-            # 我们可以选择静默返回或抛出错误。这里选择静默。
             return {"output": code_to_execute}
 
         # 构建当前的执行上下文
@@ -27,4 +23,4 @@ class ExecuteRuntime(RuntimeInterface):
 
         return {"output": result}
 
-# 未来，system.map 和 system.call 也可以移到这里。
+# 未来，system.map 和 system.call 也将放在这里
