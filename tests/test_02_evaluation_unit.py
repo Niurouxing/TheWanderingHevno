@@ -9,6 +9,7 @@ from backend.core.evaluation import (
 from backend.core.types import ExecutionContext
 from backend.core.state_models import StateSnapshot
 from backend.models import GraphCollection
+# 【修改】导入新的运行时
 from backend.runtimes.base_runtimes import SetWorldVariableRuntime
 from backend.runtimes.control_runtimes import ExecuteRuntime
 
@@ -95,6 +96,8 @@ class TestRecursiveEvaluation:
 @pytest.mark.asyncio
 class TestRuntimesWithMacros:
     """对每个运行时进行独立的单元测试，假设宏预处理已完成。"""
+
+    # 【关键修改】更新 execute 方法的调用签名
     async def test_set_world_variable_runtime(self, mock_exec_context: ExecutionContext):
         runtime = SetWorldVariableRuntime()
         assert "new_var" not in mock_exec_context.world_state
@@ -102,18 +105,26 @@ class TestRuntimesWithMacros:
         await runtime.execute(
             config={"variable_name": "new_var", "value": "is_set"},
             context=mock_exec_context
+            # 其他可选参数 (subgraph_runner, pipeline_state) 在这里是 None
         )
         assert mock_exec_context.world_state["new_var"] == "is_set"
 
+    # 【关键修改】更新 execute 方法的调用签名
     async def test_execute_runtime(self, mock_exec_context: ExecutionContext):
         runtime = ExecuteRuntime()
         assert mock_exec_context.world_state["hp"] == 100
         code_str = "world.hp -= 25"
-        await runtime.execute(config={"code": code_str}, context=mock_exec_context)
+        await runtime.execute(
+            config={"code": code_str}, 
+            context=mock_exec_context
+        )
         assert mock_exec_context.world_state["hp"] == 75
 
         code_str_with_return = "f'New HP is {world.hp}'"
-        result = await runtime.execute(config={"code": code_str_with_return}, context=mock_exec_context)
+        result = await runtime.execute(
+            config={"code": code_str_with_return}, 
+            context=mock_exec_context
+        )
         assert result == {"output": "New HP is 75"}
 
 

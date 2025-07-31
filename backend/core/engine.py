@@ -8,8 +8,8 @@ from backend.models import GraphCollection, GraphDefinition, GenericNode
 from backend.core.dependency_parser import build_dependency_graph
 from backend.core.registry import RuntimeRegistry
 from backend.core.evaluation import build_evaluation_context, evaluate_data
-from backend.core.types import ExecutionContext
-from backend.core.runtime import RuntimeInterface
+
+from backend.core.interfaces import ExecutionContext,RuntimeInterface, SubGraphRunner
 
 class NodeState(Enum):
     PENDING = auto()
@@ -85,7 +85,8 @@ class GraphRun:
     def get_final_node_states(self) -> Dict[str, Any]:
         return self.context.node_states
 
-class ExecutionEngine:
+# ExecutionEngine 现在实现了 SubGraphRunner 接口
+class ExecutionEngine(SubGraphRunner):
     def __init__(self, registry: RuntimeRegistry, num_workers: int = 5):
         self.registry = registry
         self.num_workers = num_workers
@@ -95,11 +96,33 @@ class ExecutionEngine:
         context = ExecutionContext.from_snapshot(initial_snapshot, {"trigger_input": triggering_input})
         main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
         if not main_graph_def: raise ValueError("'main' graph not found.")
-        final_node_states = await self._execute_graph(main_graph_def, context)
+        # 调用 _execute_graph 时，现在使用的是 self.execute_graph 的一个别名
+        final_node_states = await self._internal_execute_graph(main_graph_def, context)
         next_snapshot = context.to_next_snapshot(final_node_states, triggering_input)
         return next_snapshot
 
-    async def _execute_graph(self, graph_def: GraphDefinition, context: ExecutionContext, inherited_inputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # --- 实现 SubGraphRunner 接口 ---
+    async def execute_graph(
+        self,
+        graph_name: str,
+        context: ExecutionContext,
+        inherited_inputs: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """这是暴露给运行时的公共接口。"""
+        graph_collection = context.initial_snapshot.graph_collection.root
+        graph_def = graph_collection.get(graph_name)
+        if not graph_def:
+            raise ValueError(f"Graph '{graph_name}' not found.")
+        
+        return await self._internal_execute_graph(
+            graph_def=graph_def,
+            context=context,
+            inherited_inputs=inherited_inputs
+        )
+
+    # 我们将原来的 _execute_graph 重命名为 _internal_execute_graph
+    # 以区分公共接口和内部实现
+    async def _internal_execute_graph(self, graph_def: GraphDefinition, context: ExecutionContext, inherited_inputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         run = GraphRun(context, graph_def)
         task_queue = asyncio.Queue()
 
@@ -185,30 +208,44 @@ class ExecutionEngine:
         for i, instruction in enumerate(node.run):
             runtime_name = instruction.runtime
             try:
+                
                 eval_context = build_evaluation_context(context, pipe_vars=pipeline_state)
                 config_to_process = instruction.config.copy()
-                using_template = None
-                collect_template = None
-                if runtime_name == "system.map":
-                    using_template = config_to_process.pop('using', {})
-                    collect_template = config_to_process.pop('collect', None)
+
+                runtime_instance: RuntimeInterface = self.registry.get_runtime(runtime_name)
+
+                # --- 【解耦重构】根据运行时声明的模板字段来处理延迟求值 ---
+                templates = {}
+                # 检查运行时是否定义了 template_fields 属性
+                template_fields = getattr(runtime_instance, 'template_fields', [])
+                for field in template_fields:
+                    if field in config_to_process:
+                        templates[field] = config_to_process.pop(field)
+
+                # --- 【关键修正】在这里添加 await ---
                 processed_config = await evaluate_data(config_to_process, eval_context)
-                if runtime_name == "system.map":
-                    processed_config['using'] = using_template
-                    processed_config['collect'] = collect_template
-                runtime: RuntimeInterface = self.registry.get_runtime(runtime_name)
-                output = await runtime.execute(
+
+                # 将之前暂存的模板字段加回去
+                if templates:
+                    processed_config.update(templates)
+
+                # --- 将 self 作为 SubGraphRunner 传递 ---
+                output = await runtime_instance.execute(
                     config=processed_config,
-                    pipeline_state=pipeline_state,
                     context=context,
-                    node=node,
-                    engine=self
+                    subgraph_runner=self,
+                    pipeline_state=pipeline_state
                 )
+                
                 if not isinstance(output, dict):
                     error_message = f"Runtime '{runtime_name}' did not return a dictionary. Got: {type(output).__name__}"
                     return {"error": error_message, "failed_step": i, "runtime": runtime_name}
                 pipeline_state.update(output)
             except Exception as e:
+                # 打印详细的错误信息以便调试
+                import traceback
+                print(f"Error in node {node_id}, step {i} ({runtime_name}): {type(e).__name__}: {e}")
+                traceback.print_exc()
                 error_message = f"Failed at step {i+1} ('{runtime_name}'): {type(e).__name__}: {e}"
                 return {"error": error_message, "failed_step": i, "runtime": runtime_name}
         return pipeline_state

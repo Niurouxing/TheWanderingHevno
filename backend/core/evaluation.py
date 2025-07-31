@@ -35,13 +35,20 @@ def build_evaluation_context(
     """
     从 ExecutionContext 和可选的管道变量构建一个扁平的字典，用作宏的执行环境。
     """
+    # --- 【关键修正】---
+    # 检查是否存在一个权威的 world_state 引用
+    authoritative_world_state = exec_context.internal_vars.get(
+        '__world_state_override__', 
+        exec_context.world_state  # 如果没有，则使用上下文自己的
+    )
+
     context = {
         **PRE_IMPORTED_MODULES,
-        "world": DotAccessibleDict(exec_context.world_state),
+        # 使用权威的 world_state
+        "world": DotAccessibleDict(authoritative_world_state),
         "nodes": DotAccessibleDict(exec_context.node_states),
         "run": DotAccessibleDict(exec_context.run_vars),
         "session": DotAccessibleDict(exec_context.session_info),
-        # --- 新增：将内部变量（包括锁）传递给上下文 ---
         "__internal__": exec_context.internal_vars
     }
     if pipe_vars is not None:

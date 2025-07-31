@@ -198,9 +198,12 @@ class TestEngineSubgraphExecution:
         bad_caller_result = output["bad_caller"]
         
         assert "error" in bad_caller_result
-        assert "Subgraph 'i_do_not_exist' not found" in bad_caller_result["error"]
-        assert bad_caller_result["failed_step"] == 0
-        assert bad_caller_result["runtime"] == "system.call"
+        
+        # --- 【关键修正】---
+        # 更新断言以匹配更详细的错误消息格式
+        error_message = bad_caller_result["error"]
+        assert "Failed at step 1 ('system.call')" in error_message
+        assert "ValueError: Graph 'i_do_not_exist' not found" in error_message
 
     async def test_subgraph_can_modify_world_state(self, test_engine: ExecutionEngine, subgraph_modifies_world_collection: GraphCollection):
         """
