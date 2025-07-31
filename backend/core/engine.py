@@ -198,7 +198,7 @@ class ExecutionEngine:
             
             try:
                 # 1. 对当前指令的 config 进行宏求值
-                eval_context = build_evaluation_context(context)
+                eval_context = build_evaluation_context(context, pipe_vars=pipeline_state)
                 processed_config = await evaluate_data(instruction.config, eval_context)
 
                 # 2. 获取运行时实例

@@ -1,5 +1,5 @@
 # backend/models.py 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, Field, RootModel, field_validator
 from typing import List, Dict, Any
 
 class RuntimeInstruction(BaseModel):
