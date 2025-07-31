@@ -10,11 +10,10 @@ from backend.models import GraphCollection
 from backend.core.engine import ExecutionEngine
 from backend.core.registry import runtime_registry
 from backend.runtimes.base_runtimes import InputRuntime, LLMRuntime, SetWorldVariableRuntime
-from backend.runtimes.control_runtimes import ExecuteRuntime, CallRuntime
+from backend.runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
 from backend.core.state_models import Sandbox, SnapshotStore, StateSnapshot
 
 class CreateSandboxRequest(BaseModel):
-    # 此处引用了新的 GraphCollection 模型，FastAPI 会自动使用新的验证规则
     graph_collection: GraphCollection
     initial_state: Optional[Dict[str, Any]] = None
 
@@ -22,7 +21,7 @@ def setup_application():
     app = FastAPI(
         title="Hevno Backend Engine",
         description="The core execution engine for Hevno project, supporting runtime-centric, sequential node execution.",
-        version="0.3.1-subgraph-call" 
+        version="0.3.2-map-runtime" # 版本号更新
     )
     
     # 基础运行时
@@ -33,6 +32,7 @@ def setup_application():
     # 控制流运行时
     runtime_registry.register("system.execute", ExecuteRuntime)
     runtime_registry.register("system.call", CallRuntime)
+    runtime_registry.register("system.map", MapRuntime)
     
     origins = ["http://localhost:5173"]
     app.add_middleware(
@@ -95,5 +95,3 @@ async def revert_sandbox_to_snapshot(sandbox_id: UUID, snapshot_id: UUID):
 @app.get("/")
 def read_root():
     return {"message": "Hevno Backend is running on runtime-centric architecture!"}
-
-# 注意: `user_input` 在 `execute_sandbox_step` 中改用 Body(...) 以符合 FastAPI 的最佳实践

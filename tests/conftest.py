@@ -14,7 +14,7 @@ from backend.core.engine import ExecutionEngine
 from backend.runtimes.base_runtimes import (
     InputRuntime, LLMRuntime, SetWorldVariableRuntime
 )
-from backend.runtimes.control_runtimes import ExecuteRuntime, CallRuntime
+from backend.runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
 
 # ---------------------------------------------------------------------------
 # Fixtures for Core Components (Engine, Registry, API Client)
@@ -29,6 +29,7 @@ def populated_registry() -> RuntimeRegistry:
     registry.register("system.set_world_var", SetWorldVariableRuntime)
     registry.register("system.execute", ExecuteRuntime)
     registry.register("system.call", CallRuntime)
+    registry.register("system.map", MapRuntime)
     print("\n--- Populated Registry Created (Session Scope) ---")
     return registry
 
@@ -470,4 +471,160 @@ for i in range({increment_loop_count}):
                 "run": [{"runtime": "system.input", "config": {"value": "{{ world.counter }}"}}]
             }
         ]}
+    })
+
+@pytest.fixture
+def map_collection_basic() -> GraphCollection:
+    """
+    一个基本的 system.map 测试集合。
+    - main 图提供一个角色列表。
+    - main 图使用 system.map 调用 process_character 子图处理每个角色。
+    - process_character 子图接收一个 character_input 和一个 global_story_setting。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "character_provider",
+                    "run": [{"runtime": "system.input", "config": {"value": ["Aragorn", "Gandalf", "Legolas"]}}]
+                },
+                {
+                    "id": "global_setting_provider",
+                    "run": [{"runtime": "system.input", "config": {"value": "The Fellowship of the Ring"}}]
+                },
+                {
+                    "id": "character_processor_map",
+                    "run": [{
+                        "runtime": "system.map",
+                        "config": {
+                            "list": "{{ nodes.character_provider.output }}",
+                            "graph": "process_character",
+                            "using": {
+                                "character_input": "{{ source.item }}",
+                                "global_story_setting": "{{ nodes.global_setting_provider.output }}",
+                                "character_index": "{{ source.index }}"
+                            }
+                        }
+                    }]
+                }
+            ]
+        },
+        "process_character": {
+            "nodes": [
+                {
+                    "id": "generate_bio",
+                    "run": [{
+                        "runtime": "llm.default",
+                        "config": {
+                            "prompt": "{{ f'Create a bio for {nodes.character_input.output} in the context of {nodes.global_story_setting.output}. Index: {nodes.character_index.output}' }}"
+                        }
+                    }]
+                }
+            ]
+        }
+    })
+
+
+@pytest.fixture
+def map_collection_with_collect(map_collection_basic: GraphCollection) -> GraphCollection:
+    """
+    一个测试 system.map 的 `collect` 功能的集合。
+    - 它只从每个子图执行中提取 `summary` 字段，最终输出一个扁平的字符串列表。
+    """
+    # 【修正】通过参数接收 fixture，而不是直接调用
+    base_data = map_collection_basic.model_dump()
+    
+    map_instruction = base_data["main"]["nodes"][2]["run"][0]
+    # 添加 collect 字段
+    map_instruction["config"]["collect"] = "{{ nodes.generate_bio.summary }}"
+    
+    return GraphCollection.model_validate(base_data)
+
+
+@pytest.fixture
+def map_collection_concurrent_write() -> GraphCollection:
+    """
+    一个测试在 map 内部并发修改 world_state 的集合。
+    - 每个子图实例都会给 world.gold 增加10。
+    - 如果没有原子锁，最终结果会因为竞态条件而不确定。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "task_provider",
+                    "run": [{"runtime": "system.input", "config": {"value": list(range(10))}}] # 10个并行任务
+                },
+                {
+                    "id": "concurrent_adder_map",
+                    "run": [{
+                        "runtime": "system.map",
+                        "config": {
+                            "list": "{{ nodes.task_provider.output }}",
+                            "graph": "add_gold"
+                            # using 是空的，因为子图不依赖 source
+                        }
+                    }]
+                },
+                {
+                    "id": "reader",
+                    "depends_on": ["concurrent_adder_map"],
+                    "run": [{"runtime": "system.input", "config": {"value": "{{ world.gold }}"}}]
+                }
+            ]
+        },
+        "add_gold": {
+            "nodes": [
+                {
+                    "id": "add_10_gold",
+                    "run": [{"runtime": "system.execute", "config": {"code": "world.gold += 10"}}]
+                }
+            ]
+        }
+    })
+
+@pytest.fixture
+def map_collection_with_failure() -> GraphCollection:
+    """
+    一个 map 迭代中部分子图会失败的集合。
+    - list 中有一个 None，会导致子图中的宏求值失败。
+    - system.map 应该能正确返回所有结果，包括成功和失败的项。
+    【修正】子图通过 `using` 字段来接收数据，而不是直接引用 `source`。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "data_provider",
+                    "run": [{"runtime": "system.input", "config": {"value": [{"name": "Alice"}, "Bob", {"name": "Charlie"}]}}]
+                },
+                {
+                    "id": "mapper",
+                    "run": [{
+                        "runtime": "system.map",
+                        "config": {
+                            "list": "{{ nodes.data_provider.output }}",
+                            "graph": "process_name",
+                            # 【关键修正】将 source.item 映射到子图的占位符
+                            "using": {
+                                "character_data": "{{ source.item }}"
+                            }
+                        }
+                    }]
+                }
+            ]
+        },
+        "process_name": {
+            "nodes": [
+                {
+                    "id": "get_name",
+                    "run": [{
+                        "runtime": "system.input",
+                        # 【关键修正】从占位符节点获取数据
+                        # 当 character_data.output 是 "Bob" (str) 时，.name 会触发 AttributeError
+                        "config": {"value": "{{ nodes.character_data.output.name }}"}
+                    }]
+                }
+            ]
+        }
     })
