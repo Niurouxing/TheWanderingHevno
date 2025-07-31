@@ -16,7 +16,7 @@ from backend.core.engine import ExecutionEngine
 from backend.runtimes.base_runtimes import (
     InputRuntime, LLMRuntime, SetWorldVariableRuntime
 )
-from backend.runtimes.control_runtimes import ExecuteRuntime
+from backend.runtimes.control_runtimes import ExecuteRuntime, CallRuntime
 
 # ---------------------------------------------------------------------------
 # Fixtures for Core Components (Engine, Registry, API Client)
@@ -30,6 +30,7 @@ def populated_registry() -> RuntimeRegistry:
     registry.register("llm.default", LLMRuntime)
     registry.register("system.set_world_var", SetWorldVariableRuntime)
     registry.register("system.execute", ExecuteRuntime)
+    registry.register("system.call", CallRuntime)
     print("\n--- Populated Registry Created (Session Scope) ---")
     return registry
 
@@ -263,6 +264,180 @@ world.math_utils.hypot = calculate_hypotenuse
             ]
         }
     })
+
+# ---------------------------------------------------------------------------
+# 用于测试 Subgraph Call 的 Fixtures
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def subgraph_call_collection() -> GraphCollection:
+    """
+    一个包含主图和可复用子图的集合，用于测试 system.call。
+    - main 图调用 process_item 子图。
+    - process_item 子图依赖一个名为 'item_input' 的占位符。
+    - process_item 子图还会读取 world 状态。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "data_provider",
+                    "run": [{"runtime": "system.input", "config": {"value": "Hello from main"}}]
+                },
+                {
+                    "id": "main_caller",
+                    "run": [{
+                        "runtime": "system.call",
+                        "config": {
+                            "graph": "process_item",
+                            "using": {
+                                "item_input": "{{ nodes.data_provider.output }}"
+                            }
+                        }
+                    }]
+                }
+            ]
+        },
+        "process_item": {
+            "nodes": [
+                {
+                    "id": "processor",
+                    "run": [{
+                        "runtime": "system.input",
+                        "config": {
+                            "value": "{{ f'Processed: {nodes.item_input.output} with world state: {world.global_setting}' }}"
+                        }
+                    }]
+                }
+            ]
+        }
+    })
+
+@pytest.fixture
+def nested_subgraph_collection() -> GraphCollection:
+    """一个测试嵌套调用的图：main -> sub1 -> sub2。"""
+    return GraphCollection.model_validate({
+        "main": {"nodes": [{
+            "id": "main_caller",
+            "run": [{"runtime": "system.call", "config": {"graph": "sub1", "using": {"input_from_main": "level 0"}}}]
+        }]},
+        "sub1": {"nodes": [{
+            "id": "sub1_caller",
+            "run": [{"runtime": "system.call", "config": {"graph": "sub2", "using": {"input_from_sub1": "{{ nodes.input_from_main.output }}"}}}]
+        }]},
+        "sub2": {"nodes": [{
+            "id": "final_processor",
+            "run": [{"runtime": "system.input", "config": {"value": "{{ f'Reached level 2 from: {nodes.input_from_sub1.output}' }}"}}]
+        }]}
+    })
+
+@pytest.fixture
+def subgraph_call_to_nonexistent_graph_collection() -> GraphCollection:
+    """一个尝试调用不存在子图的图，用于测试错误处理。"""
+    return GraphCollection.model_validate({
+        "main": {"nodes": [{
+            "id": "bad_caller",
+            "run": [{"runtime": "system.call", "config": {"graph": "i_do_not_exist"}}]
+        }]}
+    })
+
+@pytest.fixture
+def subgraph_modifies_world_collection() -> GraphCollection:
+    """
+    一个子图会修改 world 状态的集合。
+    - main 调用 modifier 子图。
+    - modifier 子图根据输入修改 world.counter。
+    - main 中的后续节点 reader 会读取这个被修改后的状态。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "caller",
+                    "run": [{"runtime": "system.call", "config": {"graph": "modifier", "using": {"amount": 10}}}]
+                },
+                {
+                    "id": "reader",
+                    # 这里的宏依赖会自动创建从 caller 到 reader 的依赖
+                    "run": [{
+                        "runtime": "system.input",
+                        "config": {"value": "{{ f'Final counter: {world.counter}, Subgraph raw output: {nodes.caller.output}' }}"}
+                    }]
+                }
+            ]
+        },
+        "modifier": {
+            "nodes": [
+                {
+                    "id": "incrementer",
+                    # 这是一个隐式依赖，我们用 depends_on 来确保执行顺序
+                    # 子图无法通过宏推断它依赖于父图设置的 world.counter
+                    # 但在这里，我们假设初始状态设置了 counter
+                    "run": [{
+                        "runtime": "system.execute",
+                        "config": {"code": "world.counter += nodes.amount.output"}
+                    }]
+                }
+            ]
+        }
+    })
+
+@pytest.fixture
+def subgraph_with_failure_collection() -> GraphCollection:
+    """
+    一个子图内部会失败的集合。
+    - main 调用 failing_subgraph。
+    - failing_subgraph 中的一个节点会因为宏错误而失败。
+    - main 中的后续节点 downstream_of_fail 应该被跳过。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "caller",
+                    "run": [{"runtime": "system.call", "config": {"graph": "failing_subgraph"}}]
+                },
+                {
+                    "id": "downstream_of_fail",
+                    "run": [{"runtime": "system.input", "config": {"value": "{{ nodes.caller.output }}"}}]
+                }
+            ]
+        },
+        "failing_subgraph": {
+            "nodes": [
+                {"id": "A_ok", "run": [{"runtime": "system.input", "config": {"value": "ok"}}]},
+                {"id": "B_fail", "run": [{"runtime": "system.input", "config": {"value": "{{ non_existent.var }}"}}]}
+            ]
+        }
+    })
+
+@pytest.fixture
+def dynamic_subgraph_call_collection() -> GraphCollection:
+    """
+    一个动态决定调用哪个子图的集合。
+    - main 根据 world.target_graph 的值来调用 sub_a 或 sub_b。
+    """
+    return GraphCollection.model_validate({
+        "main": {"nodes": [{
+            "id": "dynamic_caller",
+            "run": [{
+                "runtime": "system.call",
+                "config": {
+                    "graph": "{{ world.target_graph }}",
+                    "using": {"data": "dynamic data"}
+                }
+            }]
+        }]},
+        # 【关键修正】在子图内部使用正确的 f-string 宏格式
+        "sub_a": {"nodes": [{
+            "id": "processor_a",
+            "run": [{"runtime": "system.input", "config": {"value": "{{ f'Processed by A: {nodes.data.output}' }}"}}]
+        }]},
+        "sub_b": {"nodes": [{
+            "id": "processor_b",
+            "run": [{"runtime": "system.input", "config": {"value": "{{ f'Processed by B: {nodes.data.output}' }}"}}]
+        }]}
+    })
+
 ```
 
 ### test_02_evaluation_unit.py
@@ -570,10 +745,15 @@ class TestDependencyParser:
         deps = build_dependency_graph(nodes)
         assert deps["A"] == set()
 
-    def test_dependency_on_nonexistent_node_is_ignored(self):
-        nodes = [{"id": "A", "run": [{"config": {"value": "{{ nodes.placeholder.val }}"}}]}]
+    def test_dependency_on_placeholder_node_is_preserved(self):
+        """
+        验证对图中不存在的节点（即子图的输入占位符）的依赖会被保留。
+        这对于 system.call 功能至关重要。
+        """
+        nodes = [{"id": "A", "run": [{"config": {"value": "{{ nodes.placeholder_input.val }}"}}]}]
         deps = build_dependency_graph(nodes)
-        assert deps["A"] == set()
+        # 之前这里断言 deps["A"] == set()，现在它必须保留依赖
+        assert deps["A"] == {"placeholder_input"}
 ```
 
 ### __init__.py
@@ -661,6 +841,41 @@ class TestApiErrorHandling:
 
         response = test_client.put(f"/api/sandboxes/{nonexistent_id}/revert", params={"snapshot_id": uuid4()})
         assert response.status_code == 404
+
+
+class TestApiWithComplexGraphs:
+    """测试涉及更复杂图逻辑（如子图调用）的 API 端点。"""
+
+    def test_e2e_with_subgraph_call(self, test_client: TestClient, subgraph_call_collection: GraphCollection):
+        """
+        通过 API 端到端测试一个包含 system.call 的图。
+        """
+        # 1. 创建沙盒
+        response = test_client.post(
+            "/api/sandboxes",
+            params={"name": "E2E Subgraph Test"},
+            json={
+                "graph_collection": subgraph_call_collection.model_dump(),
+                "initial_state": {"global_setting": "Omega"}
+            }
+        )
+        assert response.status_code == 200
+        sandbox_id = response.json()["id"]
+
+        # 2. 执行一步
+        response = test_client.post(f"/api/sandboxes/{sandbox_id}/step", json={})
+        assert response.status_code == 200
+        
+        # 3. 验证结果
+        snapshot_data = response.json()
+        run_output = snapshot_data.get("run_output", {})
+        
+        assert "main_caller" in run_output
+        subgraph_output = run_output["main_caller"]["output"]
+        processor_output = subgraph_output["processor"]["output"]
+        
+        expected_str = "Processed: Hello from main with world state: Omega"
+        assert processor_output == expected_str
 ```
 
 ### test_03_engine_integration.py
@@ -811,4 +1026,143 @@ class TestAdvancedMacroIntegration:
         assert "execute_change" in run_output
         
         assert final_snapshot.world_state["game_difficulty"] == "hard"
+
+@pytest.mark.asyncio
+class TestEngineSubgraphExecution:
+    """测试引擎的子图执行功能 (system.call)。"""
+
+    async def test_basic_subgraph_call(self, test_engine: ExecutionEngine, subgraph_call_collection: GraphCollection):
+        """测试基本的子图调用和数据映射。"""
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=subgraph_call_collection,
+            world_state={"global_setting": "Alpha"}
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+
+        output = final_snapshot.run_output
+        
+        # 验证主调节点的输出是子图的完整结果字典
+        subgraph_result = output["main_caller"]["output"]
+        assert isinstance(subgraph_result, dict)
+        
+        # 验证子图内部的节点 'processor' 的输出
+        processor_output = subgraph_result["processor"]["output"]
+        expected_str = "Processed: Hello from main with world state: Alpha"
+        assert processor_output == expected_str
+        
+    async def test_nested_subgraph_call(self, test_engine: ExecutionEngine, nested_subgraph_collection: GraphCollection):
+        """测试嵌套的子图调用：main -> sub1 -> sub2。"""
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=nested_subgraph_collection
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        output = final_snapshot.run_output
+
+        # 逐层深入断言
+        sub1_result = output["main_caller"]["output"]
+        sub2_result = sub1_result["sub1_caller"]["output"]
+        final_output = sub2_result["final_processor"]["output"]
+        
+        assert final_output == "Reached level 2 from: level 0"
+
+    async def test_call_to_nonexistent_subgraph_fails_node(self, test_engine: ExecutionEngine, subgraph_call_to_nonexistent_graph_collection: GraphCollection):
+        """测试调用一个不存在的子图时，节点会优雅地失败。"""
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=subgraph_call_to_nonexistent_graph_collection
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        output = final_snapshot.run_output
+        bad_caller_result = output["bad_caller"]
+        
+        assert "error" in bad_caller_result
+        assert "Subgraph 'i_do_not_exist' not found" in bad_caller_result["error"]
+        assert bad_caller_result["failed_step"] == 0
+        assert bad_caller_result["runtime"] == "system.call"
+
+    async def test_subgraph_can_modify_world_state(self, test_engine: ExecutionEngine, subgraph_modifies_world_collection: GraphCollection):
+        """
+        验证子图对 world_state 的修改在父图中是可见的，并且后续节点可以访问它。
+        """
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=subgraph_modifies_world_collection,
+            world_state={"counter": 100} # 初始状态
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+
+        # 1. 验证 world_state 被成功修改
+        assert final_snapshot.world_state["counter"] == 110
+
+        # 2. 验证父图中的后续节点可以读取到修改后的状态
+        reader_output = final_snapshot.run_output["reader"]["output"]
+        assert "Final counter: 110" in reader_output
+        # 验证 reader 也可以访问 caller 的原始输出
+        assert "incrementer" in reader_output
+    
+    async def test_subgraph_failure_propagates_to_caller(self, test_engine: ExecutionEngine, subgraph_with_failure_collection: GraphCollection):
+        """
+        验证子图中的失败会反映在调用节点的输出中，并导致父图中的下游节点被跳过。
+        """
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=subgraph_with_failure_collection,
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        output = final_snapshot.run_output
+        
+        # 1. 验证调用节点的结果是子图的失败状态
+        caller_result = output["caller"]["output"]
+        assert "B_fail" in caller_result
+        assert "error" in caller_result["B_fail"]
+        assert "non_existent" in caller_result["B_fail"]["error"]
+
+        # 2. 验证调用节点本身的状态不是 FAILED，而是 SUCCEEDED，
+        # 因为 system.call 运行时成功地“捕获”了子图的结果（即使是失败的结果）。
+        # 这是预期的行为：运行时本身没有崩溃。
+        # 【注意】我们检查的是 caller 节点的整体输出，而不是子图的结果
+        assert "error" not in output["caller"]
+
+        # 3. 验证依赖于 caller 的下游节点被跳过，因为它的依赖（caller）现在包含了一个失败的内部节点。
+        # 这是一个更微妙的点。当前的 _process_subscribers 逻辑可能不会将此视为失败。
+        # 让我们来验证当前的行为。
+        # 当前 _process_subscribers 仅检查 run.get_node_state(dep_id) == NodeState.SUCCEEDED
+        # 因为 caller 节点状态是 SUCCEEDED，所以 downstream_of_fail 会运行。
+        # 这是当前实现的一个值得注意的行为！
+        assert "downstream_of_fail" in output
+        assert "error" not in output.get("downstream_of_fail", {})
+
+        # 如果我们想要“失败”传播，我们需要修改 system.call 运行时，
+        # 让它在子图失败时自己也返回一个 error。
+        # 这是一个很好的设计决策讨论点。目前，我们测试了现有行为。
+
+    async def test_dynamic_subgraph_call_by_macro(self, test_engine: ExecutionEngine, dynamic_subgraph_call_collection: GraphCollection):
+        """
+        验证 system.call 的 'graph' 参数可以由宏动态提供。
+        """
+        # 场景1: 调用 sub_a
+        initial_snapshot_a = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=dynamic_subgraph_call_collection,
+            world_state={"target_graph": "sub_a"}
+        )
+        final_snapshot_a = await test_engine.step(initial_snapshot_a, {})
+        output_a = final_snapshot_a.run_output["dynamic_caller"]["output"]
+        assert output_a["processor_a"]["output"] == "Processed by A: dynamic data"
+
+        # 场景2: 调用 sub_b
+        initial_snapshot_b = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=dynamic_subgraph_call_collection,
+            world_state={"target_graph": "sub_b"}
+        )
+        final_snapshot_b = await test_engine.step(initial_snapshot_b, {})
+        output_b = final_snapshot_b.run_output["dynamic_caller"]["output"]
+        assert "processor_a" not in output_b
+        assert output_b["processor_b"]["output"] == "Processed by B: dynamic data"
 ```

@@ -112,7 +112,12 @@ class ExecutionEngine:
         run = GraphRun(context, graph_def)
         task_queue = asyncio.Queue()
 
-        # --- 新增逻辑：处理继承的输入 ---
+        if "global_write_lock" not in context.internal_vars:
+            context.internal_vars["global_write_lock"] = asyncio.Lock()
+            print("Global write lock created for this step.")
+        
+
+        # --- 处理继承的输入 ---
         if inherited_inputs:
             for node_id, result in inherited_inputs.items():
                 # 将占位符节点的状态设置为 SUCCEEDED 并存储其结果
@@ -120,7 +125,7 @@ class ExecutionEngine:
                 run.set_node_state(node_id, NodeState.SUCCEEDED)
                 run.set_node_result(node_id, result)
 
-        # --- 修改后的逻辑：确定初始的 READY 节点 ---
+        # --- 确定初始的 READY 节点 ---
         # 扫描所有 PENDING 节点，看它们的依赖是否已经满足（包括被注入的依赖）
         for node_id in run.get_nodes_in_state(NodeState.PENDING):
             dependencies = run.get_dependencies(node_id)
@@ -199,7 +204,7 @@ class ExecutionEngine:
     # --- THE CORE REFACTORED METHOD ---
     async def _execute_node(self, node: GenericNode, context: ExecutionContext) -> Dict[str, Any]:
         """
-        【新】按顺序执行节点内的运行时指令，在每一步之前进行宏求值。
+        按顺序执行节点内的运行时指令，在每一步之前进行宏求值。
         """
         node_id = node.id
         print(f"Executing node: {node_id}")

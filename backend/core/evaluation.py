@@ -4,8 +4,9 @@ import asyncio
 import re
 from typing import Any, Dict, List, Optional   
 from functools import partial
-# --- 1. 导入新的工具类 ---
 from backend.core.utils import DotAccessibleDict
+from backend.core.types import ExecutionContext # 显式导入，避免循环引用问题
+
 
 # 预编译宏的正则表达式，用于快速查找
 MACRO_REGEX = re.compile(r"^{{\s*(.+)\s*}}$", re.DOTALL)
@@ -28,7 +29,7 @@ PRE_IMPORTED_MODULES = {
 
 
 def build_evaluation_context(
-    exec_context: 'ExecutionContext',
+    exec_context: ExecutionContext,
     pipe_vars: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
@@ -40,20 +41,24 @@ def build_evaluation_context(
         "nodes": DotAccessibleDict(exec_context.node_states),
         "run": DotAccessibleDict(exec_context.run_vars),
         "session": DotAccessibleDict(exec_context.session_info),
+        # --- 新增：将内部变量（包括锁）传递给上下文 ---
+        "__internal__": exec_context.internal_vars
     }
-    # 为了清晰和避免命名冲突，将管道变量放在 'pipe' 命名空间下
     if pipe_vars is not None:
         context['pipe'] = DotAccessibleDict(pipe_vars)
         
     return context
 
+# --- 修改 evaluate_expression ---
 async def evaluate_expression(code_str: str, context: Dict[str, Any]) -> Any:
     """
     安全地执行一段 Python 代码字符串并返回结果。
-    这是宏系统的执行核心。
+    在执行前获取全局写入锁，确保宏的原子性。
     """
-    # 使用 ast 来智能处理返回值
-    # 1. 解析代码
+    # 1. 从上下文中提取锁
+    lock = context.get("__internal__", {}).get("global_write_lock")
+    
+    # 2. 解析代码 (与之前相同)
     try:
         tree = ast.parse(code_str, mode='exec')
     except SyntaxError as e:
@@ -61,28 +66,28 @@ async def evaluate_expression(code_str: str, context: Dict[str, Any]) -> Any:
 
     result_var = "_macro_result"
     
-    # 2. 如果最后一条语句是表达式，将其结果赋值给 _macro_result
     if tree.body and isinstance(tree.body[-1], ast.Expr):
-        # 创建一个赋值节点
         assign_node = ast.Assign(
             targets=[ast.Name(id=result_var, ctx=ast.Store())],
             value=tree.body[-1].value
         )
-        # 替换最后一个表达式节点
         tree.body[-1] = ast.fix_missing_locations(assign_node)
 
-    # 3. 在非阻塞的执行器中运行同步的 exec
+    # 3. 准备在非阻塞执行器中运行的同步函数
     loop = asyncio.get_running_loop()
-    
-    # exec 需要一个 globals 和一个 locals 字典
     local_scope = {}
-
-    # partial 将函数和其参数打包，以便 run_in_executor 调用
     exec_func = partial(exec, compile(tree, filename="<macro>", mode="exec"), context, local_scope)
     
-    await loop.run_in_executor(None, exec_func)
+    # 4. 在执行期间持有锁
+    if lock:
+        async with lock:
+            # 锁被持有，现在可以在另一个线程中安全地执行阻塞代码
+            await loop.run_in_executor(None, exec_func)
+    else:
+        # 如果没有锁（例如在测试环境中），直接执行
+        await loop.run_in_executor(None, exec_func)
     
-    # 4. 返回结果
+    # 5. 返回结果 (与之前相同)
     return local_scope.get(result_var)
 
 

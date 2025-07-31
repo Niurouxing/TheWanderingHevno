@@ -19,6 +19,8 @@ class ExecutionContext(BaseModel):
         "start_time": datetime.now(timezone.utc),
         "conversation_turn": 0,
     })
+    
+    internal_vars: Dict[str, Any] = Field(default_factory=dict, repr=False)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -44,7 +46,6 @@ class ExecutionContext(BaseModel):
                 else:
                     evolved_graph_dict = evolved_graph_value
                 
-                # 使用新的模型来验证
                 evolved_graphs = GraphCollection.model_validate(evolved_graph_dict)
                 current_graphs = evolved_graphs
             except (ValidationError, json.JSONDecodeError) as e:

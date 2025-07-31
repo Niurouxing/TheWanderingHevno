@@ -435,3 +435,39 @@ def dynamic_subgraph_call_collection() -> GraphCollection:
             "run": [{"runtime": "system.input", "config": {"value": "{{ f'Processed by B: {nodes.data.output}' }}"}}]
         }]}
     })
+
+
+@pytest.fixture
+def concurrent_write_collection() -> GraphCollection:
+    """
+    一个专门用于测试并发写入的图。
+    - incrementer_A 和 incrementer_B 没有相互依赖，引擎会并行执行它们。
+    - 两个节点都对同一个 world.counter 变量执行多次非原子操作 (read-modify-write)。
+    - 如果没有锁，最终结果将几乎肯定小于 200。
+    - 如果有宏级原子锁，每个宏的执行都是一个整体，结果必须是 200。
+    """
+    increment_loop_count = 100
+    increment_code = f"""
+for i in range({increment_loop_count}):
+    # 这是一个典型的 read-modify-write 操作，非常容易产生竞态条件
+    world.counter += 1
+"""
+    
+    return GraphCollection.model_validate({
+        "main": { "nodes": [
+            {
+                "id": "incrementer_A",
+                "run": [{"runtime": "system.execute", "config": {"code": increment_code}}]
+            },
+            {
+                "id": "incrementer_B",
+                "run": [{"runtime": "system.execute", "config": {"code": increment_code}}]
+            },
+            {
+                "id": "reader",
+                # depends_on 确保 reader 在两个写入者都完成后才执行
+                "depends_on": ["incrementer_A", "incrementer_B"],
+                "run": [{"runtime": "system.input", "config": {"value": "{{ world.counter }}"}}]
+            }
+        ]}
+    })

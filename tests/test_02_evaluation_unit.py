@@ -1,6 +1,7 @@
 # tests/test_02_evaluation_unit.py
 import pytest
 from uuid import uuid4
+import asyncio
 
 from backend.core.evaluation import (
     evaluate_expression, evaluate_data, build_evaluation_context
@@ -20,6 +21,10 @@ def mock_exec_context() -> ExecutionContext:
     context.node_states = {"node_A": {"output": "Success"}}
     context.world_state = {"user_name": "Alice", "hp": 100}
     context.run_vars = {"trigger_input": {"message": "Do it!"}}
+
+    if "global_write_lock" not in context.internal_vars:
+        context.internal_vars["global_write_lock"] = asyncio.Lock()
+
     return context
 
 @pytest.fixture
