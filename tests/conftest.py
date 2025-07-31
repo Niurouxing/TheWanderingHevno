@@ -4,6 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 from typing import Generator
 
+
+
 # ---------------------------------------------------------------------------
 # 从你的应用代码中导入核心类和函数
 # ---------------------------------------------------------------------------
@@ -109,6 +111,7 @@ def parallel_collection() -> GraphCollection:
 def pipeline_collection() -> GraphCollection:
     """
     一个测试节点内运行时管道数据流的图。
+    这个测试现在可以验证新的“阶段性宏求值”架构。
     """
     return GraphCollection.model_validate({
         "main": {
@@ -116,18 +119,15 @@ def pipeline_collection() -> GraphCollection:
                 {
                     "id": "A",
                     "data": {
-                        # 运行时管道保持不变
                         "runtime": ["system.set_world_var", "llm.default"],
                         
-                        # 为第一个 runtime (set_world_var) 提供配置
-                        # 这些值可以在节点开始时就确定
+                        # --- 为第一个 runtime (set_world_var) 提供配置 ---
                         "variable_name": "main_character",
                         "value": "The brave knight, Sir Reginald",
 
-                        # 为第二个 runtime (llm.default) 提供配置
-                        # 关键：prompt 现在引用了 world 状态，
-                        # 它期望这个状态在管道的前一步被设置好。
-                        # 我们甚至可以定义 llm.default 的参数就叫 'prompt'
+                        # --- 为第二个 runtime (llm.default) 提供配置 ---
+                        # 它的 prompt 字段现在可以安全地引用 world 状态，
+                        # 因为它会在 set_world_var 执行【之后】、llm.default 执行【之前】被求值。
                         "prompt": "{{ f'Tell a story about {world.main_character}.' }}"
                     }
                 }
@@ -141,20 +141,19 @@ def pipeline_collection() -> GraphCollection:
 def world_vars_collection() -> GraphCollection:
     """一个测试世界变量（world_state）设置和读取的图。"""
     return GraphCollection.model_validate({
-        "main": {
-            "nodes": [
+        "main": { "nodes": [
                 {"id": "setter", "data": {
                     "runtime": "system.set_world_var",
                     "variable_name": "theme",
                     "value": "cyberpunk"
                 }},
-                # reader 节点不再需要 template 运行时
+                # 依赖解析器现在应该能正确工作，所以这个测试不再需要虚拟引用
                 {"id": "reader", "data": {
-                    "output": "{{ f'The theme is: {world.theme}' }}"
+                    "output": "{{ f'The theme is: {world.theme}' }}",
+                    # 关键：添加明确的依赖，因为 world 状态的改变是副作用，无法自动推断
+                    "comment": "Dependency on setter {{ nodes.setter }}"
                 }}
-            ]
-        }
-    })
+            ]}})
 
 @pytest.fixture
 def macro_collection() -> GraphCollection:

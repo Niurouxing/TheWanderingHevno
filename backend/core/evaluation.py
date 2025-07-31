@@ -2,7 +2,7 @@
 import ast
 import asyncio
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional   
 from functools import partial
 # --- 1. 导入新的工具类 ---
 from backend.core.utils import DotAccessibleDict
@@ -27,17 +27,25 @@ PRE_IMPORTED_MODULES = {
 }
 
 
-def build_evaluation_context(exec_context: 'ExecutionContext') -> Dict[str, Any]:
-    """从 ExecutionContext 构建一个扁平的字典，用作宏的执行环境。"""
-    # --- 2. 使用 DotAccessibleDict 包装字典 ---
-    # 这现在是唯一需要修改的地方。返回的对象可以直接修改原始的 exec_context 状态。
-    return {
+def build_evaluation_context(
+    exec_context: 'ExecutionContext',
+    pipe_vars: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    从 ExecutionContext 和可选的管道变量构建一个扁平的字典，用作宏的执行环境。
+    """
+    context = {
         **PRE_IMPORTED_MODULES,
         "world": DotAccessibleDict(exec_context.world_state),
-        "nodes": DotAccessibleDict(exec_context.node_states), # 也包装 nodes 以保持一致性
+        "nodes": DotAccessibleDict(exec_context.node_states),
         "run": DotAccessibleDict(exec_context.run_vars),
         "session": DotAccessibleDict(exec_context.session_info),
     }
+    # 为了清晰和避免命名冲突，将管道变量放在 'pipe' 命名空间下
+    if pipe_vars is not None:
+        context['pipe'] = DotAccessibleDict(pipe_vars)
+        
+    return context
 
 async def evaluate_expression(code_str: str, context: Dict[str, Any]) -> Any:
     """

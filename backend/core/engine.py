@@ -260,43 +260,75 @@ class ExecutionEngine:
                 queue.put_nowait(sub_id)
 
 
-    async def _execute_node(self, node: GenericNode, context: ExecutionContext):
-        # 1. 初始宏预处理 (可选但推荐)
-        #    只处理那些不依赖管道内部状态的、静态的宏。
-        #    或者，我们可以完全放弃初始预处理，将所有求值都推迟到步骤中。
-        #    为了简单起见，我们假设有一个初始的 `step_input`，它就是原始的 node.data。
+    async def _execute_node(self, node: GenericNode, context: ExecutionContext) -> Dict[str, Any]:
+        """
+        【新架构】执行单个节点，支持阶段性宏求值和运行时管道。
+        """
+        node_id = node.id
         
+        # 1. 准备初始数据和运行时列表
         initial_data = node.data.copy()
-        runtime_names = initial_data.pop("runtime", [])
-        if not isinstance(runtime_names, list): runtime_names = [runtime_names]
+        runtime_spec = initial_data.pop("runtime", None)
+        
+        # 处理没有 runtime 的节点 (纯宏节点)
+        if not runtime_spec:
+            print(f"[{node_id}] Pre-processing a runtime-less node...")
+            # 即使没有 runtime，也需要进行一次宏预处理
+            eval_context = build_evaluation_context(context)
+            try:
+                processed_data = await evaluate_data(initial_data, eval_context)
+                print(f"[{node_id}] Runtime-less node pre-processing complete.")
+                return processed_data
+            except Exception as e:
+                error_message = f"Macro evaluation failed for runtime-less node {node_id}: {e}"
+                print(f"  - Error: {error_message}")
+                return {"error": error_message, "failed_step": "pre-processing"}
+
+        # 处理有 runtime 的节点
+        runtime_names = [runtime_spec] if isinstance(runtime_spec, str) else runtime_spec
+        print(f"Executing node: {node_id} with runtime pipeline: {runtime_names}")
 
         # 2. 初始化管道变量 (pipe)
-        #    它的初始状态可以包含节点 data 中除了 runtime 自身以外的所有静态值。
+        # 它的初始状态是节点 data 中除了 'runtime' 之外的所有静态值
         pipe_vars = initial_data.copy()
 
         # 3. 按顺序迭代运行时管道
-        for runtime_name in runtime_names:
-            runtime = self.registry.get_runtime(runtime_name)
-            
-            # 4. 【核心变更】步骤级宏求值
-            #    a. 构建当前步骤的求值上下文，包含最新的 world, nodes, run, session, 和【可变的 pipe】
-            current_eval_context = build_evaluation_context(context, pipe_vars)
+        for i, runtime_name in enumerate(runtime_names):
+            print(f"  - Step {i+1}/{len(runtime_names)}: Running runtime '{runtime_name}'")
+            try:
+                # 4. 【核心变更】步骤级宏求值
+                #    a. 构建包含 pipe 变量的当前步骤的求值上下文
+                eval_context = build_evaluation_context(context, pipe_vars)
 
-            #    b. runtime 可以声明它需要哪些参数，引擎只对这些参数进行求值。
-            #       或者一个更简单的实现：对整个 pipe_vars 进行一次宏求值。
-            #       我们采用后者，它更通用。
-            evaluated_step_input = await evaluate_data(pipe_vars, current_eval_context)
-            
-            # 5. 执行当前步骤的 runtime
-            runtime_output = await runtime.execute(
-                step_input=evaluated_step_input,  # runtime 接收到的是当前步骤计算好的输入
-                context=context  # 全局上下文依然可用
-            )
+                #    b. 对整个 pipe_vars 进行宏求值，得到当前 runtime 的输入
+                #       这允许 runtime 的参数引用之前步骤的结果，例如 `{{ pipe.previous_output }}`
+                evaluated_step_input = await evaluate_data(pipe_vars, eval_context)
+                
+                # 5. 执行当前步骤的 runtime
+                runtime: RuntimeInterface = self.registry.get_runtime(runtime_name)
+                runtime_output = await runtime.execute(
+                    step_input=evaluated_step_input,
+                    context=context,
+                    # 传递额外信息供高级 runtime 使用
+                    node=node,
+                    engine=self
+                )
+                
+                if not isinstance(runtime_output, dict):
+                    error_message = f"Runtime '{runtime_name}' did not return a dictionary. Returned: {type(output).__name__}"
+                    print(f"  - Error in pipeline: {error_message}")
+                    return {"error": error_message, "failed_step": i, "runtime": runtime_name}
 
-            # 6. 更新管道变量
-            #    将当前 runtime 的输出合并到 pipe_vars 中，供下一步使用。
-            if isinstance(runtime_output, dict):
+                # 6. 更新管道变量
                 pipe_vars.update(runtime_output)
 
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                error_message = f"Failed at step {i+1} ('{runtime_name}'): {e}"
+                print(f"  - Error in pipeline: {error_message}")
+                return {"error": error_message, "failed_step": i, "runtime": runtime_name}
+
+        print(f"Node {node_id} pipeline finished successfully.")
         # 7. 返回最终的管道状态作为节点结果
         return pipe_vars
