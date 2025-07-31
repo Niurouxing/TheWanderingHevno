@@ -97,3 +97,50 @@ class TestEngineErrorHandling:
 
         assert output["C_skip"]["status"] == "skipped"
         assert output["C_skip"]["reason"] == "Upstream failure of node B_fail."
+
+@pytest.mark.asyncio
+class TestAdvancedMacroIntegration:
+    """测试引擎中更高级的宏功能，如动态函数定义和二次求值链。"""
+
+    async def test_dynamic_function_definition_and_usage(self, test_engine: ExecutionEngine, advanced_macro_collection: GraphCollection):
+        """
+        测试一个节点定义函数，另一个节点使用该函数。
+        """
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=advanced_macro_collection,
+            world_state={"game_difficulty": "easy"}
+        )
+
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        # 1. 验证 `teach_skill` 节点的副作用
+        assert "math_utils" in final_snapshot.world_state
+        assert callable(final_snapshot.world_state["math_utils"]["hypot"])
+
+        # 2. 验证 `use_skill` 节点成功调用了该函数
+        run_output = final_snapshot.run_output
+        assert "use_skill" in run_output
+        # 【已修正】现在这个断言应该可以成功了
+        assert run_output["use_skill"]["output"] == 5.0
+
+    async def test_llm_code_generation_and_execution(self, test_engine: ExecutionEngine, advanced_macro_collection: GraphCollection):
+        """
+        测试一个节点生成代码，另一个节点执行它，模拟 LLM 驱动的世界演化。
+        """
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=advanced_macro_collection,
+            world_state={"game_difficulty": "easy"}
+        )
+
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        run_output = final_snapshot.run_output
+        
+        # 【已修正】断言中的字符串现在与 fixture 中定义的完全一致
+        assert run_output["llm_propose_change"]["output"] == "world.game_difficulty = 'hard'"
+        
+        assert "execute_change" in run_output
+        
+        assert final_snapshot.world_state["game_difficulty"] == "hard"

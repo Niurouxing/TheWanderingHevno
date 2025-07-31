@@ -203,3 +203,66 @@ def graph_evolution_collection() -> GraphCollection:
             }]
         }]}
     })
+
+@pytest.fixture
+def advanced_macro_collection() -> GraphCollection:
+    """
+    【已修正】一个用于测试高级宏功能的图。
+    - 添加了明确的依赖声明来解决竞态条件。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                # 步骤1: 在 world 上定义一个可复用的函数
+                {
+                    "id": "teach_skill",
+                    "run": [{
+                        "runtime": "system.execute",
+                        "config": {
+                            "code": """
+import math
+def calculate_hypotenuse(a, b):
+    return math.sqrt(a**2 + b**2)
+if not hasattr(world, 'math_utils'): world.math_utils = {}
+world.math_utils.hypot = calculate_hypotenuse
+"""
+                        }
+                    }]
+                },
+                # 步骤2: 调用函数，并添加【明确的依赖】
+                {
+                    "id": "use_skill",
+                    "run": [{
+                        "runtime": "system.input",
+                        "config": {
+                            # 关键修正：添加 nodes.teach_skill 的引用来创建依赖边。
+                            # `if nodes.teach_skill is not None else 0` 是一个无害的引用。
+                            "value": "{{ world.math_utils.hypot(3, 4) if nodes.teach_skill is not None else 0 }}"
+                        }
+                    }]
+                },
+                # 步骤3: 模拟 LLM 返回代码字符串
+                {
+                    "id": "llm_propose_change",
+                    "run": [{
+                        "runtime": "system.input",
+                        "config": {
+                            # 统一使用单引号，避免断言失败
+                            "value": "world.game_difficulty = 'hard'"
+                        }
+                    }]
+                },
+                # 步骤4: 执行 LLM 代码，并添加【明确的依赖】
+                {
+                    "id": "execute_change",
+                    "run": [{
+                        "runtime": "system.execute",
+                        "config": {
+                            # 关键修正：这里已经有对 nodes.llm_propose_change 的引用，所以依赖是正确的。
+                            "code": "{{ nodes.llm_propose_change.output }}"
+                        }
+                    }]
+                }
+            ]
+        }
+    })

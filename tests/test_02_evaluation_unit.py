@@ -110,3 +110,94 @@ class TestRuntimesWithMacros:
         code_str_with_return = "f'New HP is {world.hp}'"
         result = await runtime.execute(config={"code": code_str_with_return}, context=mock_exec_context)
         assert result == {"output": "New HP is 75"}
+
+
+@pytest.mark.asyncio
+class TestBuiltinModules:
+    """测试宏中预置的 Python 模块。"""
+
+    async def test_random_module(self, mock_eval_context):
+        # 验证 random 模块可用
+        result = await evaluate_expression("random.randint(10, 10)", mock_eval_context)
+        assert result == 10
+
+    async def test_math_module(self, mock_eval_context):
+        # 验证 math 模块可用
+        result = await evaluate_expression("math.ceil(3.14)", mock_eval_context)
+        assert result == 4
+
+    async def test_json_module(self, mock_eval_context):
+        # 验证 json 模块可用
+        code = """
+import json
+json.dumps({'a': 1})
+"""
+        result = await evaluate_expression(code, mock_eval_context)
+        assert result == '{"a": 1}'
+
+    async def test_re_module(self, mock_eval_context):
+        # 验证 re 模块可用
+        code = "re.match(r'\\w+', 'hello').group(0)"
+        result = await evaluate_expression(code, mock_eval_context)
+        assert result == "hello"
+
+
+@pytest.mark.asyncio
+class TestDotAccessibleDictInteraction:
+    """深入测试宏与 DotAccessibleDict 的交互。"""
+
+    async def test_deep_read(self, mock_exec_context):
+        # 添加深层嵌套数据
+        mock_exec_context.world_state["player"] = {"stats": {"strength": 10}}
+        eval_context = build_evaluation_context(mock_exec_context)
+        
+        result = await evaluate_expression("world.player.stats.strength", eval_context)
+        assert result == 10
+
+    async def test_deep_write(self, mock_exec_context):
+        mock_exec_context.world_state["player"] = {"stats": {"strength": 10}}
+        eval_context = build_evaluation_context(mock_exec_context)
+
+        # 通过宏进行深层写入
+        await evaluate_expression("world.player.stats.strength = 15", eval_context)
+
+        # 验证原始字典已被修改
+        assert mock_exec_context.world_state["player"]["stats"]["strength"] == 15
+    
+    async def test_attribute_error_on_missing_key(self, mock_eval_context):
+        # 测试访问不存在的键会引发 AttributeError
+        with pytest.raises(AttributeError, match="'DotAccessibleDict' object has no attribute 'non_existent_key'"):
+            await evaluate_expression("world.non_existent_key", mock_eval_context)
+
+    async def test_list_of_dicts_access(self, mock_exec_context):
+        mock_exec_context.world_state["inventory"] = [{"name": "sword"}, {"name": "shield"}]
+        eval_context = build_evaluation_context(mock_exec_context)
+
+        # 验证可以访问列表中的字典的属性
+        result = await evaluate_expression("world.inventory[1].name", eval_context)
+        assert result == "shield"
+
+
+@pytest.mark.asyncio
+class TestEdgeCases:
+    """测试宏系统的边界情况。"""
+
+    async def test_macro_returning_none(self, mock_eval_context):
+        # 宏执行了一个没有返回值的操作
+        code = "x = 1"
+        result = await evaluate_expression(code, mock_eval_context)
+        assert result is None
+
+    async def test_empty_macro(self, mock_eval_context):
+        # 空宏应该返回 None
+        result = await evaluate_expression("", mock_eval_context)
+        assert result is None
+        
+        result = await evaluate_expression("   ", mock_eval_context)
+        assert result is None
+
+    async def test_evaluate_data_with_none_values(self, mock_eval_context):
+        # 验证 evaluate_data 能正确处理包含 None 的数据结构
+        data = {"key1": None, "key2": "{{ 1 + 1 }}"}
+        result = await evaluate_data(data, mock_eval_context)
+        assert result == {"key1": None, "key2": 2}
