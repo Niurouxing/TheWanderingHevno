@@ -1,18 +1,19 @@
-# backend/core/dependency_parser.py
+# backend/core/dependency_parser.py 
 import re
 from typing import Set, Dict, Any, List
 
-# 正则表达式，用于匹配 {{ nodes.node_id... }} 格式的宏
-# - 匹配 '{{' 和 '}}'
-# - 捕获 'nodes.' 后面的第一个标识符 (node_id)
-# - 这是一个非贪婪匹配，以处理嵌套宏等情况
-NODE_DEP_REGEX = re.compile(r'{{\s*nodes\.([a-zA-Z0-9_]+)')
+# 正则表达式，用于匹配 {{...}} 宏内部的 `nodes.node_id` 模式
+# 它不再关心 `nodes.` 是否紧跟在 `{{` 之后。
+NODE_DEP_REGEX = re.compile(r'nodes\.([a-zA-Z0-9_]+)')
 
 def extract_dependencies_from_string(s: str) -> Set[str]:
     """从单个字符串中提取所有节点依赖。"""
     if not isinstance(s, str):
         return set()
-    return set(NODE_DEP_REGEX.findall(s))
+    # 仅在检测到宏标记时才进行解析，以提高效率并避免误报
+    if '{{' in s and '}}' in s and 'nodes.' in s:
+        return set(NODE_DEP_REGEX.findall(s))
+    return set()
 
 def extract_dependencies_from_value(value: Any) -> Set[str]:
     """递归地从任何值（字符串、列表、字典）中提取依赖。"""
@@ -25,6 +26,7 @@ def extract_dependencies_from_value(value: Any) -> Set[str]:
     elif isinstance(value, dict):
         for k, v in value.items():
             # 递归地检查 key 和 value
+            # 注意：在真实的JSON中，key不可能是宏。但为了稳健，还是检查。
             deps.update(extract_dependencies_from_value(k))
             deps.update(extract_dependencies_from_value(v))
     return deps
