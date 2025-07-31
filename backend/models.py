@@ -6,23 +6,23 @@ class GenericNode(BaseModel):
     id: str
     data: Dict[str, Any] = Field(
         ...,
-        description="节点的核心配置，必须包含 'runtime' 字段来指定执行器"
+        description="节点的核心配置。如果提供了 'runtime' 字段，它将指定执行器。"
     )
 
     @field_validator('data')
     @classmethod
-    def check_runtime_exists(cls, v: Dict[str, Any]) -> Dict[str, Any]:
-        # 这个验证器保持不变，依然很好用
-        if 'runtime' not in v:
-            raise ValueError("Node data must contain a 'runtime' field.")
-        runtime_value = v['runtime']
-        if not (isinstance(runtime_value, str) or 
-                (isinstance(runtime_value, list) and all(isinstance(item, str) for item in runtime_value))):
-            raise ValueError("'runtime' must be a string or a list of strings.")
+    def check_runtime_if_exists(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        # 3. 修改验证器逻辑：只在 'runtime' 存在时检查它
+        if 'runtime' in v:
+            runtime_value = v['runtime']
+            if not (isinstance(runtime_value, str) or 
+                    (isinstance(runtime_value, list) and all(isinstance(item, str) for item in runtime_value))):
+                raise ValueError("'runtime' must be a string or a list of strings.")
+        # 如果 'runtime' 不存在，则节点是有效的，直接返回
         return v
 
-class GraphDefinition(BaseModel):
 
+class GraphDefinition(BaseModel):
     nodes: List[GenericNode]
 
 class GraphCollection(RootModel[Dict[str, GraphDefinition]]):

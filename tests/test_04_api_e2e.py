@@ -101,11 +101,9 @@ class TestApiErrorHandling:
             }
         )
 
-        # FastAPI 对 Pydantic RootModel 的验证失败会返回 422
         assert response.status_code == 422 
         error_data = response.json()
         
-        # 检查 FastAPI 标准的 validation error 响应体结构
         assert "detail" in error_data
         assert isinstance(error_data["detail"], list) and len(error_data["detail"]) > 0
 
@@ -113,8 +111,11 @@ class TestApiErrorHandling:
         assert first_error["type"] == "value_error"
         assert "A 'main' graph must be defined as the entry point." in first_error["msg"]
         
-        # 验证错误位置指向了请求体中的正确字段
-        assert first_error["loc"] == ["body", "graph_collection", "root"]
+        # --- 关键修复 ---
+        # 对于 RootModel，FastAPI/Pydantic v2 的错误路径指向模型本身，而不是其内部的 'root' 字段。
+        # 所以正确的路径是 `['body', 'graph_collection']`。
+        # 你的 `@field_validator('root')` 是正确的 Pydantic 内部用法，但外部错误报告路径不同。
+        assert first_error["loc"] == ["body", "graph_collection"]
 
     def test_create_sandbox_with_invalid_pydantic_payload(self, test_client: TestClient):
         """测试一个在 Pydantic 层就无法解析的请求体。"""

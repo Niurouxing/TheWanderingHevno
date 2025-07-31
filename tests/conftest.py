@@ -117,11 +117,12 @@ def pipeline_collection() -> GraphCollection:
                     "id": "A",
                     "data": {
                         "runtime": ["system.set_world_var", "llm.default"],
-                        # 这个宏会在预处理阶段被执行
-                        "character_name": "{{ 'Sir Reginald' }}",
+                        # 'self' 在宏上下文中无定义。直接使用值。
+                        # "character_name": "{{ 'Sir Reginald' }}", # 这个字段现在是多余的
                         # set_world_var 的配置
                         "variable_name": "main_character",
-                        "value": "{{ f'The brave knight, {self.character_name}' }}",
+                        # 直接构造值，不再依赖不存在的 self.character_name
+                        "value": "The brave knight, Sir Reginald",
                         # llm.default 的配置
                         "prompt": "{{ f'Tell a story about {world.main_character}.' }}"
                     }

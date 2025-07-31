@@ -63,30 +63,19 @@ async def create_sandbox(
     创建一个新的沙盒，并生成其创世快照。
     此版本移除了对 FastAPI 内部 Request 对象的依赖，以实现更纯净的代码。
     """
-    try:
-        # 业务逻辑核心保持不变
-        sandbox = Sandbox(name=name)
-        
-        # 关键的验证依然在这里发生。
-        # 当 GraphCollection 验证失败时（例如缺少 'main'），
-        # StateSnapshot 的构造会抛出 Pydantic 的 ValidationError。
-        genesis_snapshot = StateSnapshot(
-            sandbox_id=sandbox.id,
-            graph_collection=request.graph_collection,
-            world_state=request.initial_state or {}
-        )
+    # 1. 移除 try...except ValidationError 块。
+    #    FastAPI 会在调用此函数之前自动验证 CreateSandboxRequest。
+    #    如果验证失败，它会自动返回一个详细的 422 响应。
+    sandbox = Sandbox(name=name)
+    
+    # StateSnapshot 的创建现在不太可能失败，因为 GraphCollection 已被验证。
+    # 如果仍有业务逻辑可能失败，可以保留一个更具体的异常捕获。
+    genesis_snapshot = StateSnapshot(
+        sandbox_id=sandbox.id,
+        graph_collection=request.graph_collection,
+        world_state=request.initial_state or {}
+    )
 
-    except ValidationError as e:
-        # 捕获 Pydantic 验证错误，并将其转换为一个标准的 HTTP 异常。
-        # 这避免了与 FastAPI 内部 API 的耦合。
-        # 我们返回一个 400 错误，因为请求体的内容在业务上是无效的。
-        # 我们将 Pydantic 的错误信息直接放入 detail 中，以方便调试。
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid graph definition provided. Details: {e}"
-        )
-
-    # 如果代码能执行到这里，说明 StateSnapshot 创建成功
     snapshot_store.save(genesis_snapshot)
     sandbox.head_snapshot_id = genesis_snapshot.id
     sandbox_store[sandbox.id] = sandbox

@@ -4,6 +4,8 @@ import asyncio
 import re
 from typing import Any, Dict, List
 from functools import partial
+# --- 1. 导入新的工具类 ---
+from backend.core.utils import DotAccessibleDict
 
 # 预编译宏的正则表达式，用于快速查找
 MACRO_REGEX = re.compile(r"^{{\s*(.+)\s*}}$", re.DOTALL)
@@ -24,15 +26,17 @@ PRE_IMPORTED_MODULES = {
     "re": re_module,
 }
 
+
 def build_evaluation_context(exec_context: 'ExecutionContext') -> Dict[str, Any]:
     """从 ExecutionContext 构建一个扁平的字典，用作宏的执行环境。"""
-    # 这个上下文将作为 exec() 的 `globals`
+    # --- 2. 使用 DotAccessibleDict 包装字典 ---
+    # 这现在是唯一需要修改的地方。返回的对象可以直接修改原始的 exec_context 状态。
     return {
         **PRE_IMPORTED_MODULES,
-        "world": exec_context.world_state,
-        "nodes": exec_context.node_states,
-        "run": exec_context.run_vars,
-        "session": exec_context.session_info,
+        "world": DotAccessibleDict(exec_context.world_state),
+        "nodes": DotAccessibleDict(exec_context.node_states), # 也包装 nodes 以保持一致性
+        "run": DotAccessibleDict(exec_context.run_vars),
+        "session": DotAccessibleDict(exec_context.session_info),
     }
 
 async def evaluate_expression(code_str: str, context: Dict[str, Any]) -> Any:
