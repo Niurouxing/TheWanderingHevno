@@ -5,81 +5,82 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import ValidationError, BaseModel
 from typing import Dict, Any, List, Optional
 from uuid import UUID
+from pydantic import BaseModel, Field
 
 from backend.models import GraphCollection
-# 【核心修改】现在从 engine 导入 ExecutionEngine
 from backend.core.engine import ExecutionEngine
-from backend.core.registry import runtime_registry
-from backend.runtimes.base_runtimes import InputRuntime, SetWorldVariableRuntime
-# 【核心修改】LLMRuntime 现在需要单独导入
-from backend.runtimes.base_runtimes import LLMRuntime
-from backend.runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
-from backend.runtimes.codex.invoke_runtime import InvokeRuntime
 from backend.core.state_models import Sandbox, SnapshotStore, StateSnapshot
+from backend.core.loader import load_modules
+from backend.core.registry import runtime_registry
+from backend.core.services import service_registry, ServiceInterface
 
-# 导入所有 LLM Gateway 相关组件
-from backend.llm.service import LLMService, MockLLMService, ProviderRegistry
 from backend.llm.manager import KeyPoolManager, CredentialManager
-from backend.llm.providers.gemini import GeminiProvider
+from backend.llm.registry import provider_registry
+
+# --- 定义可插拔模块 (不变) ---
+PLUGGABLE_MODULES = [
+    "backend.runtimes",
+    "backend.llm.providers",
+    "backend.services"
+]
 
 class CreateSandboxRequest(BaseModel):
     graph_collection: GraphCollection
     initial_state: Optional[Dict[str, Any]] = None
 
-def setup_application():
-    app = FastAPI(
-        title="Hevno Backend Engine",
-        description="The core execution engine for Hevno project, supporting runtime-centric, sequential node execution.",
-        version="0.3.2-map-runtime" # 版本号更新
-    )
-    
-    # 1. 注册所有运行时
-    runtime_registry.register("system.input", InputRuntime)
-    runtime_registry.register("system.set_world_var", SetWorldVariableRuntime)
-    runtime_registry.register("system.execute", ExecuteRuntime)
-    runtime_registry.register("system.call", CallRuntime)
-    runtime_registry.register("system.map", MapRuntime)
-    runtime_registry.register("system.invoke", InvokeRuntime)
-    # LLMRuntime 也是一个普通运行时
-    runtime_registry.register("llm.default", LLMRuntime)
+# --- 【核心修改 1】 ---
+# 将 setup_application 拆分
 
-    # 2. 创建并配置所有全局服务
-    is_debug_mode = os.getenv("HEVNO_LLM_DEBUG_MODE", "false").lower() == "true" 
+def create_app() -> FastAPI:
+    """只创建 FastAPI 应用实例，不做任何配置。"""
+    return FastAPI(
+        title="Hevno Backend Engine",
+        description="A dynamically loaded, modular execution engine for Hevno.",
+        version="0.4.1-modular-hotfix"
+    )
+
+def configure_app(app: FastAPI):
+    """配置 FastAPI 应用，加载模块并设置状态。"""
+    print("--- Configuring FastAPI Application ---")
+    
+    # 1. 动态加载所有可插拔模块
+    load_modules(PLUGGABLE_MODULES)
+
+    # 2. 准备服务实例化所需的依赖
+    is_debug_mode = os.getenv("HEVNO_LLM_DEBUG_MODE", "false").lower() == "true"
+    
+    provider_registry.instantiate_all()
+    cred_manager = CredentialManager()
+    key_manager = KeyPoolManager(credential_manager=cred_manager)
+    
+    for name, info in provider_registry.get_all_provider_info().items():
+        key_manager.register_provider(name, info.key_env_var)
+
+    # 3. 实例化服务
     if is_debug_mode:
-        llm_service_instance = MockLLMService()
+        MockLLMServiceClass = service_registry.get_class("mock_llm")
+        if not MockLLMServiceClass: raise RuntimeError("MockLLMService not registered!")
+        llm_service_instance = MockLLMServiceClass()
     else:
-        cred_manager = CredentialManager()
-        key_manager = KeyPoolManager(credential_manager=cred_manager)
-        provider_registry = ProviderRegistry()
-        key_manager.register_provider("gemini", "GEMINI_API_KEYS")
-        provider_registry.register("gemini", GeminiProvider())
-        llm_service_instance = LLMService(
+        LLMServiceClass = service_registry.get_class("llm")
+        if not LLMServiceClass: raise RuntimeError("LLMService not registered!")
+        llm_service_instance = LLMServiceClass(
             key_manager=key_manager,
             provider_registry=provider_registry,
             max_retries=3
         )
-    
-    # ... 在这里可以创建和配置其他服务，例如：
-    # github_service_instance = GitHubSyncService(token=os.getenv("GH_TOKEN"))
 
-    # 3. 组装服务注册表
-    # 这就是我们的“服务总线”
-    services = {
-        "llm": llm_service_instance,
-        # "github": github_service_instance,
-        # ... 任何未来的服务都注册在这里
-    }
+    services = {"llm": llm_service_instance}
 
-    # 4. 实例化引擎，并注入服务注册表
-    # 将引擎实例存储在 app.state 中，这是 FastAPI 推荐的做法
+    # 4. 实例化引擎，注入依赖
     app.state.engine = ExecutionEngine(
         registry=runtime_registry,
         services=services
     )
 
+    # 5. 配置中间件
     origins = ["http://localhost:5173"]
     app.add_middleware(
         CORSMiddleware,
@@ -88,9 +89,11 @@ def setup_application():
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    return app
+    print("--- FastAPI Application Configured ---")
 
-app = setup_application()
+# --- 【核心修改 2】 ---
+# 创建一个未配置的 app 实例，供 uvicorn 和测试导入
+app = create_app()
 
 # 全局存储保持不变
 sandbox_store: Dict[UUID, Sandbox] = {}
@@ -151,3 +154,11 @@ async def revert_sandbox_to_snapshot(sandbox_id: UUID, snapshot_id: UUID):
 @app.get("/")
 def read_root():
     return {"message": "Hevno Backend is running on runtime-centric architecture!"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    # 在直接运行时，配置 app
+    configure_app(app)
+    # 启动服务器
+    uvicorn.run(app, host="0.0.0.0", port=8000)

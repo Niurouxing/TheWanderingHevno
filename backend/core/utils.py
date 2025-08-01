@@ -23,6 +23,13 @@ class DotAccessibleDict:
             return [cls._wrap(item) for item in value]
         return value
 
+    def __contains__(self, key: str) -> bool:
+        """
+        当执行 `key in obj` 时调用。
+        直接代理到底层字典的 `in` 操作。
+        """
+        return key in self._data
+
     def __getattr__(self, name: str) -> Any:
         """
         当访问 obj.key 时调用。

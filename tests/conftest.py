@@ -2,84 +2,54 @@
 import json
 import pytest
 from fastapi.testclient import TestClient
+from fastapi import FastAPI
 from typing import Generator
 from dotenv import load_dotenv 
 
-# ---------------------------------------------------------------------------
-# Session-wide setup to load environment variables for tests
-# ---------------------------------------------------------------------------
-
+# --- Session-wide setup (不变) ---
 @pytest.fixture(scope="session", autouse=True)
 def load_test_env():
-    """
-    在所有测试运行之前，自动加载 .env.test 文件中的环境变量。
-    autouse=True 确保这个 fixture 会被自动调用，无需在每个测试函数中显式请求。
-    """
-    # 指定 .env.test 文件的路径，并加载它
-    # override=True 确保文件中的值会覆盖任何已存在的同名环境变量
     load_dotenv(dotenv_path=".env.test", override=True)
     print("\n--- Loaded .env.test for the test session ---")
-    
-    
 
-# ---------------------------------------------------------------------------
-# 从你的应用代码中导入核心类和函数
-# ---------------------------------------------------------------------------
-from backend.main import app, sandbox_store, snapshot_store
+# --- 导入核心组件 (大部分不变) ---
+from backend.main import app, create_app, configure_app, sandbox_store, snapshot_store
 from backend.models import GraphCollection
-from backend.core.registry import RuntimeRegistry
 from backend.core.engine import ExecutionEngine
-# 【修正】导入 MockLLMService 以构建测试用的服务总线
-from backend.llm.service import MockLLMService
-from backend.runtimes.base_runtimes import (
-    InputRuntime, LLMRuntime, SetWorldVariableRuntime
-)
-from backend.runtimes.codex.invoke_runtime import InvokeRuntime
-from backend.runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
+
+
 
 # ---------------------------------------------------------------------------
 # Fixtures for Core Components (Engine, Registry, API Client)
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="session")
-def populated_registry() -> RuntimeRegistry:
-    """提供一个预先填充了所有运行时的注册表实例。"""
-    registry = RuntimeRegistry()
-    registry.register("system.input", InputRuntime)
-    registry.register("llm.default", LLMRuntime) # <-- 使用真实的 LLMRuntime
-    registry.register("system.set_world_var", SetWorldVariableRuntime)
-    registry.register("system.execute", ExecuteRuntime)
-    registry.register("system.call", CallRuntime)
-    registry.register("system.map", MapRuntime)
-    registry.register("system.invoke", InvokeRuntime)
-    return registry
 
 @pytest.fixture(scope="session")
-def mock_services() -> dict:
+def test_app() -> FastAPI:
     """
-    【新增】提供一个用于测试的、包含 Mock 服务的服务注册表。
+    【修正】这个 fixture 现在不再创建新的 app，而是配置从 main.py 导入的全局 app。
     """
-    return {
-        "llm": MockLLMService()
-    }
-
-@pytest.fixture(scope="function")
-def test_engine(populated_registry: RuntimeRegistry, mock_services: dict) -> ExecutionEngine:
-    """
-    【修正】提供一个正确配置了 registry 和 mock_services 的 ExecutionEngine。
-    """
-    return ExecutionEngine(
-        registry=populated_registry,
-        services=mock_services
-    )
+    print("\n--- Configuring Test Application for the session ---")
+    
+    # 1. 直接使用从 main.py 导入的、已经附加了路由的 app 对象
+    # 2. 对这个 app 对象进行配置
+    configure_app(app)
+    
+    print("--- Test Application configured ---")
+    return app # 返回配置好的全局 app
+    
+@pytest.fixture
+def test_engine(test_app: FastAPI) -> ExecutionEngine:
+    """【修正】现在从配置好的 test_app 中获取引擎实例。"""
+    return test_app.state.engine
 
 @pytest.fixture
-def test_client() -> Generator[TestClient, None, None]:
-    """提供一个 FastAPI TestClient。"""
+def test_client(test_app: FastAPI) -> Generator[TestClient, None, None]:
+    """【修正】现在使用配置好的 test_app 来创建 TestClient。"""
     sandbox_store.clear()
     snapshot_store.clear()
     
-    with TestClient(app) as client:
+    with TestClient(test_app) as client:
         yield client
     
     sandbox_store.clear()

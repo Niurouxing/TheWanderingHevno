@@ -2,7 +2,6 @@
 import pytest
 from uuid import uuid4
 
-from backend.core.engine import ExecutionEngine
 from backend.core.state_models import StateSnapshot
 from backend.models import GraphCollection
 
@@ -15,11 +14,21 @@ class TestConcurrencyWithLock:
 
     async def test_concurrent_writes_are_atomic_and_correct(
         self, 
-        test_engine: ExecutionEngine, 
+        test_engine, # <-- 【修改】直接请求由 conftest.py 提供的 test_engine
         concurrent_write_collection: GraphCollection
     ):
         """
         验证两个并行节点对同一个 world_state 变量的多次修改是原子性的。
+        
+        【测试逻辑完全不变】
+        这个测试的逻辑非常健壮，它验证了：
+        1. 两个没有依赖关系的节点 `incrementer_A` 和 `incrementer_B` 会被并行执行。
+        2. 每个节点内部的宏 `world.counter += 1` 是一个经典的 read-modify-write 操作，
+           在没有锁的情况下极易出错。
+        3. 引擎的 `global_write_lock` 会在执行每个宏脚本之前获取，
+           确保整个脚本（即使是 for 循环）作为一个原子单元执行。
+        4. 因此，最终的 `world.counter` 必须是确定且正确的值 (200)，而不是一个因竞态条件
+           产生的随机值。
         """
         # 1. 准备初始状态
         initial_snapshot = StateSnapshot(

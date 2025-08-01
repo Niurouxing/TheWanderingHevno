@@ -12,11 +12,11 @@ from backend.llm.providers.gemini import GeminiProvider, google_exceptions
 from backend.llm.manager import (
     CredentialManager, KeyPoolManager, KeyInfo, KeyStatus
 )
-from backend.llm.service import LLMService, ProviderRegistry
+from backend.llm.service import LLMService
+from backend.llm.registry import ProviderRegistry
 
 # ---------------------------------------------------------------------------
 # Fixtures: 测试组件的“原材料”
-# (这部分保持不变)
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
@@ -172,9 +172,20 @@ class TestLLMServiceIntegration:
     @pytest.fixture
     def llm_service_with_mock_provider(self, key_pool_manager: KeyPoolManager, mock_gemini_provider: AsyncMock) -> LLMService:
         """提供一个配置了 mock provider 的 LLMService 实例。"""
+        # 1. 创建一个局部的、干净的 registry 实例
         registry = ProviderRegistry()
-        registry.register("gemini", mock_gemini_provider)
+        
+        # 2. 注册 mock provider。注意这里我们直接传递 mock 对象，而不是类
+        #    为了让它工作，我们需要稍微调整 register 方法的类型提示，或者直接在这里操作内部字典
+        #    更简单的方法是：直接操作 registry 的内部状态以进行精确的 mock
+        
+        # 我们直接将 mock provider 实例放入 registry 的 `_providers` 字典中
+        # 这样可以绕过 register 和 instantiate_all 的复杂逻辑
+        registry._providers["gemini"] = mock_gemini_provider
+
+        
         return LLMService(key_manager=key_pool_manager, provider_registry=registry, max_retries=2)
+    
 
     async def test_request_success_on_first_try(self, llm_service_with_mock_provider: LLMService, mock_gemini_provider: AsyncMock):
         """测试快乐路径：第一次尝试即成功。"""

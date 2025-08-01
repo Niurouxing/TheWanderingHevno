@@ -3,17 +3,19 @@
 import pytest
 from uuid import uuid4
 
-from backend.core.engine import ExecutionEngine
 from backend.core.state_models import StateSnapshot
 from backend.models import GraphCollection
 
 @pytest.mark.asyncio
 class TestCodexSystem:
-    """对 Hevno Codex 系统的集成测试 (system.invoke 运行时)。"""
+    """
+    对 Hevno Codex 系统的集成测试 (system.invoke 运行时)。
+    这个测试类现在完全依赖 conftest.py 来提供配置好的 test_engine。
+    """
 
     async def test_basic_invoke_always_on(
         self,
-        test_engine: ExecutionEngine,
+        test_engine, 
         codex_basic_data: dict
     ):
         """
@@ -40,7 +42,7 @@ class TestCodexSystem:
 
     async def test_invoke_keyword_and_priority(
         self,
-        test_engine: ExecutionEngine,
+        test_engine, 
         codex_keyword_and_priority_data: dict
     ):
         """
@@ -73,7 +75,7 @@ class TestCodexSystem:
 
     async def test_invoke_macro_evaluation_and_trigger_context(
         self,
-        test_engine: ExecutionEngine,
+        test_engine, 
         codex_macro_eval_data: dict
     ):
         """
@@ -129,7 +131,7 @@ class TestCodexSystem:
 
     async def test_invoke_recursion_enabled(
         self,
-        test_engine: ExecutionEngine,
+        test_engine, 
         codex_recursion_data: dict
     ):
         """
@@ -151,30 +153,33 @@ class TestCodexSystem:
         final_text = invoke_result["final_text"]
         trace = invoke_result["trace"]
         
-        # 预期渲染顺序：C (30) -> B (20) -> A (10) -> D (5)
-        # 渲染循环：
-        # 1. 初始激活 [A(10), D(5)] -> 渲染 A
-        # 2. A 的内容触发 B -> 池子 [B(20), D(5)] -> 渲染 B
-        # 3. B 的内容触发 C -> 池子 [C(30), D(5)] -> 渲染 C
-        # 4. 池子 [D(5)] -> 渲染 D
-        expected_order = [
-            "这是关于A的信息，它引出B。",   # Loop 1, P=10
-            "B被A触发了，它又引出C。",       # Loop 2, P=20
-            "C被B触发了，这是最终信息。",   # Loop 3, P=30
-            "这是一个总是存在的背景信息。", # Loop 4, P=5
+        # 【修正】根据您的 codex_recursion_data fixture 的具体内容，我重新推导了正确的输出顺序。
+        # 初始池: [A(10), D(5)] -> 渲染 A (内容 "引出B")
+        # 递归触发 B -> 当前池: [B(20), D(5)] -> 渲染 B (内容 "引出C")
+        # 递归触发 C -> 当前池: [C(30), D(5)] -> 渲染 C
+        # 当前池: [D(5)] -> 渲染 D
+        # 最终拼接时，是按渲染顺序来的。所以正确的渲染顺序是 A -> B -> C -> D
+        expected_rendered_order = [
+            "这是关于A的信息，它引出B。",
+            "B被A触发了，它又引出C。",
+            "C被B触发了，这是最终信息。",
+            "这是一个总是存在的背景信息。",
         ]
-        assert final_text.split("\n\n") == expected_order
+        
+        # 断言最终的文本拼接顺序
+        assert final_text.split("\n\n") == expected_rendered_order
 
         # Trace 日志中的渲染顺序也应该是 A -> B -> C -> D
         rendered_order_ids = [e["id"] for e in trace["evaluation_log"] if e["status"] == "rendered"]
         assert rendered_order_ids == ["entry_A", "entry_B", "entry_C", "entry_D_always_on"]
         
-        assert len(trace["initial_activation"]) == 2
-        assert len(trace["recursive_activations"]) == 2
+        # 验证 trace 的激活记录
+        assert len(trace["initial_activation"]) == 2 # A 和 D
+        assert len(trace["recursive_activations"]) == 2 # B 和 C
 
     async def test_invoke_invalid_codex_structure_error(
         self,
-        test_engine: ExecutionEngine,
+        test_engine, 
         codex_invalid_structure_data: dict
     ):
         """
@@ -197,8 +202,8 @@ class TestCodexSystem:
 
     async def test_invoke_nonexistent_codex_error(
         self,
-        test_engine: ExecutionEngine,
-        codex_nonexistent_codex_data: dict # <-- 修正 fixture 名称
+        test_engine, 
+        codex_nonexistent_codex_data: dict
     ):
         """
         测试 `system.invoke` 尝试从不存在的法典中读取时能捕获错误。
@@ -207,7 +212,7 @@ class TestCodexSystem:
         initial_snapshot = StateSnapshot(
             sandbox_id=uuid4(),
             graph_collection=graph_collection,
-            world_state={"codices": codex_nonexistent_codex_data["codices"]} # 注入空的 codices
+            world_state={"codices": codex_nonexistent_codex_data["codices"]}
         )
         final_snapshot = await test_engine.step(initial_snapshot, {})
         
@@ -219,7 +224,7 @@ class TestCodexSystem:
         
     async def test_invoke_concurrent_world_writes(
         self,
-        test_engine: ExecutionEngine,
+        test_engine, 
         codex_concurrent_world_write_data: dict
     ):
         """
@@ -240,12 +245,15 @@ class TestCodexSystem:
         
         assert "error" not in output["invoke_and_increment"]
 
-        # 初始 0 + 3 + 2 + 1 = 6 (按优先级倒序执行)
+        # 由于所有条目共享同一个关键字，它们会被并发求值。
+        # 即使它们有优先级，在渲染阶段（content evaluation）的求值是并发的，
+        # 依赖于宏级原子锁来保证最终结果的正确性。
+        # 初始 0 + 3 + 2 + 1 = 6。
         expected_counter = 6
         assert final_snapshot.world_state["counter"] == expected_counter
         assert output["read_counter"]["output"] == expected_counter
 
+        # 最终文本的拼接顺序依然由优先级决定
         invoke_text = output["invoke_and_increment"]["output"]
-        assert "Incremented 1." in invoke_text
-        assert "Incremented 2." in invoke_text
-        assert "Incremented 3." in invoke_text
+        assert invoke_text.find("Incremented 3.") < invoke_text.find("Incremented 2.")
+        assert invoke_text.find("Incremented 2.") < invoke_text.find("Incremented 1.")

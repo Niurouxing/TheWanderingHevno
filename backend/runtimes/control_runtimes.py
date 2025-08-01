@@ -7,8 +7,9 @@ from backend.core.interfaces import RuntimeInterface, SubGraphRunner # <-- 从�
 from backend.core.evaluation import evaluate_data, evaluate_expression, build_evaluation_context
 from backend.core.types import ExecutionContext
 from backend.core.utils import DotAccessibleDict
+from backend.core.registry import runtime_registry
 
-
+@runtime_registry.register("system.execute")
 class ExecuteRuntime(RuntimeInterface):
     """
     一个特殊的运行时，用于二次执行代码。
@@ -26,7 +27,7 @@ class ExecuteRuntime(RuntimeInterface):
         result = await evaluate_expression(code_to_execute, eval_context, lock)
         return {"output": result}
 
-
+@runtime_registry.register("system.call")
 class CallRuntime(RuntimeInterface):
     """执行一个子图。"""
     async def execute(self, config: Dict[str, Any], context: ExecutionContext, subgraph_runner: Optional[SubGraphRunner] = None, **kwargs) -> Dict[str, Any]:
@@ -50,6 +51,7 @@ class CallRuntime(RuntimeInterface):
         
         return {"output": subgraph_results}
 
+@runtime_registry.register("system.map")
 class MapRuntime(RuntimeInterface):
     """并行迭代。"""
     template_fields = ["using", "collect"]

@@ -10,11 +10,13 @@ from backend.core.interfaces import RuntimeInterface
 from backend.core.types import ExecutionContext
 from backend.core.evaluation import evaluate_data, build_evaluation_context
 from backend.core.utils import DotAccessibleDict
+from backend.core.registry import runtime_registry
 
 from .models import CodexCollection, ActivatedEntry
 
 from .models import TriggerMode
 
+@runtime_registry.register("system.invoke")
 class InvokeRuntime(RuntimeInterface):
     """
     system.invoke 运行时的实现。

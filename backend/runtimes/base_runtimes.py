@@ -2,14 +2,17 @@
 import asyncio 
 from typing import Dict, Any, Optional
 from backend.core.interfaces import RuntimeInterface
+from backend.core.registry import runtime_registry 
 from backend.core.types import ExecutionContext
 from backend.llm.models import LLMResponse, LLMRequestFailedError
 
+@runtime_registry.register("system.input") 
 class InputRuntime(RuntimeInterface):
     """从 config 中获取 'value'。"""
     async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
         return {"output": config.get("value", "")}
 
+@runtime_registry.register("llm.default")
 class LLMRuntime(RuntimeInterface):
     """
     一个轻量级的运行时，它通过 Hevno LLM Gateway 发起 LLM 调用。
@@ -67,6 +70,7 @@ class LLMRuntime(RuntimeInterface):
                 "details": e.last_error.model_dump() if e.last_error else None
             }
 
+@runtime_registry.register("system.set_world_var")
 class SetWorldVariableRuntime(RuntimeInterface):
     """从 config 中获取变量名和值，并设置一个持久化的世界变量。"""
     async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:

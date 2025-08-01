@@ -3,31 +3,38 @@
 import pytest
 from uuid import uuid4
 
-from backend.core.engine import ExecutionEngine
+
 from backend.core.state_models import StateSnapshot
 from backend.models import GraphCollection
 
+# 使用 pytest.mark.asyncio 来标记所有异步测试
 @pytest.mark.asyncio
 class TestEngineMapExecution:
     """
     对 system.map 运行时的集成测试。
+    所有测试现在都从 conftest.py 中自动获取一个配置好的、
+    使用 MockLLMService 的 test_engine 实例。
     """
 
     async def test_basic_map_execution(
         self,
-        test_engine: ExecutionEngine,
+        test_engine,  # <-- 直接请求由 conftest 提供的 fixture
         map_collection_basic: GraphCollection
     ):
         """
         测试基本的 scatter-gather 功能，不使用 collect。
         期望输出是每个子图执行结果的完整字典的列表。
         """
+        # --- Arrange ---
         initial_snapshot = StateSnapshot(
             sandbox_id=uuid4(),
             graph_collection=map_collection_basic
         )
+        
+        # --- Act ---
         final_snapshot = await test_engine.step(initial_snapshot, {})
         
+        # --- Assert ---
         output = final_snapshot.run_output
         map_result = output["character_processor_map"]["output"]
 
@@ -43,29 +50,33 @@ class TestEngineMapExecution:
         # 3. 详细验证第一个子图的输出，确保 source.item, source.index 和外部节点引用都正确
         first_bio_output = map_result[0]["generate_bio"]["llm_output"]
         expected_prompt_text_first = "Create a bio for Aragorn in the context of The Fellowship of the Ring. Index: 0"
-        # 【修正】断言现在匹配 MockLLMService 的输出格式
+        # 断言匹配 MockLLMService 的输出格式
         assert first_bio_output == f"[MOCK RESPONSE for mock/model] - Prompt received: '{expected_prompt_text_first[:50]}...'"
         
         # 4. 验证最后一个子图的输出
         last_bio_output = map_result[2]["generate_bio"]["llm_output"]
         expected_prompt_text_last = "Create a bio for Legolas in the context of The Fellowship of the Ring. Index: 2"
-        # 【修正】断言现在匹配 MockLLMService 的输出格式
+        # 断言匹配 MockLLMService 的输出格式
         assert last_bio_output == f"[MOCK RESPONSE for mock/model] - Prompt received: '{expected_prompt_text_last[:50]}...'"
 
     async def test_map_with_collect(
         self,
-        test_engine: ExecutionEngine,
+        test_engine,  # <-- 直接请求由 conftest 提供的 fixture
         map_collection_with_collect: GraphCollection
     ):
         """
         测试 `collect` 功能，期望输出是一个扁平化的值列表。
         """
+        # --- Arrange ---
         initial_snapshot = StateSnapshot(
             sandbox_id=uuid4(),
             graph_collection=map_collection_with_collect
         )
+        
+        # --- Act ---
         final_snapshot = await test_engine.step(initial_snapshot, {})
 
+        # --- Assert ---
         output = final_snapshot.run_output
         map_result = output["character_processor_map"]["output"]
 
@@ -73,7 +84,7 @@ class TestEngineMapExecution:
         assert isinstance(map_result, list)
         assert len(map_result) == 3
 
-        # 2. 【修正】验证列表中的每个元素都是从子图提取的 `llm_output` 字符串
+        # 2. 验证列表中的每个元素都是从子图提取的 `llm_output` 字符串
         prompt0 = "Create a bio for Aragorn in the context of The Fellowship of the Ring. Index: 0"
         prompt1 = "Create a bio for Gandalf in the context of The Fellowship of the Ring. Index: 1"
         prompt2 = "Create a bio for Legolas in the context of The Fellowship of the Ring. Index: 2"
@@ -84,20 +95,23 @@ class TestEngineMapExecution:
 
     async def test_map_handles_concurrent_world_writes(
         self,
-        test_engine: ExecutionEngine,
+        test_engine,  # <-- 直接请求由 conftest 提供的 fixture
         map_collection_concurrent_write: GraphCollection
     ):
         """
         验证在 map 中并发写入 world_state 是原子和安全的。
-        这个测试不依赖 LLM 输出，因此逻辑保持不变。
         """
+        # --- Arrange ---
         initial_snapshot = StateSnapshot(
             sandbox_id=uuid4(),
             graph_collection=map_collection_concurrent_write,
             world_state={"gold": 0} # 初始金币为0
         )
+        
+        # --- Act ---
         final_snapshot = await test_engine.step(initial_snapshot, {})
         
+        # --- Assert ---
         # 10个并行任务，每个增加10金币
         expected_gold = 100
 
@@ -111,20 +125,23 @@ class TestEngineMapExecution:
 
     async def test_map_handles_partial_failures_gracefully(
         self,
-        test_engine: ExecutionEngine,
+        test_engine,  # <-- 直接请求由 conftest 提供的 fixture
         map_collection_with_failure: GraphCollection
     ):
         """
         测试当 map 迭代中的某些子图失败时，整体操作不会崩溃，
         并且返回的结果中能清晰地标识出成功和失败的项。
-        这个测试不依赖 LLM 输出，因此逻辑保持不变。
         """
+        # --- Arrange ---
         initial_snapshot = StateSnapshot(
             sandbox_id=uuid4(),
             graph_collection=map_collection_with_failure
         )
+        
+        # --- Act ---
         final_snapshot = await test_engine.step(initial_snapshot, {})
 
+        # --- Assert ---
         output = final_snapshot.run_output
         map_result = output["mapper"]["output"]
 

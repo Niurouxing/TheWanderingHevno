@@ -1,7 +1,7 @@
 # backend/llm/service.py
-
+from __future__ import annotations
 import asyncio
-from typing import Dict, Type, Optional, Any
+from typing import Dict, Optional, Any
 
 from tenacity import (
     retry,
@@ -10,7 +10,6 @@ from tenacity import (
     retry_if_exception_type,
 )
 
-from backend.llm.providers.base import LLMProvider
 from backend.llm.manager import KeyPoolManager, KeyInfo
 from backend.llm.models import (
     LLMResponse,
@@ -19,25 +18,12 @@ from backend.llm.models import (
     LLMResponseStatus,
     LLMRequestFailedError,
 )
+from backend.llm.registry import provider_registry
+from backend.core.services import service_registry, ServiceInterface
 
 
-class ProviderRegistry:
-    """
-    负责注册和查找 LLMProvider 实例。
-    """
-    def __init__(self):
-        self._providers: Dict[str, LLMProvider] = {}
-
-    def register(self, name: str, provider_instance: LLMProvider):
-        if name in self._providers:
-            pass
-        self._providers[name] = provider_instance
-
-    def get(self, name: str) -> Optional[LLMProvider]:
-        return self._providers.get(name)
-
-
-class LLMService:
+@service_registry.register("llm")
+class LLMService(ServiceInterface):
     """
     LLM Gateway 的核心服务，负责协调所有组件并执行请求。
     """
@@ -57,6 +43,7 @@ class LLMService:
         prompt: str,
         **kwargs
     ) -> LLMResponse:
+        self.last_known_error = None
         try:
             provider_name, actual_model_name = self._parse_model_name(model_name)
         except ValueError as e:
@@ -90,7 +77,7 @@ class LLMService:
             )
             raise LLMRequestFailedError(
                 final_message,
-                last_error=e.last_error
+                last_error=self.last_known_error 
             ) from e
         
         except Exception as e:
@@ -119,6 +106,7 @@ class LLMService:
                 
                 except Exception as e:
                     llm_error = provider.translate_error(e)
+                    self.last_known_error = llm_error
                     await self._handle_error(provider_name, key_info, llm_error)
                     error_message = f"Request attempt failed: {llm_error.message}"
                     raise LLMRequestFailedError(error_message, last_error=llm_error) from e
@@ -143,7 +131,8 @@ class LLMService:
     def _create_failure_response(self, model_name: str, error: LLMError) -> LLMResponse:
         return LLMResponse(status=LLMResponseStatus.ERROR, model_name=model_name, error_details=error)
 
-class MockLLMService:
+@service_registry.register("mock_llm")
+class MockLLMService(ServiceInterface):
     """
     一个 LLMService 的模拟实现，用于调试。
     它不进行任何网络调用，而是立即返回一个可预测的假响应。
@@ -168,3 +157,4 @@ class MockLLMService:
             model_name=model_name,
             usage={"prompt_tokens": len(prompt.split()), "completion_tokens": 15, "total_tokens": len(prompt.split()) + 15}
         )
+
