@@ -1,6 +1,6 @@
 # backend/core/registry.py
 from typing import Dict, Type
-from backend.core.runtime import RuntimeInterface
+from backend.core.interfaces import RuntimeInterface
 
 class RuntimeRegistry:
     def __init__(self):
