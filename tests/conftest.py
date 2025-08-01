@@ -14,6 +14,7 @@ from backend.core.engine import ExecutionEngine
 from backend.runtimes.base_runtimes import (
     InputRuntime, LLMRuntime, SetWorldVariableRuntime
 )
+from backend.runtimes.codex.invoke_runtime import InvokeRuntime
 from backend.runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
 
 # ---------------------------------------------------------------------------
@@ -30,6 +31,7 @@ def populated_registry() -> RuntimeRegistry:
     registry.register("system.execute", ExecuteRuntime)
     registry.register("system.call", CallRuntime)
     registry.register("system.map", MapRuntime)
+    registry.register("system.invoke", InvokeRuntime)
     print("\n--- Populated Registry Created (Session Scope) ---")
     return registry
 
@@ -628,3 +630,191 @@ def map_collection_with_failure() -> GraphCollection:
             ]
         }
     })
+
+
+# ---------------------------------------------------------------------------
+#  Codex System Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def codex_basic_data() -> dict:
+    """
+    分离的 Graph 和 Codex 数据，用于测试 `always_on` 和优先级。
+    """
+    graph_definition = {
+        "main": {
+            "nodes": [{
+                "id": "invoke_test",
+                "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "basic_info"}]}}]
+            }]
+        }
+    }
+    codices_data = {
+        "basic_info": {
+            "description": "基本的问候和介绍",
+            "entries": [
+                {"id": "greeting", "content": "你好，冒险者！", "priority": 10},
+                {"id": "intro", "content": "欢迎来到这个奇幻的世界。", "priority": 5}
+            ]
+        }
+    }
+    return {"graph": graph_definition, "codices": codices_data}
+
+
+@pytest.fixture
+def codex_keyword_and_priority_data() -> dict:
+    """
+    测试 `on_keyword` 触发模式和 `priority` 排序。
+    """
+    graph_definition = {
+        "main": {
+            "nodes": [
+                {
+                    "id": "invoke_weather",
+                    "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "weather_lore", "source": "今天的魔法天气怎么样？"}]}}]
+                },
+                {
+                    "id": "invoke_mood",
+                    "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "mood_expressions", "source": "我很开心，因为天气很好。"}]}}]
+                }
+            ]
+        }
+    }
+    codices_data = {
+        "weather_lore": {
+            "entries": [
+                {"id": "sunny", "content": "阳光明媚，万里无云。", "trigger_mode": "on_keyword", "keywords": ["阳光", "晴朗"], "priority": 10},
+                {"id": "rainy", "content": "外面下着大雨，带把伞吧。", "trigger_mode": "on_keyword", "keywords": ["下雨", "雨天"], "priority": 20},
+                {"id": "magic_weather", "content": "魔法能量今天异常活跃，可能会有异象发生。", "trigger_mode": "on_keyword", "keywords": ["魔法天气", "异象"], "priority": 30}
+            ]
+        },
+        "mood_expressions": {
+            "entries": [
+                {"id": "happy_mood", "content": "你看起来很高兴。", "trigger_mode": "on_keyword", "keywords": ["开心", "高兴", "快乐"], "priority": 5},
+                {"id": "sad_mood", "content": "你似乎有些低落。", "trigger_mode": "on_keyword", "keywords": ["伤心", "低落"], "priority": 10}
+            ]
+        }
+    }
+    return {"graph": graph_definition, "codices": codices_data}
+
+
+@pytest.fixture
+def codex_macro_eval_data() -> dict:
+    """
+    测试 Codex 条目内部宏求值的集合。
+    使用三引号来避免引号冲突。
+    """
+    # 【修正】确保 graph_definition 是一个正确的字典
+    graph_definition = {
+        "main": {
+            "nodes": [
+                {
+                    "id": "get_weather_report",
+                    "run": [{
+                        "runtime": "system.invoke",
+                        "config": {
+                            "from": [{"codex": "dynamic_entries", "source": "请告诉我关于秘密和夜幕下的世界。"}],
+                            "debug": True
+                        }
+                    }]
+                }
+            ]
+        }
+    }
+    codices_data = {
+        "dynamic_entries": {
+            "entries": [
+                # 【修正】使用三引号 f-string，更清晰
+                {"id": "night_info", "content": """{{ f"现在是{'夜晚' if world.is_night else '白天'}。" }}""", "is_enabled": "{{ world.is_night }}"},
+                {"id": "level_message", "content": """{{ f'你的等级是：{world.player_level}级。' }}""", "priority": "{{ 100 if world.player_level > 3 else 0 }}"},
+                {"id": "secret_keyword_entry", "content": """{{ f"你提到了'{trigger.matched_keywords[0]}'，这是一个秘密信息。" }}""", "trigger_mode": "on_keyword", "keywords": "{{ [world.hidden_keyword] }}", "priority": 50},
+                {"id": "always_on_with_trigger_info", "content": """{{ f"原始输入是：'{trigger.source_text}'。" }}""", "trigger_mode": "always_on", "priority": 1}
+            ]
+        }
+    }
+    return {"graph": graph_definition, "codices": codices_data}
+
+
+@pytest.fixture
+def codex_recursion_data() -> dict:
+    """
+    测试 Codex 的递归功能。
+    """
+    graph_definition = {
+        "main": {"nodes": [{
+            "id": "recursive_invoke",
+            "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "recursive_lore", "source": "告诉我关于A"}], "recursion_enabled": True, "debug": True}}]
+        }]}
+    }
+    codices_data = {
+        "recursive_lore": {
+            "config": {"recursion_depth": 5}, # 增加深度以确保测试通过
+            "entries": [
+                {"id": "entry_A", "content": "这是关于A的信息，它引出B。", "trigger_mode": "on_keyword", "keywords": ["A"], "priority": 10},
+                {"id": "entry_B", "content": "B被A触发了，它又引出C。", "trigger_mode": "on_keyword", "keywords": ["B"], "priority": 20},
+                {"id": "entry_C", "content": "C被B触发了，这是最终信息。", "trigger_mode": "on_keyword", "keywords": ["C"], "priority": 30},
+                {"id": "entry_D_always_on", "content": "这是一个总是存在的背景信息。", "trigger_mode": "always_on", "priority": 5}
+            ]
+        }
+    }
+    return {"graph": graph_definition, "codices": codices_data}
+
+
+@pytest.fixture
+def codex_invalid_structure_data() -> dict:
+    """
+    测试无效 Codex 结构时的错误处理。
+    """
+    graph_definition = {"main": {"nodes": [{"id": "invoke_invalid", "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "bad_codex"}]}}]}]}}
+    codices_data = {
+        "bad_codex": {
+            "entries": [
+                {"id": "valid_one", "content": "valid"},
+                {"id": "invalid_one", "content": 123} # content 必须是字符串
+            ]
+        }
+    }
+    return {"graph": graph_definition, "codices": codices_data}
+
+
+@pytest.fixture
+def codex_concurrent_world_write_data() -> dict:
+    """
+    测试 `system.invoke` 内部宏对 `world_state` 的并发写入。
+    """
+    graph_definition = {
+        "main": {
+            "nodes": [
+                {
+                    "id": "invoke_and_increment",
+                    "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "concurrent_codex", "source": "触发计数"}]}}]
+                },
+                {
+                    "id": "read_counter",
+                    "depends_on": ["invoke_and_increment"],
+                    "run": [{"runtime": "system.input", "config": {"value": "{{ world.counter }}"}}]
+                }
+            ]
+        }
+    }
+    codices_data = {
+        "concurrent_codex": {
+            "entries": [
+                {"id": "increment_1", "content": "{{ world.counter = world.counter + 1; 'Incremented 1.' }}", "trigger_mode": "on_keyword", "keywords": ["计数"], "priority": 10},
+                {"id": "increment_2", "content": "{{ world.counter += 2; 'Incremented 2.' }}", "trigger_mode": "on_keyword", "keywords": ["计数"], "priority": 20},
+                {"id": "increment_3", "content": "{{ world.counter += 3; 'Incremented 3.' }}", "trigger_mode": "on_keyword", "keywords": ["计数"], "priority": 30}
+            ]
+        }
+    }
+    return {"graph": graph_definition, "codices": codices_data}
+
+@pytest.fixture
+def codex_nonexistent_codex_data() -> dict:
+    graph_definition = {
+        "main": {"nodes": [{
+            "id": "invoke_nonexistent",
+            "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "nonexistent_codex"}]}}]
+        }]}
+    }
+    # codices 是空的，因为我们就是想测试找不到的情况
+    return {"graph": graph_definition, "codices": {}}
