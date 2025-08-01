@@ -1,7 +1,7 @@
 # backend/runtimes/base_runtimes.py
 import asyncio 
 from typing import Dict, Any, Optional
-from backend.core.interfaces import RuntimeInterface # <-- 从新位置导入
+from backend.core.interfaces import RuntimeInterface
 from backend.core.types import ExecutionContext
 from backend.llm.models import LLMResponse, LLMRequestFailedError
 
@@ -25,8 +25,15 @@ class LLMRuntime(RuntimeInterface):
         prompt = config.get("prompt")
         llm_params = {k: v for k, v in config.items() if k not in ["model", "prompt"]}
 
-        # 【核心修改】从 context.shared.services 中按名称获取服务
-        # 我们现在可以优雅地使用点符号访问
+        if not model_name:
+            raise ValueError("LLMRuntime requires a 'model' field in its config (e.g., 'gemini/gemini-1.5-flash').")
+        if not prompt:
+            raise ValueError("LLMRuntime requires a 'prompt' field in its config.")
+
+        # 所有非'model'和'prompt'的键都作为额外参数传递
+        llm_params = {k: v for k, v in config.items() if k not in ["model", "prompt"]}
+
+        # 2. 从共享上下文中获取 LLM Service
         llm_service = context.shared.services.llm
 
         try:
@@ -69,7 +76,6 @@ class SetWorldVariableRuntime(RuntimeInterface):
         if not variable_name:
             raise ValueError("SetWorldVariableRuntime requires 'variable_name' in its config.")
         
-        # --- 修正: 修改共享的世界状态 ---
         context.shared.world_state[variable_name] = value_to_set
         
         return {}

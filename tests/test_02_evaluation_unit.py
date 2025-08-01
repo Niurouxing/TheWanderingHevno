@@ -12,6 +12,7 @@ from backend.models import GraphCollection
 # 【修改】导入新的运行时
 from backend.runtimes.base_runtimes import SetWorldVariableRuntime
 from backend.runtimes.control_runtimes import ExecuteRuntime
+from backend.llm.service import MockLLMService
 
 @pytest.fixture
 def mock_exec_context() -> ExecutionContext:
@@ -25,7 +26,10 @@ def mock_exec_context() -> ExecutionContext:
         world_state=initial_world
     )
     # --- 修正: 使用新的工厂方法 ---
-    context = ExecutionContext.create_for_main_run(snapshot)
+    context = ExecutionContext.create_for_main_run(
+        snapshot, 
+        services={"llm": MockLLMService()}
+    )
     
     # 这部分保持不变，是正确的
     context.node_states = {"node_A": {"output": "Success"}}

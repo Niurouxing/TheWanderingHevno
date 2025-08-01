@@ -41,14 +41,16 @@ class TestEngineMapExecution:
         assert "generate_bio" in map_result[2]
 
         # 3. 详细验证第一个子图的输出，确保 source.item, source.index 和外部节点引用都正确
-        first_bio_prompt = map_result[0]["generate_bio"]["llm_output"]
-        expected_prompt = "LLM_RESPONSE_FOR:[Create a bio for Aragorn in the context of The Fellowship of the Ring. Index: 0]"
-        assert first_bio_prompt == expected_prompt
+        first_bio_output = map_result[0]["generate_bio"]["llm_output"]
+        expected_prompt_text_first = "Create a bio for Aragorn in the context of The Fellowship of the Ring. Index: 0"
+        # 【修正】断言现在匹配 MockLLMService 的输出格式
+        assert first_bio_output == f"[MOCK RESPONSE for mock/model] - Prompt received: '{expected_prompt_text_first[:50]}...'"
         
         # 4. 验证最后一个子图的输出
-        last_bio_prompt = map_result[2]["generate_bio"]["llm_output"]
-        expected_prompt_last = "LLM_RESPONSE_FOR:[Create a bio for Legolas in the context of The Fellowship of the Ring. Index: 2]"
-        assert last_bio_prompt == expected_prompt_last
+        last_bio_output = map_result[2]["generate_bio"]["llm_output"]
+        expected_prompt_text_last = "Create a bio for Legolas in the context of The Fellowship of the Ring. Index: 2"
+        # 【修正】断言现在匹配 MockLLMService 的输出格式
+        assert last_bio_output == f"[MOCK RESPONSE for mock/model] - Prompt received: '{expected_prompt_text_last[:50]}...'"
 
     async def test_map_with_collect(
         self,
@@ -64,8 +66,6 @@ class TestEngineMapExecution:
         )
         final_snapshot = await test_engine.step(initial_snapshot, {})
 
-        # --- 【核心修正】---
-        # 恢复被意外删除的行
         output = final_snapshot.run_output
         map_result = output["character_processor_map"]["output"]
 
@@ -73,11 +73,14 @@ class TestEngineMapExecution:
         assert isinstance(map_result, list)
         assert len(map_result) == 3
 
-        # 2. 验证列表中的每个元素都是从子图提取的 `summary` 字符串
-        # 使用我们之前修正过的正确字符串
-        assert map_result[0] == "Summary of 'Create a bio for Ara...'"
-        assert map_result[1] == "Summary of 'Create a bio for Gan...'"
-        assert map_result[2] == "Summary of 'Create a bio for Leg...'"
+        # 2. 【修正】验证列表中的每个元素都是从子图提取的 `llm_output` 字符串
+        prompt0 = "Create a bio for Aragorn in the context of The Fellowship of the Ring. Index: 0"
+        prompt1 = "Create a bio for Gandalf in the context of The Fellowship of the Ring. Index: 1"
+        prompt2 = "Create a bio for Legolas in the context of The Fellowship of the Ring. Index: 2"
+        
+        assert map_result[0] == f"[MOCK RESPONSE for mock/model] - Prompt received: '{prompt0[:50]}...'"
+        assert map_result[1] == f"[MOCK RESPONSE for mock/model] - Prompt received: '{prompt1[:50]}...'"
+        assert map_result[2] == f"[MOCK RESPONSE for mock/model] - Prompt received: '{prompt2[:50]}...'"
 
     async def test_map_handles_concurrent_world_writes(
         self,
@@ -86,6 +89,7 @@ class TestEngineMapExecution:
     ):
         """
         验证在 map 中并发写入 world_state 是原子和安全的。
+        这个测试不依赖 LLM 输出，因此逻辑保持不变。
         """
         initial_snapshot = StateSnapshot(
             sandbox_id=uuid4(),
@@ -113,6 +117,7 @@ class TestEngineMapExecution:
         """
         测试当 map 迭代中的某些子图失败时，整体操作不会崩溃，
         并且返回的结果中能清晰地标识出成功和失败的项。
+        这个测试不依赖 LLM 输出，因此逻辑保持不变。
         """
         initial_snapshot = StateSnapshot(
             sandbox_id=uuid4(),

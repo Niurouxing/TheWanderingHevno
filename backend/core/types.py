@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from backend.core.state_models import StateSnapshot
 from backend.models import GraphCollection
+from backend.core.utils import DotAccessibleDict
 
 ServiceRegistry = Dict[str, Any]
 

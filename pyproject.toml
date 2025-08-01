@@ -1,12 +1,9 @@
-# pyproject.toml
 [tool.pytest.ini_options]
-# Python 源代码的根目录，让pytest能找到 'backend' 模块
-pythonpath = "." 
-# 异步测试模式，'auto' 会自动为 async def test_... 函数应用 asyncio marker
+pythonpath = "."
 asyncio_mode = "auto"
-# 告诉pytest测试文件匹配模式
 python_files = "tests/test_*.py"
 markers = [
     "llm_gateway: marks tests related to the LLM gateway module",
+    "e2e: marks end-to-end tests",
     # 在这里可以添加其他自定义标记
 ]

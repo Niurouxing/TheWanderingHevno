@@ -29,6 +29,8 @@ from backend.main import app, sandbox_store, snapshot_store
 from backend.models import GraphCollection
 from backend.core.registry import RuntimeRegistry
 from backend.core.engine import ExecutionEngine
+# 【修正】导入 MockLLMService 以构建测试用的服务总线
+from backend.llm.service import MockLLMService
 from backend.runtimes.base_runtimes import (
     InputRuntime, LLMRuntime, SetWorldVariableRuntime
 )
@@ -41,28 +43,39 @@ from backend.runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRu
 
 @pytest.fixture(scope="session")
 def populated_registry() -> RuntimeRegistry:
-    """提供一个预先填充了所有新版运行时的注册表实例。"""
+    """提供一个预先填充了所有运行时的注册表实例。"""
     registry = RuntimeRegistry()
     registry.register("system.input", InputRuntime)
-    registry.register("llm.default", LLMRuntime)
+    registry.register("llm.default", LLMRuntime) # <-- 使用真实的 LLMRuntime
     registry.register("system.set_world_var", SetWorldVariableRuntime)
     registry.register("system.execute", ExecuteRuntime)
     registry.register("system.call", CallRuntime)
     registry.register("system.map", MapRuntime)
     registry.register("system.invoke", InvokeRuntime)
-    print("\n--- Populated Registry Created (Session Scope) ---")
     return registry
 
+@pytest.fixture(scope="session")
+def mock_services() -> dict:
+    """
+    【新增】提供一个用于测试的、包含 Mock 服务的服务注册表。
+    """
+    return {
+        "llm": MockLLMService()
+    }
 
 @pytest.fixture(scope="function")
-def test_engine(populated_registry: RuntimeRegistry) -> ExecutionEngine:
-    """提供一个配置了标准运行时的 ExecutionEngine 实例。"""
-    return ExecutionEngine(registry=populated_registry)
-
+def test_engine(populated_registry: RuntimeRegistry, mock_services: dict) -> ExecutionEngine:
+    """
+    【修正】提供一个正确配置了 registry 和 mock_services 的 ExecutionEngine。
+    """
+    return ExecutionEngine(
+        registry=populated_registry,
+        services=mock_services
+    )
 
 @pytest.fixture
 def test_client() -> Generator[TestClient, None, None]:
-    """提供一个 FastAPI TestClient 用于端到端 API 测试 (Function scope for isolation)。"""
+    """提供一个 FastAPI TestClient。"""
     sandbox_store.clear()
     snapshot_store.clear()
     
@@ -73,7 +86,7 @@ def test_client() -> Generator[TestClient, None, None]:
     snapshot_store.clear()
 
 # ---------------------------------------------------------------------------
-# Fixtures for Graph Collections (Rewritten for New Architecture)
+# Fixtures for Graph Collections (更新 llm.default 配置)
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
@@ -82,10 +95,13 @@ def linear_collection() -> GraphCollection:
     return GraphCollection.model_validate({
         "main": { "nodes": [
             {"id": "A", "run": [{"runtime": "system.input", "config": {"value": "a story about a cat"}}]},
-            {"id": "B", "run": [{"runtime": "llm.default", "config": {"prompt": "{{ f'The story is: {nodes.A.output}' }}"}}]},
-            {"id": "C", "run": [{"runtime": "llm.default", "config": {"prompt": "{{ nodes.B.llm_output }}"}}]}
+            # 【修正】添加 model 字段
+            {"id": "B", "run": [{"runtime": "llm.default", "config": {"model": "mock/model", "prompt": "{{ f'The story is: {nodes.A.output}' }}"}}]},
+            # 【修正】添加 model 字段
+            {"id": "C", "run": [{"runtime": "llm.default", "config": {"model": "mock/model", "prompt": "{{ nodes.B.llm_output }}"}}]}
         ]}
     })
+
 
 @pytest.fixture
 def parallel_collection() -> GraphCollection:
@@ -130,6 +146,7 @@ def pipeline_collection() -> GraphCollection:
                 {
                     "runtime": "llm.default",
                     "config": {
+                        "model": "mock/model",
                         # 这个宏现在可以安全地访问 world 状态和上一步的管道输出
                         "prompt": "{{ f'Tell a story about {world.main_character}. He just received this message: {pipe.output}' }}"
                     }
@@ -536,6 +553,8 @@ def map_collection_basic() -> GraphCollection:
                     "run": [{
                         "runtime": "llm.default",
                         "config": {
+                            # V-- 【这 是 唯 一 且 关 键 的 修 正】 --V
+                            "model": "mock/model",
                             "prompt": "{{ f'Create a bio for {nodes.character_input.output} in the context of {nodes.global_story_setting.output}. Index: {nodes.character_index.output}' }}"
                         }
                     }]
@@ -556,7 +575,7 @@ def map_collection_with_collect(map_collection_basic: GraphCollection) -> GraphC
     
     map_instruction = base_data["main"]["nodes"][2]["run"][0]
     # 添加 collect 字段
-    map_instruction["config"]["collect"] = "{{ nodes.generate_bio.summary }}"
+    map_instruction["config"]["collect"] = "{{ nodes.generate_bio.llm_output }}"
     
     return GraphCollection.model_validate(base_data)
 

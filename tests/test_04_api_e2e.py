@@ -1,16 +1,17 @@
 # tests/test_04_api_e2e.py
 import pytest
 from fastapi.testclient import TestClient
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from backend.models import GraphCollection
 
 
+@pytest.mark.e2e
 class TestApiSandboxLifecycle:
     """测试沙盒从创建、执行、查询到回滚的完整生命周期。"""
     
     def test_full_lifecycle(self, test_client: TestClient, linear_collection: GraphCollection):
-        # 1. 创建
+        # 1. 创建沙盒
         response = test_client.post(
             "/api/sandboxes",
             params={"name": "E2E Test"},
@@ -19,47 +20,59 @@ class TestApiSandboxLifecycle:
                 "initial_state": {} 
             }
         )
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         sandbox_data = response.json()
         sandbox_id = sandbox_data["id"]
         genesis_snapshot_id = sandbox_data["head_snapshot_id"]
+        assert sandbox_id is not None
+        assert genesis_snapshot_id is not None
 
-        # 2. 执行
+        # 2. 执行一步
         response = test_client.post(f"/api/sandboxes/{sandbox_id}/step", json={"user_message": "test"})
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         step1_snapshot_data = response.json()
         step1_snapshot_id = step1_snapshot_data["id"]
-        assert "C" in step1_snapshot_data.get("run_output", {})
+        
+        # 验证图执行成功，并且最终节点 'C' 存在于输出中
+        run_output = step1_snapshot_data.get("run_output", {})
+        assert "C" in run_output
+        
+        # 【关键修改】验证 'C' 节点的输出是来自 MockLLMService
+        assert "llm_output" in run_output["C"]
+        assert run_output["C"]["llm_output"].startswith("[MOCK RESPONSE for mock/model]")
 
-        # 3. 历史
+        # 3. 获取历史记录
         response = test_client.get(f"/api/sandboxes/{sandbox_id}/history")
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         history = response.json()
-        assert len(history) == 2
+        assert len(history) == 2, "History should contain the genesis and the first step snapshots."
 
-        # 4. 回滚
+        # 4. 回滚到创世快照
         response = test_client.put(
             f"/api/sandboxes/{sandbox_id}/revert",
             params={"snapshot_id": genesis_snapshot_id}
         )
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
+        assert response.json() == {"message": f"Sandbox reverted to snapshot {genesis_snapshot_id}"}
 
-        # 5. 验证回滚
-        response = test_client.post(f"/api/sandboxes/{sandbox_id}/step", json={})
+        # 5. 再次执行一步，验证父快照是创世快照
+        response = test_client.post(f"/api/sandboxes/{sandbox_id}/step", json={"user_message": "re-test"})
+        assert response.status_code == 200, response.text
         step2_snapshot_data = response.json()
         assert step2_snapshot_data["parent_snapshot_id"] == genesis_snapshot_id
 
 
+@pytest.mark.e2e
 class TestApiErrorHandling:
     """测试 API 在各种错误情况下的响应。"""
 
     def test_create_sandbox_with_invalid_graph(self, test_client: TestClient, invalid_graph_no_main: dict):
         response = test_client.post(
             "/api/sandboxes",
-            params={"name": "Invalid"},
+            params={"name": "Invalid Graph Test"},
             json={"graph_collection": invalid_graph_no_main}
         )
-        assert response.status_code == 422 
+        assert response.status_code == 422, "Should fail with Unprocessable Entity for invalid graph structure"
         error_data = response.json()
         assert "A 'main' graph must be defined" in error_data["detail"][0]["msg"]
         # 验证 pydantic v2 对 RootModel 的错误路径
@@ -67,17 +80,21 @@ class TestApiErrorHandling:
 
     def test_operations_on_nonexistent_sandbox(self, test_client: TestClient):
         nonexistent_id = uuid4()
+        
+        # Step
         response = test_client.post(f"/api/sandboxes/{nonexistent_id}/step", json={})
         assert response.status_code == 404
         
-        # 获取历史记录现在会因为找不到 sandbox 而返回 404
+        # History
         response = test_client.get(f"/api/sandboxes/{nonexistent_id}/history")
         assert response.status_code == 404
 
+        # Revert
         response = test_client.put(f"/api/sandboxes/{nonexistent_id}/revert", params={"snapshot_id": uuid4()})
         assert response.status_code == 404
 
 
+@pytest.mark.e2e
 class TestApiWithComplexGraphs:
     """测试涉及更复杂图逻辑（如子图调用）的 API 端点。"""
 
@@ -94,20 +111,23 @@ class TestApiWithComplexGraphs:
                 "initial_state": {"global_setting": "Omega"}
             }
         )
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         sandbox_id = response.json()["id"]
 
         # 2. 执行一步
         response = test_client.post(f"/api/sandboxes/{sandbox_id}/step", json={})
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         
         # 3. 验证结果
         snapshot_data = response.json()
         run_output = snapshot_data.get("run_output", {})
         
+        # 断言调用节点和子图的输出结构
         assert "main_caller" in run_output
         subgraph_output = run_output["main_caller"]["output"]
-        processor_output = subgraph_output["processor"]["output"]
+        assert "processor" in subgraph_output
         
+        # 验证子图内部节点的最终输出值
+        processor_output = subgraph_output["processor"]["output"]
         expected_str = "Processed: Hello from main with world state: Omega"
         assert processor_output == expected_str

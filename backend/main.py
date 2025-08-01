@@ -1,6 +1,11 @@
 # backend/main.py
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException, Body
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import ValidationError, BaseModel
 from typing import Dict, Any, List, Optional
 from uuid import UUID
 
@@ -25,7 +30,11 @@ class CreateSandboxRequest(BaseModel):
     initial_state: Optional[Dict[str, Any]] = None
 
 def setup_application():
-    app = FastAPI(...)
+    app = FastAPI(
+        title="Hevno Backend Engine",
+        description="The core execution engine for Hevno project, supporting runtime-centric, sequential node execution.",
+        version="0.3.2-map-runtime" # 版本号更新
+    )
     
     # 1. 注册所有运行时
     runtime_registry.register("system.input", InputRuntime)
@@ -38,7 +47,7 @@ def setup_application():
     runtime_registry.register("llm.default", LLMRuntime)
 
     # 2. 创建并配置所有全局服务
-    is_debug_mode = os.getenv("HEVNO_LLM_DEBUG_MODE", "false").lower() == "true"
+    is_debug_mode = os.getenv("HEVNO_LLM_DEBUG_MODE", "false").lower() == "true" 
     if is_debug_mode:
         llm_service_instance = MockLLMService()
     else:
@@ -71,7 +80,14 @@ def setup_application():
         services=services
     )
 
-    # ... (CORS 中间件) ...
+    origins = ["http://localhost:5173"]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     return app
 
 app = setup_application()
@@ -99,7 +115,10 @@ async def create_sandbox(request: CreateSandboxRequest, name: str):
 # 修改端点以从 app.state 获取引擎实例
 @app.post("/api/sandboxes/{sandbox_id}/step", response_model=StateSnapshot)
 async def execute_sandbox_step(sandbox_id: UUID, user_input: Dict[str, Any] = Body(...)):
-    # ... (获取 sandbox 和 snapshot 的逻辑不变) ...
+    sandbox = sandbox_store.get(sandbox_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Sandbox not found.")
+    latest_snapshot = sandbox.get_latest_snapshot(snapshot_store)
     if not latest_snapshot:
         raise HTTPException(status_code=409, detail="Sandbox has no initial state.")
     
