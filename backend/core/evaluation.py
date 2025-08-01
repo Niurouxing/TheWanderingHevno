@@ -8,6 +8,7 @@ from backend.core.utils import DotAccessibleDict
 from backend.core.types import ExecutionContext # 显式导入
 
 # 预编译宏的正则表达式和预置模块保持不变...
+INLINE_MACRO_REGEX = re.compile(r"{{\s*(.+?)\s*}}", re.DOTALL)
 MACRO_REGEX = re.compile(r"^{{\s*(.+)\s*}}$", re.DOTALL)
 import random
 import math
@@ -82,27 +83,52 @@ async def evaluate_expression(code_str: str, context: Dict[str, Any], lock: asyn
     return context.get(result_var)
 
 async def evaluate_data(data: Any, eval_context: Dict[str, Any], lock: asyncio.Lock) -> Any:
-    # (lock 不再是可选的)
-    """..."""
     if isinstance(data, str):
-        match = MACRO_REGEX.match(data)
-        if match:
-            code_to_run = match.group(1)
-            # 确保 lock 被传递
+        # 模式1: 检查是否为“全宏替换”
+        # 这种模式很重要，因为它允许宏返回非字符串类型（如列表、布尔值）
+        full_match = MACRO_REGEX.match(data)
+        if full_match:
+            code_to_run = full_match.group(1)
+            # 这里返回的结果可以是任何类型
             return await evaluate_expression(code_to_run, eval_context, lock)
+
+        # 模式2: 如果不是全宏，检查是否包含“内联模板”
+        # 这种模式的结果总是字符串
+        if '{{' in data and '}}' in data:
+            matches = list(INLINE_MACRO_REGEX.finditer(data))
+            if not matches:
+                # 包含 {{ 和 }} 但格式不正确，按原样返回
+                return data
+
+            # 并发执行所有宏的求值
+            codes_to_run = [m.group(1) for m in matches]
+            tasks = [evaluate_expression(code, eval_context, lock) for code in codes_to_run]
+            evaluated_results = await asyncio.gather(*tasks)
+
+            # 将求值结果替换回原字符串
+            # 使用一个迭代器来确保替换顺序正确
+            results_iter = iter(evaluated_results)
+            # re.sub 的 lambda 每次调用时，都会从迭代器中取下一个结果
+            # 这比多次调用 str.replace() 更安全、更高效
+            final_string = INLINE_MACRO_REGEX.sub(lambda m: str(next(results_iter)), data)
+            
+            return final_string
+
+        # 如果两种模式都不匹配，说明是普通字符串
         return data
 
-        
     if isinstance(data, dict):
-        keys = data.keys()
-        # 传递 lock
-        values = [evaluate_data(v, eval_context, lock) for v in data.values()]
-        evaluated_values = await asyncio.gather(*values)
+        keys = list(data.keys())
+        # 创建异步任务列表
+        value_tasks = [evaluate_data(data[k], eval_context, lock) for k in keys]
+        # 并发执行所有值的求值
+        evaluated_values = await asyncio.gather(*value_tasks)
+        # 重新组装字典
         return dict(zip(keys, evaluated_values))
 
     if isinstance(data, list):
-
-        items = [evaluate_data(item, eval_context, lock) for item in data]
-        return await asyncio.gather(*items)
+        # 并发执行列表中所有项的求值
+        item_tasks = [evaluate_data(item, eval_context, lock) for item in data]
+        return await asyncio.gather(*item_tasks)
 
     return data

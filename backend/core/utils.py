@@ -24,12 +24,25 @@ class DotAccessibleDict:
         return value
 
     def __getattr__(self, name: str) -> Any:
-        """当访问 obj.key 时调用。"""
+        """
+        当访问 obj.key 时调用。
+        【核心修正】如果 'name' 不是 _data 的键，则检查它是否是 _data 的一个可调用方法 (如 .get, .keys)。
+        """
+        if name.startswith('__'):  # 避免代理魔术方法
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+            
         try:
+            # 优先检查底层字典中是否存在该键
             value = self._data[name]
             return self._wrap(value)
         except KeyError:
-            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+            # 如果键不存在，检查底层字典是否有一个同名的方法
+            underlying_attr = getattr(self._data, name, None)
+            if callable(underlying_attr):
+                return underlying_attr  # 返回该方法本身，以便可以被调用
+            
+            # 如果都不是，则抛出异常
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute or method '{name}'")
 
     def __setattr__(self, name: str, value: Any):
         """当执行 obj.key = value 时调用。"""
