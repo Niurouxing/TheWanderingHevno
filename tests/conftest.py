@@ -3,6 +3,24 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 from typing import Generator
+from dotenv import load_dotenv 
+
+# ---------------------------------------------------------------------------
+# Session-wide setup to load environment variables for tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session", autouse=True)
+def load_test_env():
+    """
+    在所有测试运行之前，自动加载 .env.test 文件中的环境变量。
+    autouse=True 确保这个 fixture 会被自动调用，无需在每个测试函数中显式请求。
+    """
+    # 指定 .env.test 文件的路径，并加载它
+    # override=True 确保文件中的值会覆盖任何已存在的同名环境变量
+    load_dotenv(dotenv_path=".env.test", override=True)
+    print("\n--- Loaded .env.test for the test session ---")
+    
+    
 
 # ---------------------------------------------------------------------------
 # 从你的应用代码中导入核心类和函数
