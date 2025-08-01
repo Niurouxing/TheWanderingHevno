@@ -5,14 +5,10 @@ import re
 from typing import Any, Dict, List, Optional   
 from functools import partial
 from backend.core.utils import DotAccessibleDict
-from backend.core.types import ExecutionContext # 显式导入，避免循环引用问题
+from backend.core.types import ExecutionContext # 显式导入
 
-
-# 预编译宏的正则表达式，用于快速查找
+# 预编译宏的正则表达式和预置模块保持不变...
 MACRO_REGEX = re.compile(r"^{{\s*(.+)\s*}}$", re.DOTALL)
-
-# --- 预置的、开箱即用的模块 ---
-# 我们在这里定义它们，以便在构建上下文时注入
 import random
 import math
 import datetime
@@ -27,103 +23,86 @@ PRE_IMPORTED_MODULES = {
     "re": re_module,
 }
 
-
 def build_evaluation_context(
     exec_context: ExecutionContext,
     pipe_vars: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
-    从 ExecutionContext 和可选的管道变量构建一个扁平的字典，用作宏的执行环境。
+    从 ExecutionContext 构建宏的执行环境。
+    这个函数现在变得非常简单，因为它信任传入的上下文。
     """
-    # --- 【关键修正】---
-    # 检查是否存在一个权威的 world_state 引用
-    authoritative_world_state = exec_context.internal_vars.get(
-        '__world_state_override__', 
-        exec_context.world_state  # 如果没有，则使用上下文自己的
-    )
-
     context = {
         **PRE_IMPORTED_MODULES,
-        # 使用权威的 world_state
-        "world": DotAccessibleDict(authoritative_world_state),
-        "nodes": DotAccessibleDict(exec_context.node_states),
+        # 直接从共享上下文中获取 world 和 session
+        "world": DotAccessibleDict(exec_context.shared.world_state),
+        "session": DotAccessibleDict(exec_context.shared.session_info),
+        # run 和 nodes 是当前图执行所私有的
         "run": DotAccessibleDict(exec_context.run_vars),
-        "session": DotAccessibleDict(exec_context.session_info),
-        "__internal__": exec_context.internal_vars
+        "nodes": DotAccessibleDict(exec_context.node_states),
     }
     if pipe_vars is not None:
         context['pipe'] = DotAccessibleDict(pipe_vars)
         
     return context
 
-# --- 修改 evaluate_expression ---
-async def evaluate_expression(code_str: str, context: Dict[str, Any]) -> Any:
-    """
-    安全地执行一段 Python 代码字符串并返回结果。
-    在执行前获取全局写入锁，确保宏的原子性。
-    """
-    # 1. 从上下文中提取锁
-    lock = context.get("__internal__", {}).get("global_write_lock")
-    
-    # 2. 解析代码 (与之前相同)
+async def evaluate_expression(code_str: str, context: Dict[str, Any], lock: asyncio.Lock) -> Any:
+    """..."""
+    # ast.parse 可能会失败，需要 try...except
     try:
         tree = ast.parse(code_str, mode='exec')
     except SyntaxError as e:
         raise ValueError(f"Macro syntax error: {e}\nCode: {code_str}")
 
+    # 如果代码块为空，直接返回 None
+    if not tree.body:
+        return None
+
+    # 如果最后一行是表达式，我们将其转换为一个赋值语句，以便捕获结果
     result_var = "_macro_result"
-    
-    if tree.body and isinstance(tree.body[-1], ast.Expr):
+    if isinstance(tree.body[-1], ast.Expr):
+        # 包装最后一条表达式
         assign_node = ast.Assign(
             targets=[ast.Name(id=result_var, ctx=ast.Store())],
             value=tree.body[-1].value
         )
         tree.body[-1] = ast.fix_missing_locations(assign_node)
-
-    # 3. 准备在非阻塞执行器中运行的同步函数
-    loop = asyncio.get_running_loop()
-    local_scope = {}
-    exec_func = partial(exec, compile(tree, filename="<macro>", mode="exec"), context, local_scope)
     
-    # 4. 在执行期间持有锁
-    if lock:
-        async with lock:
-            # 锁被持有，现在可以在另一个线程中安全地执行阻塞代码
-            await loop.run_in_executor(None, exec_func)
-    else:
-        # 如果没有锁（例如在测试环境中），直接执行
-        await loop.run_in_executor(None, exec_func)
+    # 将 AST 编译为代码对象
+    code_obj = compile(tree, filename="<macro>", mode="exec")
     
-    # 5. 返回结果 (与之前相同)
-    return local_scope.get(result_var)
+    # 在锁的保护下运行
+    async with lock:
+        # 在另一个线程中运行，以避免阻塞事件循环
+        # 注意：这里我们直接修改传入的 context 字典来捕获结果
+        await asyncio.get_running_loop().run_in_executor(
+            None, exec, code_obj, context
+        )
+    
+    # 从被修改的上下文字典中获取结果
+    return context.get(result_var)
 
-
-async def evaluate_data(data: Any, eval_context: Dict[str, Any]) -> Any:
-    """
-    递归地遍历一个数据结构 (dict, list)，查找并执行所有宏。
-    这是 `_execute_node` 将调用的主入口函数。
-    """
+async def evaluate_data(data: Any, eval_context: Dict[str, Any], lock: asyncio.Lock) -> Any:
+    # (lock 不再是可选的)
+    """..."""
     if isinstance(data, str):
         match = MACRO_REGEX.match(data)
         if match:
             code_to_run = match.group(1)
-            # 发现宏，执行它并返回结果
-            return await evaluate_expression(code_to_run, eval_context)
-        # 不是宏，原样返回
+            # 确保 lock 被传递
+            return await evaluate_expression(code_to_run, eval_context, lock)
         return data
+
         
     if isinstance(data, dict):
-        # 异步地处理字典中的所有值
-        # 注意：我们不处理 key，只处理 value
         keys = data.keys()
-        values = [evaluate_data(v, eval_context) for v in data.values()]
+        # 传递 lock
+        values = [evaluate_data(v, eval_context, lock) for v in data.values()]
         evaluated_values = await asyncio.gather(*values)
         return dict(zip(keys, evaluated_values))
 
     if isinstance(data, list):
-        # 异步地处理列表中的所有项
-        items = [evaluate_data(item, eval_context) for item in data]
+
+        items = [evaluate_data(item, eval_context, lock) for item in data]
         return await asyncio.gather(*items)
 
-    # 对于其他类型（数字、布尔等），原样返回
     return data

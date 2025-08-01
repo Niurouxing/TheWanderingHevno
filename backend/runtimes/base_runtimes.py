@@ -37,8 +37,7 @@ class SetWorldVariableRuntime(RuntimeInterface):
         if not variable_name:
             raise ValueError("SetWorldVariableRuntime requires 'variable_name' in its config.")
         
-        # 修改的是可变的 ExecutionContext.world_state
-        context.world_state[variable_name] = value_to_set
+        # --- 修正: 修改共享的世界状态 ---
+        context.shared.world_state[variable_name] = value_to_set
         
-        # 这个运行时通常没有自己的输出，只是产生副作用
         return {}

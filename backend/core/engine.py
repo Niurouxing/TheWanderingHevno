@@ -8,8 +8,8 @@ from backend.models import GraphCollection, GraphDefinition, GenericNode
 from backend.core.dependency_parser import build_dependency_graph
 from backend.core.registry import RuntimeRegistry
 from backend.core.evaluation import build_evaluation_context, evaluate_data
-
-from backend.core.interfaces import ExecutionContext,RuntimeInterface, SubGraphRunner
+from backend.core.types import ExecutionContext 
+from backend.core.interfaces import RuntimeInterface, SubGraphRunner
 
 class NodeState(Enum):
     PENDING = auto()
@@ -93,10 +93,12 @@ class ExecutionEngine(SubGraphRunner):
 
     async def step(self, initial_snapshot, triggering_input: Dict[str, Any] = None):
         if triggering_input is None: triggering_input = {}
-        context = ExecutionContext.from_snapshot(initial_snapshot, {"trigger_input": triggering_input})
+        # --- 使用新的工厂方法创建主上下文 ---
+        context = ExecutionContext.create_for_main_run(initial_snapshot, {"trigger_input": triggering_input})
+        
         main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
         if not main_graph_def: raise ValueError("'main' graph not found.")
-        # 调用 _execute_graph 时，现在使用的是 self.execute_graph 的一个别名
+        
         final_node_states = await self._internal_execute_graph(main_graph_def, context)
         next_snapshot = context.to_next_snapshot(final_node_states, triggering_input)
         return next_snapshot
@@ -105,56 +107,99 @@ class ExecutionEngine(SubGraphRunner):
     async def execute_graph(
         self,
         graph_name: str,
-        context: ExecutionContext,
+        # 注意：这里接收的是一个 ExecutionContext，但我们将用它来创建子上下文
+        parent_context: ExecutionContext,
         inherited_inputs: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """这是暴露给运行时的公共接口。"""
-        graph_collection = context.initial_snapshot.graph_collection.root
+        graph_collection = parent_context.initial_snapshot.graph_collection.root
         graph_def = graph_collection.get(graph_name)
         if not graph_def:
             raise ValueError(f"Graph '{graph_name}' not found.")
         
+        # --- 【关键】为子图运行创建自己的上下文 ---
+        # 它会共享 world_state 和锁，但有自己的 node_states
+        sub_run_context = ExecutionContext.create_for_sub_run(parent_context)
+
         return await self._internal_execute_graph(
             graph_def=graph_def,
-            context=context,
+            context=sub_run_context, # <-- 使用新的子上下文
             inherited_inputs=inherited_inputs
         )
 
-    # 我们将原来的 _execute_graph 重命名为 _internal_execute_graph
-    # 以区分公共接口和内部实现
     async def _internal_execute_graph(self, graph_def: GraphDefinition, context: ExecutionContext, inherited_inputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        run = GraphRun(context, graph_def)
+        """
+        内部核心调度器，用于执行一个图。
+        
+        :param graph_def: 要执行的图的 Pydantic 模型。
+        :param context: 本次图执行的上下文（包含共享状态的引用和私有的 node_states）。
+        :param inherited_inputs: (可选) 从父图（如 system.call 或 system.map）注入的预计算结果。
+                                  这些被当作是已经“成功”的虚拟节点。
+        :return: 一个字典，包含图中所有成功执行的节点的最终输出。
+        """
+        
+        # --- 1. 初始化运行状态 ---
+        # 创建一个 GraphRun 实例来管理这次运行的所有动态信息。
+        # 这样可以将状态管理的复杂性从主函数中分离出去。
+        run = GraphRun(context=context, graph_def=graph_def)
+
+        # 创建一个异步任务队列，用于存放“准备就绪”可以执行的节点。
         task_queue = asyncio.Queue()
-
-        if "global_write_lock" not in context.internal_vars:
-            context.internal_vars["global_write_lock"] = asyncio.Lock()
-
+        
+        # --- 2. 处理继承的输入 (用于子图) ---
+        # 如果这是由 `call` 或 `map` 启动的子图，它可能会有 `inherited_inputs`。
         if inherited_inputs:
             for node_id, result in inherited_inputs.items():
+                # 我们将这些注入的输入视为已经成功完成的“占位符”节点。
+                # 尽管这些节点ID可能不在当前图的 `node_map` 中，我们仍然设置它们的状态和结果。
                 run.set_node_state(node_id, NodeState.SUCCEEDED)
                 run.set_node_result(node_id, result)
-
-        for node_id in list(run.node_map.keys()):
-            if run.get_node_state(node_id) == NodeState.PENDING:
-                dependencies = run.get_dependencies(node_id)
-                if all(run.get_node_state(dep_id) == NodeState.SUCCEEDED for dep_id in dependencies):
-                    run.set_node_state(node_id, NodeState.READY)
-
+        
+        # --- 3. 确定初始的可执行节点 ---
+        # 再次检查所有“待定”节点，看它们的依赖是否已经满足（可能因为继承的输入）。
+        for node_id in run.get_nodes_in_state(NodeState.PENDING):
+            dependencies = run.get_dependencies(node_id)
+            # all() 在空集合上返回 True，这正是我们想要的。
+            if all(run.get_node_state(dep_id) == NodeState.SUCCEEDED for dep_id in dependencies):
+                run.set_node_state(node_id, NodeState.READY)
+        
+        # 将所有初始“准备就绪”的节点放入任务队列。
         for node_id in run.get_nodes_in_state(NodeState.READY):
             task_queue.put_nowait(node_id)
 
+        # --- 4. 检查是否无事可做 ---
+        # 如果队列是空的，并且没有任何节点是“成功”状态（意味着没有继承的输入），
+        # 那么这个图从一开始就无法执行。直接返回空结果。
         if task_queue.empty() and not any(s == NodeState.SUCCEEDED for s in run.node_states.values()):
-            return run.get_final_node_states()
+            print(f"Warning: Graph '{graph_def.nodes[0].id if graph_def.nodes else 'empty'}' has no runnable starting nodes.")
+            return {}
 
+        # --- 5. 启动工作者 (Worker) 并执行 ---
+        # 创建一组并发的工作者任务，它们将从队列中获取并执行节点。
         workers = [
             asyncio.create_task(self._worker(f"worker-{i}", run, task_queue))
             for i in range(self.num_workers)
         ]
+        
+        # 等待队列中的所有任务都被处理完毕。
+        # `task_queue.join()` 会阻塞，直到每个 `put()` 都有一个对应的 `task_done()`。
         await task_queue.join()
+
+        # --- 6. 清理并返回结果 ---
+        # 一旦所有任务完成，我们就不再需要工作者了。取消它们以释放资源。
         for w in workers:
             w.cancel()
+        
+        # 等待所有取消操作完成。
         await asyncio.gather(*workers, return_exceptions=True)
-        final_states = {nid: run.get_node_result(nid) for nid in run.node_map if run.get_node_result(nid) is not None}
+        
+        # 从上下文中收集所有被标记为有结果的节点的输出，并返回。
+        # 这里的 `run.get_node_result(nid) is not None` 也可以用于过滤掉未执行或失败的节点。
+        final_states = {
+            nid: run.get_node_result(nid)
+            for nid, n in run.node_map.items()
+            if run.get_node_result(nid) is not None
+        }
         return final_states
 
     async def _worker(self, name: str, run: 'GraphRun', queue: asyncio.Queue):
@@ -168,6 +213,8 @@ class ExecutionEngine(SubGraphRunner):
             try:
                 node = run.get_node(node_id)
                 context = run.get_execution_context()
+                # --- 将 _execute_node 的调用也包在 try...except 中 ---
+                # 这样即使 _execute_node 内部的宏预处理失败，也能捕获
                 output = await self._execute_node(node, context)
                 if isinstance(output, dict) and "error" in output:
                     run.set_node_state(node_id, NodeState.FAILED)
@@ -175,7 +222,10 @@ class ExecutionEngine(SubGraphRunner):
                     run.set_node_state(node_id, NodeState.SUCCEEDED)
                 run.set_node_result(node_id, output)
             except Exception as e:
-                error_message = f"Unexpected error in worker for node {node_id}: {type(e).__name__}: {e}"
+                # 这个捕获块现在变得更重要
+                error_message = f"Worker-level error for node {node_id}: {type(e).__name__}: {e}"
+                import traceback
+                traceback.print_exc() # 打印完整的堆栈以供调试
                 run.set_node_state(node_id, NodeState.FAILED)
                 run.set_node_result(node_id, {"error": error_message})
             self._process_subscribers(node_id, run, queue)
@@ -201,35 +251,33 @@ class ExecutionEngine(SubGraphRunner):
                 queue.put_nowait(sub_id)
 
     async def _execute_node(self, node: GenericNode, context: ExecutionContext) -> Dict[str, Any]:
-        node_id = node.id
         pipeline_state: Dict[str, Any] = {}
-        if not node.run:
-            return {}
+        if not node.run: return {}
+        
+        # 从共享上下文中获取锁
+        lock = context.shared.global_write_lock
+
         for i, instruction in enumerate(node.run):
             runtime_name = instruction.runtime
             try:
-                
                 eval_context = build_evaluation_context(context, pipe_vars=pipeline_state)
+                
                 config_to_process = instruction.config.copy()
-
                 runtime_instance: RuntimeInterface = self.registry.get_runtime(runtime_name)
-
-                # --- 【解耦重构】根据运行时声明的模板字段来处理延迟求值 ---
+                
                 templates = {}
-                # 检查运行时是否定义了 template_fields 属性
                 template_fields = getattr(runtime_instance, 'template_fields', [])
                 for field in template_fields:
                     if field in config_to_process:
                         templates[field] = config_to_process.pop(field)
 
-                # --- 【关键修正】在这里添加 await ---
-                processed_config = await evaluate_data(config_to_process, eval_context)
+                # --- 传递锁给求值函数 ---
+                processed_config = await evaluate_data(config_to_process, eval_context, lock)
 
-                # 将之前暂存的模板字段加回去
                 if templates:
                     processed_config.update(templates)
 
-                # --- 将 self 作为 SubGraphRunner 传递 ---
+                # --- 传递 self 作为 SubGraphRunner, context 作为上下文 ---
                 output = await runtime_instance.execute(
                     config=processed_config,
                     context=context,
