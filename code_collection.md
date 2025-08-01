@@ -932,58 +932,88 @@ Hevno 引擎的依赖推断是**静态的**。它在图执行开始前扫描图�
 ### main.py
 ```
 # backend/main.py
+import os
 from fastapi import FastAPI, HTTPException, Body
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import ValidationError, BaseModel
 from typing import Dict, Any, List, Optional
 from uuid import UUID
 
-# 1. 导入新的模型
 from backend.models import GraphCollection
+# 【核心修改】现在从 engine 导入 ExecutionEngine
 from backend.core.engine import ExecutionEngine
 from backend.core.registry import runtime_registry
-from backend.runtimes.base_runtimes import InputRuntime, LLMRuntime, SetWorldVariableRuntime
+from backend.runtimes.base_runtimes import InputRuntime, SetWorldVariableRuntime
+# 【核心修改】LLMRuntime 现在需要单独导入
+from backend.runtimes.base_runtimes import LLMRuntime
 from backend.runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
 from backend.runtimes.codex.invoke_runtime import InvokeRuntime
 from backend.core.state_models import Sandbox, SnapshotStore, StateSnapshot
 
+# 导入所有 LLM Gateway 相关组件
+from backend.llm.service import LLMService, MockLLMService, ProviderRegistry
+from backend.llm.manager import KeyPoolManager, CredentialManager
+from backend.llm.providers.gemini import GeminiProvider
 
 class CreateSandboxRequest(BaseModel):
     graph_collection: GraphCollection
     initial_state: Optional[Dict[str, Any]] = None
 
 def setup_application():
-    app = FastAPI(
-        title="Hevno Backend Engine",
-        description="The core execution engine for Hevno project, supporting runtime-centric, sequential node execution.",
-        version="0.3.2-map-runtime" # 版本号更新
-    )
+    app = FastAPI(...)
     
-    # 基础运行时
+    # 1. 注册所有运行时
     runtime_registry.register("system.input", InputRuntime)
-    runtime_registry.register("llm.default", LLMRuntime)
     runtime_registry.register("system.set_world_var", SetWorldVariableRuntime)
-    
-    # 控制流运行时
     runtime_registry.register("system.execute", ExecuteRuntime)
     runtime_registry.register("system.call", CallRuntime)
     runtime_registry.register("system.map", MapRuntime)
     runtime_registry.register("system.invoke", InvokeRuntime)
+    # LLMRuntime 也是一个普通运行时
+    runtime_registry.register("llm.default", LLMRuntime)
 
-    origins = ["http://localhost:5173"]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+    # 2. 创建并配置所有全局服务
+    is_debug_mode = os.getenv("HEVNO_LLM_DEBUG_MODE", "false").lower() == "true"
+    if is_debug_mode:
+        llm_service_instance = MockLLMService()
+    else:
+        cred_manager = CredentialManager()
+        key_manager = KeyPoolManager(credential_manager=cred_manager)
+        provider_registry = ProviderRegistry()
+        key_manager.register_provider("gemini", "GEMINI_API_KEYS")
+        provider_registry.register("gemini", GeminiProvider())
+        llm_service_instance = LLMService(
+            key_manager=key_manager,
+            provider_registry=provider_registry,
+            max_retries=3
+        )
+    
+    # ... 在这里可以创建和配置其他服务，例如：
+    # github_service_instance = GitHubSyncService(token=os.getenv("GH_TOKEN"))
+
+    # 3. 组装服务注册表
+    # 这就是我们的“服务总线”
+    services = {
+        "llm": llm_service_instance,
+        # "github": github_service_instance,
+        # ... 任何未来的服务都注册在这里
+    }
+
+    # 4. 实例化引擎，并注入服务注册表
+    # 将引擎实例存储在 app.state 中，这是 FastAPI 推荐的做法
+    app.state.engine = ExecutionEngine(
+        registry=runtime_registry,
+        services=services
     )
+
+    # ... (CORS 中间件) ...
     return app
 
 app = setup_application()
+
+# 全局存储保持不变
 sandbox_store: Dict[UUID, Sandbox] = {}
 snapshot_store = SnapshotStore()
-execution_engine = ExecutionEngine(registry=runtime_registry)
+
+# --- API 端点 ---
 
 @app.post("/api/sandboxes", response_model=Sandbox)
 async def create_sandbox(request: CreateSandboxRequest, name: str):
@@ -998,18 +1028,22 @@ async def create_sandbox(request: CreateSandboxRequest, name: str):
     sandbox_store[sandbox.id] = sandbox
     return sandbox
 
+
+# 修改端点以从 app.state 获取引擎实例
 @app.post("/api/sandboxes/{sandbox_id}/step", response_model=StateSnapshot)
 async def execute_sandbox_step(sandbox_id: UUID, user_input: Dict[str, Any] = Body(...)):
-    sandbox = sandbox_store.get(sandbox_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Sandbox not found.")
-    latest_snapshot = sandbox.get_latest_snapshot(snapshot_store)
+    # ... (获取 sandbox 和 snapshot 的逻辑不变) ...
     if not latest_snapshot:
         raise HTTPException(status_code=409, detail="Sandbox has no initial state.")
-    new_snapshot = await execution_engine.step(latest_snapshot, user_input)
+    
+    # 从 app.state 获取引擎实例来执行 step
+    engine: ExecutionEngine = app.state.engine
+    new_snapshot = await engine.step(latest_snapshot, user_input)
+    
     snapshot_store.save(new_snapshot)
     sandbox.head_snapshot_id = new_snapshot.id
     return new_snapshot
+
 
 @app.get("/api/sandboxes/{sandbox_id}/history", response_model=List[StateSnapshot])
 async def get_sandbox_history(sandbox_id: UUID):
@@ -1031,6 +1065,483 @@ async def revert_sandbox_to_snapshot(sandbox_id: UUID, snapshot_id: UUID):
 @app.get("/")
 def read_root():
     return {"message": "Hevno Backend is running on runtime-centric architecture!"}
+```
+
+### llm/service.py
+```
+# backend/llm/service.py
+
+import asyncio
+from typing import Dict, Type, Optional, Any
+
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+)
+
+from backend.llm.providers.base import LLMProvider
+from backend.llm.manager import KeyPoolManager, KeyInfo
+from backend.llm.models import (
+    LLMResponse,
+    LLMError,
+    LLMErrorType,
+    LLMResponseStatus,
+    LLMRequestFailedError,
+)
+
+
+class ProviderRegistry:
+    """
+    负责注册和查找 LLMProvider 实例。
+    """
+    def __init__(self):
+        self._providers: Dict[str, LLMProvider] = {}
+
+    def register(self, name: str, provider_instance: LLMProvider):
+        if name in self._providers:
+            pass
+        self._providers[name] = provider_instance
+
+    def get(self, name: str) -> Optional[LLMProvider]:
+        return self._providers.get(name)
+
+
+class LLMService:
+    """
+    LLM Gateway 的核心服务，负责协调所有组件并执行请求。
+    """
+    def __init__(
+        self,
+        key_manager: KeyPoolManager,
+        provider_registry: ProviderRegistry,
+        max_retries: int = 3
+    ):
+        self.key_manager = key_manager
+        self.provider_registry = provider_registry
+        self.max_retries = max_retries
+
+    async def request(
+        self,
+        model_name: str,
+        prompt: str,
+        **kwargs
+    ) -> LLMResponse:
+        try:
+            provider_name, actual_model_name = self._parse_model_name(model_name)
+        except ValueError as e:
+            return self._create_failure_response(
+                model_name=model_name,
+                error=LLMError(
+                    error_type=LLMErrorType.INVALID_REQUEST_ERROR,
+                    message=str(e),
+                    is_retryable=False,
+                ),
+            )
+
+        def log_before_sleep(retry_state):
+            pass
+        
+        retry_decorator = retry(
+            stop=stop_after_attempt(self.max_retries),
+            wait=wait_exponential(multiplier=1, min=2, max=10),
+            retry=retry_if_exception_type(Exception),
+            reraise=True,
+            before_sleep=log_before_sleep
+        )
+
+        try:
+            wrapped_attempt = retry_decorator(self._attempt_request)
+            return await wrapped_attempt(provider_name, actual_model_name, prompt, **kwargs)
+        
+        except LLMRequestFailedError as e:
+            final_message = (
+                f"LLM request for model '{model_name}' failed after {self.max_retries} attempt(s)."
+            )
+            raise LLMRequestFailedError(
+                final_message,
+                last_error=e.last_error
+            ) from e
+        
+        except Exception as e:
+            raise
+
+    async def _attempt_request(
+        self,
+        provider_name: str,
+        model_name: str,
+        prompt: str,
+        **kwargs
+    ) -> LLMResponse:
+        provider = self.provider_registry.get(provider_name)
+        if not provider:
+            raise LLMRequestFailedError(f"Provider '{provider_name}' not found.")
+
+        try:
+            async with self.key_manager.acquire_key(provider_name) as key_info:
+                try:
+                    response = await provider.generate(
+                        prompt=prompt, model_name=model_name, api_key=key_info.key_string, **kwargs
+                    )
+                    if response.status in [LLMResponseStatus.SUCCESS, LLMResponseStatus.FILTERED]:
+                        return response
+                    raise LLMRequestFailedError("Provider returned an error response.", last_error=response.error_details)
+                
+                except Exception as e:
+                    llm_error = provider.translate_error(e)
+                    await self._handle_error(provider_name, key_info, llm_error)
+                    error_message = f"Request attempt failed: {llm_error.message}"
+                    raise LLMRequestFailedError(error_message, last_error=llm_error) from e
+        
+        except (RuntimeError, ValueError) as e:
+            raise LLMRequestFailedError(str(e))
+
+    async def _handle_error(self, provider_name: str, key_info: KeyInfo, error: LLMError):
+        if error.error_type == LLMErrorType.AUTHENTICATION_ERROR:
+            await self.key_manager.mark_as_banned(provider_name, key_info.key_string)
+        elif error.error_type == LLMErrorType.RATE_LIMIT_ERROR:
+            self.key_manager.mark_as_rate_limited(
+                provider_name, key_info.key_string, error.retry_after_seconds or 60
+            )
+
+    def _parse_model_name(self, model_name: str) -> (str, str):
+        parts = model_name.split('/', 1)
+        if len(parts) != 2 or not all(parts):
+            raise ValueError(f"Invalid model name format: '{model_name}'. Expected 'provider/model_id'.")
+        return parts[0], parts[1]
+    
+    def _create_failure_response(self, model_name: str, error: LLMError) -> LLMResponse:
+        return LLMResponse(status=LLMResponseStatus.ERROR, model_name=model_name, error_details=error)
+
+class MockLLMService:
+    """
+    一个 LLMService 的模拟实现，用于调试。
+    它不进行任何网络调用，而是立即返回一个可预测的假响应。
+    """
+    def __init__(self, *args, **kwargs):
+        print("--- Hevno LLM Gateway is running in MOCK/DEBUG mode. No real API calls will be made. ---")
+
+    async def request(
+        self,
+        model_name: str,
+        prompt: str,
+        **kwargs
+    ) -> LLMResponse:
+        # 模拟一个非常短暂的延迟
+        await asyncio.sleep(0.05)
+        
+        mock_content = f"[MOCK RESPONSE for {model_name}] - Prompt received: '{prompt[:50]}...'"
+        
+        return LLMResponse(
+            status=LLMResponseStatus.SUCCESS,
+            content=mock_content,
+            model_name=model_name,
+            usage={"prompt_tokens": len(prompt.split()), "completion_tokens": 15, "total_tokens": len(prompt.split()) + 15}
+        )
+```
+
+### llm/models.py
+```
+# backend/llm/models.py
+
+from enum import Enum
+from typing import Optional, Dict, Any
+
+from pydantic import BaseModel, Field
+
+
+# --- Enums for Status and Error Types ---
+
+class LLMResponseStatus(str, Enum):
+    """定义 LLM 响应的标准化状态。"""
+    SUCCESS = "success"
+    FILTERED = "filtered"
+    ERROR = "error"
+
+
+class LLMErrorType(str, Enum):
+    """定义标准化的 LLM 错误类型，用于驱动重试和故障转移逻辑。"""
+    AUTHENTICATION_ERROR = "authentication_error"  # 密钥无效或权限不足
+    RATE_LIMIT_ERROR = "rate_limit_error"          # 达到速率限制
+    PROVIDER_ERROR = "provider_error"              # 服务商侧 5xx 或其他服务器错误
+    NETWORK_ERROR = "network_error"                # 网络连接问题
+    INVALID_REQUEST_ERROR = "invalid_request_error"  # 请求格式错误 (4xx)
+    UNKNOWN_ERROR = "unknown_error"                # 未知或未分类的错误
+
+
+# --- Core Data Models ---
+
+class LLMError(BaseModel):
+    """
+    一个标准化的错误对象，用于封装来自任何提供商的错误信息。
+    """
+    error_type: LLMErrorType = Field(
+        ...,
+        description="错误的标准化类别。"
+    )
+    message: str = Field(
+        ...,
+        description="可读的错误信息。"
+    )
+    is_retryable: bool = Field(
+        ...,
+        description="此错误是否适合重试（例如，网络错误或某些服务端错误）。"
+    )
+    retry_after_seconds: Optional[int] = Field(
+        default=None,
+        description="如果提供商明确告知，需要等待多少秒后才能重试。"
+    )
+    provider_details: Optional[Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="原始的、特定于提供商的错误细节，用于调试。"
+    )
+
+
+class LLMResponse(BaseModel):
+    """
+    一个标准化的响应对象，用于封装来自任何提供商的成功、过滤或错误结果。
+    """
+    status: LLMResponseStatus = Field(
+        ...,
+        description="响应的总体状态。"
+    )
+    content: Optional[str] = Field(
+        default=None,
+        description="LLM 生成的文本内容。仅在 status 为 'success' 时保证存在。"
+    )
+    model_name: Optional[str] = Field(
+        default=None,
+        description="实际用于生成此响应的模型名称。"
+    )
+    usage: Optional[Dict[str, int]] = Field(
+        default=None,
+        description="Token 使用情况统计，例如 {'prompt_tokens': 10, 'completion_tokens': 200}。"
+    )
+    error_details: Optional[LLMError] = Field(
+        default=None,
+        description="如果 status 为 'error'，则包含此字段以提供详细的错误信息。"
+    )
+    
+    # 可以在这里添加一个验证器，确保在status为error时，error_details不为空
+    # 但为了保持模型的简单性，我们暂时将此逻辑留给上层服务处理。
+
+
+# --- Custom Exception ---
+
+class LLMRequestFailedError(Exception):
+    """
+    在所有重试和故障转移策略都用尽后，由 LLMService 抛出的最终异常。
+    """
+    def __init__(self, message: str, last_error: Optional[LLMError] = None):
+        """
+        :param message: 对失败的总体描述。
+        :param last_error: 导致最终失败的最后一个标准化错误对象。
+        """
+        super().__init__(message)
+        self.last_error = last_error
+
+    def __str__(self):
+        if self.last_error:
+            return (
+                f"{super().__str__()}\n"  # <--- super().__str__() 会返回我们传入的 message
+                f"Last known error ({self.last_error.error_type.value}): {self.last_error.message}"
+            )
+        return super().__str__()
+```
+
+### llm/__init__.py
+```
+
+```
+
+### llm/manager.py
+```
+# backend/llm/manager.py
+
+import asyncio
+import os
+import time
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import List, Dict, Optional, AsyncIterator
+
+
+# --- Enums and Data Classes for Key State Management ---
+
+class KeyStatus(str, Enum):
+    """定义 API 密钥的健康状态。"""
+    AVAILABLE = "available"
+    RATE_LIMITED = "rate_limited"
+    BANNED = "banned"
+
+
+@dataclass
+class KeyInfo:
+    """存储单个 API 密钥及其状态信息。"""
+    key_string: str
+    status: KeyStatus = KeyStatus.AVAILABLE
+    rate_limit_until: float = 0.0  # Unix timestamp until which the key is rate-limited
+
+    def is_available(self) -> bool:
+        """检查密钥当前是否可用。"""
+        if self.status == KeyStatus.BANNED:
+            return False
+        if self.status == KeyStatus.RATE_LIMITED:
+            if time.time() < self.rate_limit_until:
+                return False
+            # 如果限速时间已过，自动恢复为可用
+            self.status = KeyStatus.AVAILABLE
+            self.rate_limit_until = 0.0
+        return self.status == KeyStatus.AVAILABLE
+
+
+# --- Core Manager Components ---
+
+class CredentialManager:
+    """负责从环境变量中安全地加载和解析密钥。"""
+
+    def load_keys_from_env(self, env_variable: str) -> List[str]:
+        """
+        从指定的环境变量中加载 API 密钥。
+        密钥应以逗号分隔。
+
+        :param env_variable: 环境变量的名称 (e.g., 'GEMINI_API_KEYS').
+        :return: 一个包含 API 密钥字符串的列表。
+        """
+        keys_str = os.getenv(env_variable)
+        if not keys_str:
+            print(f"Warning: Environment variable '{env_variable}' not set. No keys loaded.")
+            return []
+        
+        # 按逗号分割，并去除每个密钥前后的空白字符
+        keys = [key.strip() for key in keys_str.split(',') if key.strip()]
+        if not keys:
+            print(f"Warning: Environment variable '{env_variable}' is set but contains no valid keys.")
+        return keys
+
+
+class ProviderKeyPool:
+    """
+    管理特定提供商（如 'gemini'）的一组 API 密钥。
+    内置并发控制和密钥选择逻辑。
+    """
+    def __init__(self, provider_name: str, keys: List[str]):
+        if not keys:
+            raise ValueError(f"Cannot initialize ProviderKeyPool for '{provider_name}' with an empty key list.")
+        
+        self.provider_name = provider_name
+        self._keys: List[KeyInfo] = [KeyInfo(key_string=k) for k in keys]
+        
+        # 使用 Semaphore 控制对该提供商的并发请求数量，初始值等于可用密钥数
+        self._semaphore = asyncio.Semaphore(len(self._keys))
+
+    def _get_next_available_key(self) -> Optional[KeyInfo]:
+        """循环查找下一个可用的密钥。"""
+        # 简单的轮询策略
+        for key_info in self._keys:
+            if key_info.is_available():
+                return key_info
+        return None
+
+    @asynccontextmanager
+    async def acquire_key(self) -> AsyncIterator[KeyInfo]:
+        """
+        一个安全的异步上下文管理器，用于获取和释放密钥。
+        这是与该池交互的主要方式。
+
+        :yields: 一个可用的 KeyInfo 对象。
+        :raises asyncio.TimeoutError: 如果在指定时间内无法获取密钥。
+        :raises RuntimeError: 如果池中已无任何可用密钥。
+        """
+        # 1. 获取信号量，这会阻塞直到有空闲的“插槽”
+        await self._semaphore.acquire()
+
+        try:
+            # 2. 从池中选择一个当前可用的密钥
+            key_info = self._get_next_available_key()
+            if not key_info:
+                # 这种情况理论上不应该发生，因为信号量应该反映可用密钥数
+                # 但作为防御性编程，我们处理它
+                raise RuntimeError(f"No available keys in pool '{self.provider_name}' despite acquiring semaphore.")
+            
+            # 3. 将密钥提供给调用者
+            yield key_info
+        finally:
+            # 4. 无论发生什么，都释放信号量
+            self._semaphore.release()
+
+    def mark_as_rate_limited(self, key_string: str, duration_seconds: int = 60):
+        """标记一个密钥为被限速状态。"""
+        for key in self._keys:
+            if key.key_string == key_string:
+                key.status = KeyStatus.RATE_LIMITED
+                key.rate_limit_until = time.time() + duration_seconds
+                print(f"Key for '{self.provider_name}' ending with '...{key_string[-4:]}' marked as rate-limited for {duration_seconds}s.")
+                break
+
+    async def mark_as_banned(self, key_string: str):
+        """永久性地标记一个密钥为被禁用，并减少并发信号量。"""
+        for key in self._keys:
+            if key.key_string == key_string and key.status != KeyStatus.BANNED:
+                key.status = KeyStatus.BANNED
+                # 关键一步：永久性地减少一个并发“插槽”
+                # 我们通过尝试获取然后不释放来实现
+                # 注意：这假设信号量初始值与密钥数相同
+                await self._semaphore.acquire()
+                print(f"Key for '{self.provider_name}' ending with '...{key_string[-4:]}' permanently banned. Concurrency reduced.")
+                break
+
+
+class KeyPoolManager:
+    """
+    顶层管理器，聚合了所有提供商的密钥池。
+    这是上层服务（LLMService）与之交互的唯一入口。
+    """
+    def __init__(self, credential_manager: CredentialManager):
+        self._pools: Dict[str, ProviderKeyPool] = {}
+        self._cred_manager = credential_manager
+
+    def register_provider(self, provider_name: str, env_variable: str):
+        """
+
+        从环境变量加载密钥，并为提供商创建一个密钥池。
+        :param provider_name: 提供商的名称 (e.g., 'gemini').
+        :param env_variable: 包含该提供商密钥的环境变量。
+        """
+        keys = self._cred_manager.load_keys_from_env(env_variable)
+        if keys:
+            self._pools[provider_name] = ProviderKeyPool(provider_name, keys)
+            print(f"Registered provider '{provider_name}' with {len(keys)} keys from '{env_variable}'.")
+
+    def get_pool(self, provider_name: str) -> Optional[ProviderKeyPool]:
+        """获取指定提供商的密钥池。"""
+        return self._pools.get(provider_name)
+
+    # 为了方便上层服务调用，我们将核心方法直接暴露在这里
+    
+    @asynccontextmanager
+    async def acquire_key(self, provider_name: str) -> AsyncIterator[KeyInfo]:
+        """
+        从指定提供商的池中获取一个密钥。
+        """
+        pool = self.get_pool(provider_name)
+        if not pool:
+            raise ValueError(f"No key pool registered for provider '{provider_name}'.")
+        
+        async with pool.acquire_key() as key_info:
+            yield key_info
+
+    def mark_as_rate_limited(self, provider_name: str, key_string: str, duration_seconds: int = 60):
+        pool = self.get_pool(provider_name)
+        if pool:
+            pool.mark_as_rate_limited(key_string, duration_seconds)
+
+    async def mark_as_banned(self, provider_name: str, key_string: str):
+        pool = self.get_pool(provider_name)
+        if pool:
+            await pool.mark_as_banned(key_string)
 ```
 
 ### core/interfaces.py
@@ -1241,18 +1752,19 @@ from datetime import datetime, timezone
 from backend.core.state_models import StateSnapshot
 from backend.models import GraphCollection
 
+ServiceRegistry = Dict[str, Any]
+
 class SharedContext(BaseModel):
     """
     一个封装了所有图执行期间共享资源的对象。
-    这个对象将在所有主图和子图的执行上下文中通过引用共享。
     """
     world_state: Dict[str, Any]
     session_info: Dict[str, Any]
-    # 全局写入锁现在是共享上下文的一部分
     global_write_lock: asyncio.Lock
+    # 【核心修改】用一个通用的服务容器替代了特定的 llm_service
+    services: DotAccessibleDict
 
     model_config = {"arbitrary_types_allowed": True}
-
 
 class ExecutionContext(BaseModel):
     """
@@ -1273,16 +1785,23 @@ class ExecutionContext(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
     @classmethod
-    def create_for_main_run(cls, snapshot: StateSnapshot, run_vars: Dict[str, Any] = None) -> 'ExecutionContext':
+    def create_for_main_run(
+        cls, 
+        snapshot: StateSnapshot, 
+        # 【核心修改】接收一个服务注册表，而不是某个特定服务
+        services: ServiceRegistry, 
+        run_vars: Dict[str, Any] = None
+    ) -> 'ExecutionContext':
         """为顶层图执行创建初始上下文。"""
         shared_context = SharedContext(
-            # 创建 world_state 的可变副本，这是唯一一次复制
             world_state=snapshot.world_state.copy(),
             session_info={
                 "start_time": datetime.now(timezone.utc),
-                "conversation_turn": 0, # 这里可以从快照链中计算
+                "conversation_turn": 0,
             },
-            global_write_lock=asyncio.Lock()
+            global_write_lock=asyncio.Lock(),
+            # 将传入的服务注册表包装成可点访问的字典，并存入共享上下文
+            services=DotAccessibleDict(services)
         )
         return cls(
             shared=shared_context,
@@ -1356,8 +1875,9 @@ from backend.models import GraphCollection, GraphDefinition, GenericNode
 from backend.core.dependency_parser import build_dependency_graph
 from backend.core.registry import RuntimeRegistry
 from backend.core.evaluation import build_evaluation_context, evaluate_data
-from backend.core.types import ExecutionContext 
+from backend.core.types import ExecutionContext, ServiceRegistry
 from backend.core.interfaces import RuntimeInterface, SubGraphRunner
+
 
 class NodeState(Enum):
     PENDING = auto()
@@ -1435,14 +1955,21 @@ class GraphRun:
 
 # ExecutionEngine 现在实现了 SubGraphRunner 接口
 class ExecutionEngine(SubGraphRunner):
-    def __init__(self, registry: RuntimeRegistry, num_workers: int = 5):
+    def __init__(self, registry: RuntimeRegistry, services: ServiceRegistry, num_workers: int = 5):
         self.registry = registry
+        # 【核心修改】在构造时接收并存储服务注册表
+        self.services = services
         self.num_workers = num_workers
 
     async def step(self, initial_snapshot, triggering_input: Dict[str, Any] = None):
         if triggering_input is None: triggering_input = {}
-        # --- 使用新的工厂方法创建主上下文 ---
-        context = ExecutionContext.create_for_main_run(initial_snapshot, {"trigger_input": triggering_input})
+        
+        # 【核心修改】从 self.services 获取服务注册表并注入
+        context = ExecutionContext.create_for_main_run(
+            snapshot=initial_snapshot,
+            services=self.services,  # <-- 从实例属性注入
+            run_vars={"trigger_input": triggering_input}
+        )
         
         main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
         if not main_graph_def: raise ValueError("'main' graph not found.")
@@ -1841,6 +2368,8 @@ import asyncio
 from typing import Dict, Any, Optional
 from backend.core.interfaces import RuntimeInterface # <-- 从新位置导入
 from backend.core.types import ExecutionContext
+from backend.llm.models import LLMResponse
+from backend.llm.models import LLMRequestFailedError
 
 class InputRuntime(RuntimeInterface):
     """从 config 中获取 'value'。"""
@@ -1848,23 +2377,54 @@ class InputRuntime(RuntimeInterface):
         return {"output": config.get("value", "")}
 
 class LLMRuntime(RuntimeInterface):
-    """从自己的 config 中获取已经渲染好的 prompt。"""
-    async def execute(self, config: Dict[str, Any], context: ExecutionContext, pipeline_state: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
-        rendered_prompt = config.get("prompt")
+    """
+    一个轻量级的运行时，它通过 Hevno LLM Gateway 发起 LLM 调用。
+    它的职责是：
+    1. 从 config 中解析出调用意图（模型、prompt 等）。
+    2. 从上下文中获取 LLMService。
+    3. 调用 LLMService.request()。
+    4. 将结果（成功或失败）格式化为标准的节点输出。
+    """
+    async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
+        # ... (解析 config 的逻辑不变) ...
+        model_name = config.get("model")
+        prompt = config.get("prompt")
+        llm_params = {k: v for k, v in config.items() if k not in ["model", "prompt"]}
 
-        # 也可以从管道状态中获取输入，以实现链式调用
-        if not rendered_prompt and pipeline_state:
-            rendered_prompt = pipeline_state.get("output", "")
-        
-        if not rendered_prompt:
-            raise ValueError("LLMRuntime requires a 'prompt' in its config or an 'output' from the previous step.")
+        # 【核心修改】从 context.shared.services 中按名称获取服务
+        # 我们现在可以优雅地使用点符号访问
+        llm_service = context.shared.services.llm
 
-        # 模拟 LLM API 调用延迟
-        await asyncio.sleep(0.1)
-        
-        llm_response = f"LLM_RESPONSE_FOR:[{rendered_prompt}]"
-        
-        return {"llm_output": llm_response, "summary": f"Summary of '{rendered_prompt[:20]}...'"}
+        try:
+            # 3. 调用 Gateway
+            response: LLMResponse = await llm_service.request(
+                model_name=model_name,
+                prompt=prompt,
+                **llm_params
+            )
+            
+            # 4. 处理成功或过滤的响应
+            if response.error_details:
+                # 这是一个“软失败”，比如内容过滤
+                return {
+                    "error": response.error_details.message,
+                    "error_type": response.error_details.error_type.value,
+                    "details": response.error_details.model_dump()
+                }
+
+            return {
+                "llm_output": response.content,
+                "usage": response.usage,
+                "model_name": response.model_name
+            }
+
+        except LLMRequestFailedError as e:
+            # 5. 处理硬失败（所有重试都用尽后）
+            print(f"ERROR: LLM request failed for node after all retries. Error: {e}")
+            return {
+                "error": str(e),
+                "details": e.last_error.model_dump() if e.last_error else None
+            }
 
 class SetWorldVariableRuntime(RuntimeInterface):
     """从 config 中获取变量名和值，并设置一个持久化的世界变量。"""
@@ -2236,4 +2796,215 @@ class ActivatedEntry(BaseModel):
 ### runtimes/codex/__init__.py
 ```
 
+```
+
+### llm/providers/__init__.py
+```
+
+```
+
+### llm/providers/gemini.py
+```
+# backend/llm/providers/gemini.py
+
+from typing import Dict, Any
+
+import google.generativeai as genai
+from google.api_core import exceptions as google_exceptions
+from google.generativeai import types as generation_types
+
+from backend.llm.providers.base import LLMProvider
+from backend.llm.models import (
+    LLMResponse,
+    LLMError,
+    LLMResponseStatus,
+    LLMErrorType,
+)
+
+
+class GeminiProvider(LLMProvider):
+    """
+    针对 Google Gemini API 的 LLMProvider 实现。
+    """
+
+    async def generate(
+        self,
+        *,
+        prompt: str,
+        model_name: str,
+        api_key: str,
+        **kwargs: Any
+    ) -> LLMResponse:
+        """
+        使用 Gemini API 生成内容。
+        """
+        try:
+            # 每次调用都独立配置，以支持多密钥轮换
+            genai.configure(api_key=api_key)
+
+            model = genai.GenerativeModel(model_name)
+
+            # 提取支持的生成配置
+            generation_config = {
+                "temperature": kwargs.get("temperature"),
+                "top_p": kwargs.get("top_p"),
+                "top_k": kwargs.get("top_k"),
+                "max_output_tokens": kwargs.get("max_tokens"),
+            }
+            # 清理 None 值
+            generation_config = {k: v for k, v in generation_config.items() if v is not None}
+
+            response: generation_types.GenerateContentResponse = await model.generate_content_async(
+                contents=prompt,
+                generation_config=generation_config
+            )
+
+            # 检查是否因安全策略被阻止
+            # 这是 Gemini 的“软失败”，不会抛出异常
+            if not response.parts:
+                if response.prompt_feedback.block_reason:
+                    error_message = f"Request blocked due to {response.prompt_feedback.block_reason.name}"
+                    return LLMResponse(
+                        status=LLMResponseStatus.FILTERED,
+                        model_name=model_name,
+                        error_details=LLMError(
+                            error_type=LLMErrorType.INVALID_REQUEST_ERROR,
+                            message=error_message,
+                            is_retryable=False # 内容过滤不应重试
+                        )
+                    )
+
+            # 提取 token 使用情况
+            usage = {
+                "prompt_tokens": response.usage_metadata.prompt_token_count,
+                "completion_tokens": response.usage_metadata.candidates_token_count,
+                "total_tokens": response.usage_metadata.total_token_count,
+            }
+            
+            return LLMResponse(
+                status=LLMResponseStatus.SUCCESS,
+                content=response.text,
+                model_name=model_name,
+                usage=usage
+            )
+
+        except generation_types.StopCandidateException as e:
+            # 这种情况也属于内容过滤
+            return LLMResponse(
+                status=LLMResponseStatus.FILTERED,
+                model_name=model_name,
+                error_details=LLMError(
+                    error_type=LLMErrorType.INVALID_REQUEST_ERROR,
+                    message=f"Generation stopped due to safety settings: {e}",
+                    is_retryable=False,
+                )
+            )
+        # 注意: 其他 google_exceptions 将会在此处被抛出，由上层服务捕获并传递给 translate_error
+
+    def translate_error(self, ex: Exception) -> LLMError:
+        """
+        将 Google API 的异常转换为标准的 LLMError。
+        """
+        error_details = {"provider": "gemini", "exception": type(ex).__name__, "message": str(ex)}
+
+        if isinstance(ex, google_exceptions.PermissionDenied):
+            return LLMError(
+                error_type=LLMErrorType.AUTHENTICATION_ERROR,
+                message="Invalid API key or insufficient permissions.",
+                is_retryable=False,  # 使用相同密钥重试是无意义的
+                provider_details=error_details,
+            )
+        
+        if isinstance(ex, google_exceptions.ResourceExhausted):
+            return LLMError(
+                error_type=LLMErrorType.RATE_LIMIT_ERROR,
+                message="Rate limit exceeded. Please try again later or use a different key.",
+                is_retryable=False,  # 对于单个密钥，应立即切换，而不是等待重试
+                provider_details=error_details,
+            )
+
+        if isinstance(ex, google_exceptions.InvalidArgument):
+            return LLMError(
+                error_type=LLMErrorType.INVALID_REQUEST_ERROR,
+                message=f"Invalid argument provided to the API. Check model name and parameters. Details: {ex}",
+                is_retryable=False,
+                provider_details=error_details,
+            )
+
+        if isinstance(ex, (google_exceptions.ServiceUnavailable, google_exceptions.DeadlineExceeded)):
+            return LLMError(
+                error_type=LLMErrorType.PROVIDER_ERROR,
+                message="The service is temporarily unavailable or the request timed out. Please try again.",
+                is_retryable=True,
+                provider_details=error_details,
+            )
+            
+        if isinstance(ex, google_exceptions.GoogleAPICallError):
+            return LLMError(
+                error_type=LLMErrorType.NETWORK_ERROR,
+                message=f"A network-level error occurred while communicating with Google API: {ex}",
+                is_retryable=True,
+                provider_details=error_details,
+            )
+
+        return LLMError(
+            error_type=LLMErrorType.UNKNOWN_ERROR,
+            message=f"An unknown error occurred with the Gemini provider: {ex}",
+            is_retryable=False, # 默认未知错误不可重试，以防造成死循环
+            provider_details=error_details,
+        )
+```
+
+### llm/providers/base.py
+```
+# backend/llm/providers/base.py
+
+from abc import ABC, abstractmethod
+from typing import Dict, Any
+
+from backend.llm.models import LLMResponse, LLMError
+
+
+class LLMProvider(ABC):
+    """
+    一个抽象基-类，定义了所有 LLM 提供商适配器的标准接口。
+    """
+
+    @abstractmethod
+    async def generate(
+        self,
+        *,
+        prompt: str,
+        model_name: str,
+        api_key: str,
+        **kwargs: Any
+    ) -> LLMResponse:
+        """
+        与 LLM 提供商进行交互以生成内容。
+
+        这个方法必须处理所有可能的成功和“软失败”（如内容过滤）场景，
+        并将它们封装在标准的 LLMResponse 对象中。
+        如果发生无法处理的硬性错误（如网络问题、认证失败），它应该抛出原始异常，
+        以便上层服务可以捕获并使用 translate_error 进行处理。
+
+        :param prompt: 发送给模型的提示。
+        :param model_name: 要使用的具体模型名称 (e.g., 'gemini-1.5-pro-latest')。
+        :param api_key: 用于本次请求的 API 密钥。
+        :param kwargs: 其他特定于提供商的参数 (e.g., temperature, max_tokens)。
+        :return: 一个标准的 LLMResponse 对象。
+        :raises Exception: 任何未被处理的、需要由 translate_error 解析的硬性错误。
+        """
+        pass
+
+    @abstractmethod
+    def translate_error(self, ex: Exception) -> LLMError:
+        """
+        将特定于提供商的原始异常转换为我们标准化的 LLMError 对象。
+
+        这个方法是解耦的关键，它将具体的 SDK 错误与我们系统的内部错误处理逻辑分离开。
+
+        :param ex: 从 generate 方法捕获的原始异常。
+        :return: 一个标准的 LLMError 对象。
+        """
+        pass
 ```

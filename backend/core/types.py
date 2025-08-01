@@ -9,18 +9,19 @@ from datetime import datetime, timezone
 from backend.core.state_models import StateSnapshot
 from backend.models import GraphCollection
 
+ServiceRegistry = Dict[str, Any]
+
 class SharedContext(BaseModel):
     """
     一个封装了所有图执行期间共享资源的对象。
-    这个对象将在所有主图和子图的执行上下文中通过引用共享。
     """
     world_state: Dict[str, Any]
     session_info: Dict[str, Any]
-    # 全局写入锁现在是共享上下文的一部分
     global_write_lock: asyncio.Lock
+    # 【核心修改】用一个通用的服务容器替代了特定的 llm_service
+    services: DotAccessibleDict
 
     model_config = {"arbitrary_types_allowed": True}
-
 
 class ExecutionContext(BaseModel):
     """
@@ -41,16 +42,23 @@ class ExecutionContext(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
     @classmethod
-    def create_for_main_run(cls, snapshot: StateSnapshot, run_vars: Dict[str, Any] = None) -> 'ExecutionContext':
+    def create_for_main_run(
+        cls, 
+        snapshot: StateSnapshot, 
+        # 【核心修改】接收一个服务注册表，而不是某个特定服务
+        services: ServiceRegistry, 
+        run_vars: Dict[str, Any] = None
+    ) -> 'ExecutionContext':
         """为顶层图执行创建初始上下文。"""
         shared_context = SharedContext(
-            # 创建 world_state 的可变副本，这是唯一一次复制
             world_state=snapshot.world_state.copy(),
             session_info={
                 "start_time": datetime.now(timezone.utc),
-                "conversation_turn": 0, # 这里可以从快照链中计算
+                "conversation_turn": 0,
             },
-            global_write_lock=asyncio.Lock()
+            global_write_lock=asyncio.Lock(),
+            # 将传入的服务注册表包装成可点访问的字典，并存入共享上下文
+            services=DotAccessibleDict(services)
         )
         return cls(
             shared=shared_context,

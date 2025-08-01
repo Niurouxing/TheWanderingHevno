@@ -8,8 +8,9 @@ from backend.models import GraphCollection, GraphDefinition, GenericNode
 from backend.core.dependency_parser import build_dependency_graph
 from backend.core.registry import RuntimeRegistry
 from backend.core.evaluation import build_evaluation_context, evaluate_data
-from backend.core.types import ExecutionContext 
+from backend.core.types import ExecutionContext, ServiceRegistry
 from backend.core.interfaces import RuntimeInterface, SubGraphRunner
+
 
 class NodeState(Enum):
     PENDING = auto()
@@ -87,14 +88,21 @@ class GraphRun:
 
 # ExecutionEngine 现在实现了 SubGraphRunner 接口
 class ExecutionEngine(SubGraphRunner):
-    def __init__(self, registry: RuntimeRegistry, num_workers: int = 5):
+    def __init__(self, registry: RuntimeRegistry, services: ServiceRegistry, num_workers: int = 5):
         self.registry = registry
+        # 【核心修改】在构造时接收并存储服务注册表
+        self.services = services
         self.num_workers = num_workers
 
     async def step(self, initial_snapshot, triggering_input: Dict[str, Any] = None):
         if triggering_input is None: triggering_input = {}
-        # --- 使用新的工厂方法创建主上下文 ---
-        context = ExecutionContext.create_for_main_run(initial_snapshot, {"trigger_input": triggering_input})
+        
+        # 【核心修改】从 self.services 获取服务注册表并注入
+        context = ExecutionContext.create_for_main_run(
+            snapshot=initial_snapshot,
+            services=self.services,  # <-- 从实例属性注入
+            run_vars={"trigger_input": triggering_input}
+        )
         
         main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
         if not main_graph_def: raise ValueError("'main' graph not found.")

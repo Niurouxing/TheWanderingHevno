@@ -142,3 +142,29 @@ class LLMService:
     
     def _create_failure_response(self, model_name: str, error: LLMError) -> LLMResponse:
         return LLMResponse(status=LLMResponseStatus.ERROR, model_name=model_name, error_details=error)
+
+class MockLLMService:
+    """
+    一个 LLMService 的模拟实现，用于调试。
+    它不进行任何网络调用，而是立即返回一个可预测的假响应。
+    """
+    def __init__(self, *args, **kwargs):
+        print("--- Hevno LLM Gateway is running in MOCK/DEBUG mode. No real API calls will be made. ---")
+
+    async def request(
+        self,
+        model_name: str,
+        prompt: str,
+        **kwargs
+    ) -> LLMResponse:
+        # 模拟一个非常短暂的延迟
+        await asyncio.sleep(0.05)
+        
+        mock_content = f"[MOCK RESPONSE for {model_name}] - Prompt received: '{prompt[:50]}...'"
+        
+        return LLMResponse(
+            status=LLMResponseStatus.SUCCESS,
+            content=mock_content,
+            model_name=model_name,
+            usage={"prompt_tokens": len(prompt.split()), "completion_tokens": 15, "total_tokens": len(prompt.split()) + 15}
+        )
