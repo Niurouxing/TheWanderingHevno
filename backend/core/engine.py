@@ -292,7 +292,7 @@ class ExecutionEngine(SubGraphRunner):
             except Exception as e:
                 # 打印详细的错误信息以便调试
                 import traceback
-                print(f"Error in node {node_id}, step {i} ({runtime_name}): {type(e).__name__}: {e}")
+                print(f"Error in node {node.id}, step {i} ({runtime_name}): {type(e).__name__}: {e}")
                 traceback.print_exc()
                 error_message = f"Failed at step {i+1} ('{runtime_name}'): {type(e).__name__}: {e}"
                 return {"error": error_message, "failed_step": i, "runtime": runtime_name}

@@ -850,9 +850,19 @@ class TestEvaluationCore:
 
     # --- 修正: 添加 lock fixture ---
     async def test_multiline_script_with_return(self, mock_eval_context, test_lock):
-        code = """...""" # 代码本身不变
+        # --- 修正 ---
+        # 移除 Ellipsis (...) 并替换为实际的 Python 代码
+        code = """
+bonus = 0
+if world.hp > 50:
+    bonus = 20
+else:
+    bonus = 5.0
+bonus
+"""
         # 测试 if 分支
         mock_eval_context["world"].hp = 80
+        # 断言现在可以正确工作
         assert await evaluate_expression(code, mock_eval_context, test_lock) == 20
         # 测试 else 分支
         mock_eval_context["world"].hp = 40

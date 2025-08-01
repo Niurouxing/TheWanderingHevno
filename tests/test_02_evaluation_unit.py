@@ -67,7 +67,7 @@ class TestEvaluationCore:
 
     # --- 修正: 添加 lock fixture ---
     async def test_multiline_script_with_return(self, mock_eval_context, test_lock):
-        # --- 修正 ---
+        # --- 【核心修复】 ---
         # 移除 Ellipsis (...) 并替换为实际的 Python 代码
         code = """
 bonus = 0
