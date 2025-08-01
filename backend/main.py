@@ -11,7 +11,9 @@ from backend.core.engine import ExecutionEngine
 from backend.core.registry import runtime_registry
 from backend.runtimes.base_runtimes import InputRuntime, LLMRuntime, SetWorldVariableRuntime
 from backend.runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
+from backend.runtimes.codex.invoke_runtime import InvokeRuntime
 from backend.core.state_models import Sandbox, SnapshotStore, StateSnapshot
+
 
 class CreateSandboxRequest(BaseModel):
     graph_collection: GraphCollection
@@ -33,7 +35,8 @@ def setup_application():
     runtime_registry.register("system.execute", ExecuteRuntime)
     runtime_registry.register("system.call", CallRuntime)
     runtime_registry.register("system.map", MapRuntime)
-    
+    runtime_registry.register("system.invoke", InvokeRuntime)
+
     origins = ["http://localhost:5173"]
     app.add_middleware(
         CORSMiddleware,
