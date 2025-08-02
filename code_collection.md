@@ -12,9 +12,15 @@
 import logging
 from typing import Dict, Any, Callable
 
+
+from backend.core.contracts import Container as ContainerInterface
+
+
 logger = logging.getLogger(__name__)
 
-class Container:
+
+class Container(ContainerInterface):
+
     """一个简单的、通用的依赖注入容器。"""
     def __init__(self):
         self._factories: Dict[str, Callable] = {}
@@ -839,7 +845,8 @@ import asyncio
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Awaitable, TypeVar
+from typing import Any, Callable, Dict, List, Awaitable, TypeVar, Optional
+from backend.core.contracts import HookManager as HookManagerInterface
 
 logger = logging.getLogger(__name__)
 
@@ -856,7 +863,7 @@ class HookImplementation:
     func: HookCallable = field(compare=False)
     plugin_name: str = field(compare=False, default="<unknown>")
 
-class HookManager:
+class HookManager(HookManagerInterface):
     """
     一个中心化的服务，负责发现、注册和调度所有钩子实现。
     它的设计是完全通用的，不与任何特定的钩子绑定。
@@ -920,7 +927,29 @@ class HookManager:
         
         return current_data
 
-    # decide 方法可以根据需要添加
+    async def decide(self, hook_name: str, **kwargs: Any) -> Optional[Any]:
+        """
+        触发一个“决策型”钩子。按优先级从高到低执行，并返回第一个非 None 的结果。
+        """
+        if hook_name not in self._hooks:
+            return None
+
+        # self._hooks is sorted low-to-high priority, so iterate in reverse.
+        for impl in reversed(self._hooks[hook_name]):
+            try:
+                result = await impl.func(**kwargs)
+                if result is not None:
+                    logger.debug(
+                        f"DECIDE hook '{hook_name}' was resolved by plugin "
+                        f"'{impl.plugin_name}' with priority {impl.priority}."
+                    )
+                    return result
+            except Exception as e:
+                logger.error(
+                    f"Error in DECIDE hook '{hook_name}' from plugin '{impl.plugin_name}'. Skipping. Error: {e}",
+                    exc_info=e
+                )
+        return None
 ```
 
 ### core/__init__.py
@@ -1058,17 +1087,21 @@ T = TypeVar('T')
 PluginRegisterFunc = Callable[['Container', 'HookManager'], None]
 
 # 为核心服务定义接口，插件不应直接导入实现，而应依赖这些接口
-class Container:
+class Container(ABC):
+    @abstractmethod
     def register(self, name: str, factory: Callable, singleton: bool = True) -> None: raise NotImplementedError
+    @abstractmethod
     def resolve(self, name: str) -> Any: raise NotImplementedError
 
-class HookManager:
+class HookManager(ABC):
+    @abstractmethod
     def add_implementation(self, hook_name: str, implementation: Callable, priority: int = 10, plugin_name: str = "<unknown>"): raise NotImplementedError
+    @abstractmethod
     async def trigger(self, hook_name: str, **kwargs: Any) -> None: raise NotImplementedError
+    @abstractmethod
     async def filter(self, hook_name: str, data: T, **kwargs: Any) -> T: raise NotImplementedError
+    @abstractmethod
     async def decide(self, hook_name: str, **kwargs: Any) -> Optional[Any]: raise NotImplementedError
-
-
 # --- 2. 核心持久化状态模型 (从旧 core/models.py 和 core/contracts.py 合并) ---
 
 class RuntimeInstruction(BaseModel):
@@ -1169,17 +1202,26 @@ class ResolveNodeDependenciesContext(BaseModel):
 # --- 5. 核心服务接口契约 ---
 # 这些是插件应该依赖的抽象接口，而不是具体实现类。
 
-class ExecutionEngineInterface:
+class ExecutionEngineInterface(ABC):
+    @abstractmethod
     async def step(self, initial_snapshot: 'StateSnapshot', triggering_input: Dict[str, Any] = None) -> 'StateSnapshot':
         raise NotImplementedError
 
-class SnapshotStoreInterface:
+class SnapshotStoreInterface(ABC):
+    @abstractmethod
     def save(self, snapshot: 'StateSnapshot') -> None: raise NotImplementedError
+    @abstractmethod
     def get(self, snapshot_id: UUID) -> Optional['StateSnapshot']: raise NotImplementedError
+    @abstractmethod
     def find_by_sandbox(self, sandbox_id: UUID) -> List['StateSnapshot']: raise NotImplementedError
+    # Adding a clear method for testing purposes
+    @abstractmethod
+    def clear(self) -> None: raise NotImplementedError
 
-class AuditorInterface:
+class AuditorInterface(ABC):
+    @abstractmethod
     async def generate_full_report(self) -> Dict[str, Any]: raise NotImplementedError
+    @abstractmethod
     def set_reporters(self, reporters: List['Reportable']) -> None: raise NotImplementedError
 
 class Reportable(ABC): # 如果还没定义成抽象类，现在定义
@@ -1192,8 +1234,6 @@ class Reportable(ABC): # 如果还没定义成抽象类，现在定义
     
     @abstractmethod
     async def generate_report(self) -> Any: pass
-
-
 ```
 
 # Directory: plugins
@@ -4024,7 +4064,7 @@ class SnapshotStore:
         )
 
     def clear(self):
-        self._store = {}
+        self._store.clear()
 
 
 # --- Section 2: 核心上下文与快照的工厂/助手函数 ---
@@ -4130,7 +4170,7 @@ from uuid import uuid4
 from backend.core.contracts import StateSnapshot, GraphCollection
 
 # 从本插件的接口定义导入，测试应依赖于接口而非具体实现
-from plugins.core_engine.interfaces import ExecutionEngineInterface
+from backend.core.contracts import ExecutionEngineInterface
 
 # 使用 pytest.mark.asyncio 来标记所有异步测试
 @pytest.mark.asyncio
@@ -4404,7 +4444,7 @@ import pytest
 from uuid import uuid4
 
 from backend.core.contracts import StateSnapshot, GraphCollection
-from plugins.core_engine.interfaces import ExecutionEngineInterface
+from backend.core.contracts import ExecutionEngineInterface
 
 @pytest.mark.asyncio
 class TestEngineConcurrency:
@@ -4450,8 +4490,8 @@ class TestEngineConcurrency:
 # plugins/core_engine/tests/conftest.py
 
 import pytest
-import asyncio
-from typing import Generator
+import pytest_asyncio 
+from typing import AsyncGenerator 
 
 # 从平台核心导入
 from backend.container import Container
@@ -4464,60 +4504,14 @@ from plugins.core_engine.state import SnapshotStore
 from plugins.core_engine.runtimes.base_runtimes import InputRuntime, SetWorldVariableRuntime
 from plugins.core_engine.runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
 
-# 从其他插件导入，但我们只导入它们的注册函数或 Mock
+# 从其他插件导入，但我们只导入它们的注册函数
 from plugins.core_llm import register_plugin as register_llm_plugin
 from plugins.core_codex import register_plugin as register_codex_plugin
 
-
 @pytest.fixture
-def test_engine() -> Generator[ExecutionEngine, None, None]:
-    """
-    为引擎集成测试提供一个完全配置好的 ExecutionEngine 实例。
-    这个 fixture 模拟了应用启动时的插件加载和服务装配过程。
-    """
-    # 1. 创建平台核心服务
-    container = Container()
-    hook_manager = HookManager()
-
-    # 2. 手动注册 core_engine 自身的服务
-    container.register("snapshot_store", lambda: SnapshotStore(), singleton=True)
-    container.register("sandbox_store", lambda: {}, singleton=True)
-    
-    # 注册一个空的 RuntimeRegistry，稍后通过钩子填充
-    runtime_registry = RuntimeRegistry()
-    container.register("runtime_registry", lambda: runtime_registry)
-    
-    # 注册引擎，它依赖于上面注册的服务
-    engine_factory = lambda c: ExecutionEngine(
-        registry=c.resolve("runtime_registry"),
-        container=c,
-        hook_manager=hook_manager
-    )
-    container.register("execution_engine", engine_factory, singleton=True)
-
-    # 3. 手动注册 core_engine 自己的运行时 (这些是内置的)
-    runtime_registry.register("system.input", InputRuntime)
-    runtime_registry.register("system.set_world_var", SetWorldVariableRuntime)
-    runtime_registry.register("system.execute", ExecuteRuntime)
-    runtime_registry.register("system.call", CallRuntime)
-    runtime_registry.register("system.map", MapRuntime)
-
-    # 4. 手动注册依赖插件 (core_llm, core_codex) 的钩子
-    #    这会向 hook_manager 添加 'collect_runtimes' 的实现
-    register_llm_plugin(container, hook_manager)
-    register_codex_plugin(container, hook_manager)
-
-    # 5. 手动触发异步钩子来填充 RuntimeRegistry
-    async def populate_runtimes():
-        external_runtimes = await hook_manager.filter("collect_runtimes", {})
-        for name, runtime_class in external_runtimes.items():
-            runtime_registry.register(name, runtime_class)
-
-    asyncio.run(populate_runtimes())
-
-    # 6. 从容器中解析出最终配置好的引擎实例
-    engine = container.resolve("execution_engine")
-    yield engine
+def hook_manager() -> HookManager:
+    """Provides a basic HookManager for unit tests."""
+    return HookManager()
 ```
 
 ### core_engine/tests/__init__.py
@@ -4533,8 +4527,9 @@ import pytest
 import asyncio
 from uuid import uuid4
 
-# 从平台核心导入
-from backend.core.contracts import ExecutionContext, StateSnapshot, GraphCollection, Container
+
+from backend.container import Container
+from backend.core.contracts import ExecutionContext, StateSnapshot, GraphCollection
 from backend.core.hooks import HookManager
 
 # 从本插件导入
@@ -4805,7 +4800,7 @@ import pytest
 from uuid import uuid4
 
 from backend.core.contracts import StateSnapshot, GraphCollection
-from plugins.core_engine.interfaces import ExecutionEngineInterface
+from backend.core.contracts import ExecutionEngineInterface
 
 @pytest.mark.asyncio
 class TestCodexSystem:
@@ -4877,20 +4872,6 @@ class TestPersistenceAPI:
         assert response.status_code == 200
         assert response.json() == []
 
-    def test_import_invalid_package(self, test_client: TestClient):
-        # 测试通用的包导入端点
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w') as zf:
-            zf.writestr("somefile.txt", "hello") # 缺少 manifest.json
-        
-        zip_bytes = zip_buffer.getvalue()
-
-        response = test_client.post(
-            "/api/persistence/package/import",
-            files={"file": ("bad_package.hevno.zip", zip_bytes, "application/zip")}
-        )
-        assert response.status_code == 400
-        assert "missing 'manifest.json'" in response.json()["detail"]
 ```
 
 ### core_persistence/tests/__init__.py
@@ -4908,8 +4889,11 @@ class TestPersistenceAPI:
 # plugins/core_api/tests/test_api_e2e.py
 
 import pytest
+import zipfile
+import io
+import json
 from fastapi.testclient import TestClient
-from uuid import uuid4
+from uuid import uuid4, UUID
 
 # 从平台核心契约导入数据模型
 from backend.core.contracts import GraphCollection
@@ -5379,25 +5363,42 @@ class TestLLMServiceIntegration:
         mock_gemini_provider.generate.assert_awaited_once()
 
     async def test_retry_on_provider_error_and_succeed(self, llm_service: LLMService, mock_gemini_provider: AsyncMock):
-        mock_gemini_provider.generate.side_effect = [
+        # Using a callable for side_effect provides more reliable behavior for complex cases.
+        effects = [
             google_exceptions.ServiceUnavailable("Server temporary down"),
             LLMResponse(status=LLMResponseStatus.SUCCESS, content="Success after retry!")
         ]
+        
+        # This mock function will be called by the async mock
+        async def mock_generate_callable(*args, **kwargs):
+            effect = effects.pop(0)
+            if isinstance(effect, Exception):
+                raise effect
+            return effect
+
+        mock_gemini_provider.generate.side_effect = mock_generate_callable
+        
         mock_gemini_provider.translate_error.return_value = LLMError(
             error_type=LLMErrorType.PROVIDER_ERROR, message="Server down", is_retryable=True
         )
         response = await llm_service.request(model_name="gemini/gemini-1.5-pro", prompt="Hello")
         assert response.status == LLMResponseStatus.SUCCESS
+        assert response.content == "Success after retry!"
         assert mock_gemini_provider.generate.call_count == 2
 
     async def test_final_failure_after_all_retries(self, llm_service: LLMService, mock_gemini_provider: AsyncMock):
+        # Set the side effect to always raise the same exception
         mock_gemini_provider.generate.side_effect = google_exceptions.ServiceUnavailable("Server persistently down")
+        
         mock_gemini_provider.translate_error.return_value = LLMError(
             error_type=LLMErrorType.PROVIDER_ERROR, message="Server down", is_retryable=True
         )
         with pytest.raises(LLMRequestFailedError) as exc_info:
             await llm_service.request(model_name="gemini/gemini-1.5-pro", prompt="Hello")
+            
+        # Check the final exception message
         assert f"failed permanently after 2 attempt(s)" in str(exc_info.value)
+        # Check that the mock was called the correct number of times (1 initial + 1 retry)
         assert mock_gemini_provider.generate.call_count == 2
 ```
 
@@ -5470,18 +5471,50 @@ class TestSandboxModels:
 ### conftest.py
 ```
 # tests/conftest.py
-
+import os 
 import pytest
+import pytest_asyncio
 from fastapi.testclient import TestClient
-from typing import Generator
+from typing import Generator, AsyncGenerator
 
 # 1. 应用工厂导入
 from backend.app import create_app
 
-# 2. 共享的数据模型和契约导入
-from backend.core.contracts import GraphCollection, Sandbox, StateSnapshot, Container
+# --- MODIFICATION START ---
+# Import the concrete implementations for use in fixtures.
+from backend.container import Container
+from backend.core.hooks import HookManager
+
+# Import the data models and ABCs for type hinting.
+from backend.core.contracts import GraphCollection, Sandbox, StateSnapshot, SnapshotStoreInterface
+
+# Import other components needed for the test_engine fixture
+from plugins.core_engine.engine import ExecutionEngine
+from plugins.core_engine.registry import RuntimeRegistry
+from plugins.core_engine.state import SnapshotStore
+from plugins.core_engine.runtimes.base_runtimes import InputRuntime, SetWorldVariableRuntime
+from plugins.core_engine.runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
+from plugins.core_llm import register_plugin as register_llm_plugin
+from plugins.core_codex import register_plugin as register_codex_plugin
+# --- MODIFICATION END ---
+
 
 # --- Session-wide Fixtures ---
+
+@pytest.fixture(scope="session", autouse=True)
+def set_test_environment():
+    """
+    Set environment variables for the entire test session.
+    This ensures E2E tests use mock services where appropriate.
+    """
+    original_value = os.environ.get("HEVNO_LLM_DEBUG_MODE")
+    os.environ["HEVNO_LLM_DEBUG_MODE"] = "true"
+    yield
+    # Restore original environment state after tests
+    if original_value is None:
+        del os.environ["HEVNO_LLM_DEBUG_MODE"]
+    else:
+        os.environ["HEVNO_LLM_DEBUG_MODE"] = original_value
 
 @pytest.fixture(scope="session")
 def app() -> Generator[TestClient, None, None]:
@@ -5489,7 +5522,8 @@ def app() -> Generator[TestClient, None, None]:
     一个会话级别的 fixture，用于创建一个完整的 FastAPI 应用实例。
     这个实例会完整地执行 lifespan，加载所有插件。
     """
-    return create_app()
+    # This just returns the app object; TestClient will manage its lifespan.
+    yield create_app()
 
 @pytest.fixture
 def test_client(app) -> Generator[TestClient, None, None]:
@@ -5497,31 +5531,74 @@ def test_client(app) -> Generator[TestClient, None, None]:
     一个函数级别的 fixture，为每个测试提供一个干净的 TestClient 和状态。
     它依赖于会话级别的 app fixture。
     """
-    container: Container = app.state.container
-    
-    # 获取由插件注册的存储服务
-    sandbox_store: dict = container.resolve("sandbox_store")
-    snapshot_store: any = container.resolve("snapshot_store")
-    
-    # 在每次测试前清理状态
-    sandbox_store.clear()
-    if hasattr(snapshot_store, 'clear'):
+    # The TestClient context manager runs the app's lifespan events.
+    # We must access app.state *inside* this context.
+    with TestClient(app) as client:
+        # Now client.app.state is guaranteed to be populated.
+        container: Container = client.app.state.container
+        
+        # 获取由插件注册的存储服务
+        sandbox_store: dict = container.resolve("sandbox_store")
+        snapshot_store: SnapshotStoreInterface = container.resolve("snapshot_store")
+        
+        # 在每次测试前清理状态
+        sandbox_store.clear()
         snapshot_store.clear()
 
-    with TestClient(app) as client:
         yield client
+    # No explicit cleanup needed here, as state is cleared before each test.
+
+
+# The test_engine integration fixture is moved here to be accessible by all plugin tests.
+@pytest_asyncio.fixture 
+async def test_engine() -> AsyncGenerator[ExecutionEngine, None]:
+    """
+    为集成测试提供一个完全配置好的 ExecutionEngine 实例。
+    这个 fixture 模拟了应用启动时的插件加载和服务装配过程。
+    """
+    # 1. 创建平台核心服务
+    #    Now using the concrete implementations imported above.
+    container = Container()
+    hook_manager = HookManager()
+
+    # 2. 手动注册 core_engine 自身的服务
+    container.register("snapshot_store", lambda: SnapshotStore(), singleton=True)
+    container.register("sandbox_store", lambda: {}, singleton=True)
     
-    # 测试后再次清理
-    sandbox_store.clear()
-    if hasattr(snapshot_store, 'clear'):
-        snapshot_store.clear()
+    runtime_registry = RuntimeRegistry()
+    container.register("runtime_registry", lambda: runtime_registry)
+    
+    engine_factory = lambda c: ExecutionEngine(
+        registry=c.resolve("runtime_registry"),
+        container=c,
+        hook_manager=hook_manager
+    )
+    container.register("execution_engine", engine_factory, singleton=True)
+
+    # 3. 手动注册 core_engine 的内置运行时
+    runtime_registry.register("system.input", InputRuntime)
+    runtime_registry.register("system.set_world_var", SetWorldVariableRuntime)
+    runtime_registry.register("system.execute", ExecuteRuntime)
+    runtime_registry.register("system.call", CallRuntime)
+    runtime_registry.register("system.map", MapRuntime)
+
+    # 4. 手动注册依赖插件 (core_llm, core_codex) 的服务和钩子
+    register_llm_plugin(container, hook_manager)
+    register_codex_plugin(container, hook_manager)
+
+    # 5. 手动触发异步钩子来填充 RuntimeRegistry
+    external_runtimes = await hook_manager.filter("collect_runtimes", {})
+    for name, runtime_class in external_runtimes.items():
+        runtime_registry.register(name, runtime_class)
+
+    # 6. 从容器中解析出最终配置好的引擎实例
+    engine = container.resolve("execution_engine")
+    
+    yield engine
 
 
 # --- Shared Graph Collection Fixtures ---
-# 这些图定义被多个插件的测试所使用，放在这里以便共享。
-# (这里的内容与您提供的 conftest.py 中的图定义 fixture 完全相同，因此省略以保持简洁)
-# ... (linear_collection, parallel_collection, etc. fixtures go here) ...
-# 注意：你需要将旧 conftest.py 中的所有 GraphCollection fixture 复制到这里。
+# These are unchanged but included for completeness.
 
 @pytest.fixture
 def linear_collection() -> GraphCollection:
@@ -5933,10 +6010,9 @@ def map_collection_basic() -> GraphCollection:
                 }}}]}
             ]},
         "process_character": {"nodes": [{"id": "generate_bio", "run": [{"runtime": "llm.default", "config": {
-            # 【修正】添加 model 字段
-            "model": "mock/model",
-            "prompt": "{{ f'Create a bio for {nodes.character_input.output} in the context of {nodes.global_story_setting.output}. Index: {nodes.character_index.output}' }}"
-            }}]}]}
+        "model": "mock/model",
+        "prompt": "{{ f'Create a bio for {nodes.character_input.output} in the context of {nodes.global_story_setting.output}. Index: {nodes.character_index.output}' }}"
+        }}]}]}
     }
     return GraphCollection.model_validate(base)
 

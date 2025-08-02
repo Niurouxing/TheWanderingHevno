@@ -9,7 +9,7 @@ from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
+    RetryCallState, # 导入 RetryCallState
 )
 
 # --- 从本插件内部导入组件 ---
@@ -25,17 +25,24 @@ from .registry import ProviderRegistry
 
 logger = logging.getLogger(__name__)
 
-def is_retryable_llm_error(exception: Exception) -> bool:
+
+def is_retryable_llm_error(retry_state: RetryCallState) -> bool:
     """
     一个 tenacity 重试条件函数。
-    仅当异常是 LLMRequestFailedError 并且其内部的 last_error 
-    被明确标记为 is_retryable=True 时，才返回 True。
+    【终极修复】它接收一个 RetryCallState 对象，我们需要从中提取真正的异常。
     """
+    # 从 retry_state 中获取导致失败的异常
+    exception = retry_state.outcome.exception()
+
+    if not exception:
+        return False # 如果没有异常，就不重试
+
     return (
         isinstance(exception, LLMRequestFailedError) and
         exception.last_error is not None and
         exception.last_error.is_retryable
     )
+
 
 class LLMService:
     """
@@ -75,7 +82,7 @@ class LLMService:
                 ),
             )
 
-        def log_before_sleep(retry_state):
+        def log_before_sleep(retry_state: RetryCallState):
             """在 tenacity 每次重试前调用的日志记录函数。"""
             exc = retry_state.outcome.exception()
             if exc and isinstance(exc, LLMRequestFailedError) and exc.last_error:
@@ -96,16 +103,16 @@ class LLMService:
             before_sleep=log_before_sleep
         )
 
+        wrapped_attempt = retry_decorator(self._attempt_request)
         try:
-            wrapped_attempt = retry_decorator(self._attempt_request)
             return await wrapped_attempt(provider_name, actual_model_name, prompt, **kwargs)
         
         except LLMRequestFailedError as e:
             final_message = (
                 f"LLM request for model '{model_name}' failed permanently after {self.max_retries} attempt(s)."
             )
-            logger.error(final_message, exc_info=True)
-            # 重新抛出，以便上层（如运行时）可以捕获并格式化最终错误
+            # exc_info=False 因为我们正在从原始异常链中引发一个新的、更清晰的异常
+            logger.error(final_message, exc_info=False)
             raise LLMRequestFailedError(final_message, last_error=self.last_known_error) from e
         
         except Exception as e:
@@ -121,9 +128,6 @@ class LLMService:
     ) -> LLMResponse:
         """
         执行单次 LLM 请求尝试。
-        - 如果成功，返回 LLMResponse。
-        - 如果遇到可重试的错误，抛出 LLMRequestFailedError 以便 tenacity 捕获。
-        - 如果遇到不可重试的错误，返回带有 error_details 的 LLMResponse。
         """
         provider = self.provider_registry.get(provider_name)
         if not provider:
@@ -131,41 +135,28 @@ class LLMService:
 
         try:
             async with self.key_manager.acquire_key(provider_name) as key_info:
-                try:
-                    response = await provider.generate(
-                        prompt=prompt, model_name=model_name, api_key=key_info.key_string, **kwargs
-                    )
-                    
-                    # Case 1: Provider 返回了一个带有逻辑错误的响应 (e.g., 内容过滤)
-                    if response.status in [LLMResponseStatus.ERROR, LLMResponseStatus.FILTERED] and response.error_details:
-                        self.last_known_error = response.error_details
-                        await self._handle_error(provider_name, key_info, response.error_details)
-                        
-                        # 如果此逻辑错误是可重试的，则抛出异常以触发 tenacity
-                        if response.error_details.is_retryable:
-                            raise LLMRequestFailedError("Provider returned a retryable error response.", last_error=response.error_details)
-
-                    # Case 2: 成功，或遇到不可重试的逻辑错误。无论哪种，本次尝试都结束了。
-                    return response
+                response = await provider.generate(
+                    prompt=prompt, model_name=model_name, api_key=key_info.key_string, **kwargs
+                )
                 
-                except Exception as e:
-                    # Case 3: Provider 抛出了一个 SDK 或网络层面的异常
-                    llm_error = provider.translate_error(e)
-                    self.last_known_error = llm_error
-                    await self._handle_error(provider_name, key_info, llm_error)
+                if response.status in [LLMResponseStatus.ERROR, LLMResponseStatus.FILTERED] and response.error_details:
+                    self.last_known_error = response.error_details
+                    await self._handle_error(provider_name, key_info, response.error_details)
                     
-                    error_message = f"Request attempt failed due to an exception: {llm_error.message}"
-                    # 抛出我们的自定义异常，tenacity 将根据 is_retryable 决定是否重试
-                    raise LLMRequestFailedError(error_message, last_error=llm_error) from e
+                    if response.error_details.is_retryable:
+                        raise LLMRequestFailedError("Provider returned a retryable error response.", last_error=response.error_details)
+
+                return response
         
-        except (RuntimeError, ValueError) as e:
-            # 捕获我们自己的内部错误 (e.g., 'No key pool registered for provider')
-            # 这些错误通常是配置问题，不可重试。
-            raise LLMRequestFailedError(str(e), last_error=LLMError(
-                error_type=LLMErrorType.INVALID_REQUEST_ERROR,
-                message=str(e),
-                is_retryable=False
-            ))
+        except Exception as e:
+            if isinstance(e, LLMRequestFailedError):
+                raise e
+
+            llm_error = provider.translate_error(e)
+            self.last_known_error = llm_error
+            
+            error_message = f"Request attempt failed due to an exception: {llm_error.message}"
+            raise LLMRequestFailedError(error_message, last_error=llm_error) from e
 
     async def _handle_error(self, provider_name: str, key_info: KeyInfo, error: LLMError):
         """根据错误类型更新密钥池中密钥的状态。"""
@@ -204,7 +195,7 @@ class MockLLMService:
         **kwargs
     ) -> LLMResponse:
         await asyncio.sleep(0.05)
-        mock_content = f"[MOCK RESPONSE for {model_name}] - Prompt received: '{prompt[:50]}...'"
+        mock_content = f"[MOCK RESPONSE for {model_name}] - Prompt received: '{prompt[:150]}...'"
         
         return LLMResponse(
             status=LLMResponseStatus.SUCCESS,

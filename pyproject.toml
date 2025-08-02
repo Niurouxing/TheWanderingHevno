@@ -53,3 +53,7 @@ testpaths = [
 
 # 配置 pytest-asyncio
 asyncio_mode = "auto"
+
+markers = [
+    "e2e: 标记端到端测试",
+]

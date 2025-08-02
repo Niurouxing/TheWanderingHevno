@@ -7,7 +7,7 @@ from uuid import uuid4
 from backend.core.contracts import StateSnapshot, GraphCollection
 
 # 从本插件的接口定义导入，测试应依赖于接口而非具体实现
-from plugins.core_engine.interfaces import ExecutionEngineInterface
+from backend.core.contracts import ExecutionEngineInterface
 
 # 使用 pytest.mark.asyncio 来标记所有异步测试
 @pytest.mark.asyncio
@@ -26,11 +26,14 @@ class TestEngineCoreFlows:
         
         # 验证B的输入来自A
         b_prompt = "The story is: a story about a cat"
-        assert output["B"]["llm_output"].startswith(f"[MOCK RESPONSE for mock/model] - Prompt received: '{b_prompt[:50]}...'")
+        # 【修复】断言B的输出包含了正确的prompt
+        assert b_prompt in output["B"]["llm_output"]
 
         # 验证C的输入来自B
         c_prompt = output['B']['llm_output']
-        assert output["C"]["llm_output"].startswith(f"[MOCK RESPONSE for mock/model] - Prompt received: '{c_prompt[:50]}...'")
+        # 【修复】断言C的输出包含了B的完整输出作为其prompt
+        assert c_prompt in output["C"]["llm_output"]
+
 
     async def test_parallel_flow(self, test_engine: ExecutionEngineInterface, parallel_collection: GraphCollection):
         """测试一个扇出再扇入的图 (A, B) -> C，验证并行执行和依赖合并。"""
@@ -56,7 +59,8 @@ class TestEngineCoreFlows:
         
         # 验证第三个指令的 prompt 正确使用了 world 状态和第二个指令的 pipe 输出
         expected_prompt = "Tell a story about Sir Reginald. He just received this message: A secret message"
-        assert node_a_result["llm_output"].startswith(f"[MOCK RESPONSE for mock/model] - Prompt received: '{expected_prompt[:50]}...'")
+        # 【修复】改为更健壮的 'in' 检查
+        assert expected_prompt in node_a_result["llm_output"]
         
         # 验证第二个指令的输出也被保留在最终结果中
         assert node_a_result["output"] == "A secret message"
@@ -105,6 +109,7 @@ class TestEngineCoreFlows:
         caller_result = output["caller"]["output"]
         assert "error" in caller_result["B_fail"]
 
+# ... (The rest of the file remains the same)
 @pytest.mark.asyncio
 class TestEngineStateManagement:
     """测试与状态管理（世界状态、图演化）相关的引擎功能。"""
@@ -227,8 +232,16 @@ class TestEngineMapExecution:
 
         assert isinstance(map_result, list) and len(map_result) == 3
         assert "generate_bio" in map_result[0]
-        assert "Aragorn" in map_result[0]["generate_bio"]["llm_output"] and "Index: 0" in map_result[0]["generate_bio"]["llm_output"]
-        assert "Legolas" in map_result[2]["generate_bio"]["llm_output"] and "Index: 2" in map_result[2]["generate_bio"]["llm_output"]
+        
+        aragorn_output = map_result[0]["generate_bio"]["llm_output"]
+        legolas_output = map_result[2]["generate_bio"]["llm_output"]
+        
+        assert "Create a bio for Aragorn" in aragorn_output
+        assert "Index: 0" in aragorn_output
+        
+        assert "Create a bio for Legolas" in legolas_output
+        assert "Index: 2" in legolas_output
+
 
     async def test_map_with_collect(self, test_engine: ExecutionEngineInterface, map_collection_with_collect: GraphCollection):
         """测试 `collect` 功能，期望输出是一个扁平化的值列表。"""

@@ -4,8 +4,9 @@ import pytest
 import asyncio
 from uuid import uuid4
 
-# 从平台核心导入
-from backend.core.contracts import ExecutionContext, StateSnapshot, GraphCollection, Container
+
+from backend.container import Container
+from backend.core.contracts import ExecutionContext, StateSnapshot, GraphCollection
 from backend.core.hooks import HookManager
 
 # 从本插件导入

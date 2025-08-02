@@ -17,17 +17,21 @@ T = TypeVar('T')
 PluginRegisterFunc = Callable[['Container', 'HookManager'], None]
 
 # 为核心服务定义接口，插件不应直接导入实现，而应依赖这些接口
-class Container:
+class Container(ABC):
+    @abstractmethod
     def register(self, name: str, factory: Callable, singleton: bool = True) -> None: raise NotImplementedError
+    @abstractmethod
     def resolve(self, name: str) -> Any: raise NotImplementedError
 
-class HookManager:
+class HookManager(ABC):
+    @abstractmethod
     def add_implementation(self, hook_name: str, implementation: Callable, priority: int = 10, plugin_name: str = "<unknown>"): raise NotImplementedError
+    @abstractmethod
     async def trigger(self, hook_name: str, **kwargs: Any) -> None: raise NotImplementedError
+    @abstractmethod
     async def filter(self, hook_name: str, data: T, **kwargs: Any) -> T: raise NotImplementedError
+    @abstractmethod
     async def decide(self, hook_name: str, **kwargs: Any) -> Optional[Any]: raise NotImplementedError
-
-
 # --- 2. 核心持久化状态模型 (从旧 core/models.py 和 core/contracts.py 合并) ---
 
 class RuntimeInstruction(BaseModel):
@@ -128,17 +132,26 @@ class ResolveNodeDependenciesContext(BaseModel):
 # --- 5. 核心服务接口契约 ---
 # 这些是插件应该依赖的抽象接口，而不是具体实现类。
 
-class ExecutionEngineInterface:
+class ExecutionEngineInterface(ABC):
+    @abstractmethod
     async def step(self, initial_snapshot: 'StateSnapshot', triggering_input: Dict[str, Any] = None) -> 'StateSnapshot':
         raise NotImplementedError
 
-class SnapshotStoreInterface:
+class SnapshotStoreInterface(ABC):
+    @abstractmethod
     def save(self, snapshot: 'StateSnapshot') -> None: raise NotImplementedError
+    @abstractmethod
     def get(self, snapshot_id: UUID) -> Optional['StateSnapshot']: raise NotImplementedError
+    @abstractmethod
     def find_by_sandbox(self, sandbox_id: UUID) -> List['StateSnapshot']: raise NotImplementedError
+    # Adding a clear method for testing purposes
+    @abstractmethod
+    def clear(self) -> None: raise NotImplementedError
 
-class AuditorInterface:
+class AuditorInterface(ABC):
+    @abstractmethod
     async def generate_full_report(self) -> Dict[str, Any]: raise NotImplementedError
+    @abstractmethod
     def set_reporters(self, reporters: List['Reportable']) -> None: raise NotImplementedError
 
 class Reportable(ABC): # 如果还没定义成抽象类，现在定义
@@ -151,4 +164,3 @@ class Reportable(ABC): # 如果还没定义成抽象类，现在定义
     
     @abstractmethod
     async def generate_report(self) -> Any: pass
-

@@ -1,16 +1,48 @@
 # tests/conftest.py
-
+import os 
 import pytest
+import pytest_asyncio
 from fastapi.testclient import TestClient
-from typing import Generator
+from typing import Generator, AsyncGenerator
 
 # 1. 应用工厂导入
 from backend.app import create_app
 
-# 2. 共享的数据模型和契约导入
-from backend.core.contracts import GraphCollection, Sandbox, StateSnapshot, Container
+# --- MODIFICATION START ---
+# Import the concrete implementations for use in fixtures.
+from backend.container import Container
+from backend.core.hooks import HookManager
+
+# Import the data models and ABCs for type hinting.
+from backend.core.contracts import GraphCollection, Sandbox, StateSnapshot, SnapshotStoreInterface
+
+# Import other components needed for the test_engine fixture
+from plugins.core_engine.engine import ExecutionEngine
+from plugins.core_engine.registry import RuntimeRegistry
+from plugins.core_engine.state import SnapshotStore
+from plugins.core_engine.runtimes.base_runtimes import InputRuntime, SetWorldVariableRuntime
+from plugins.core_engine.runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
+from plugins.core_llm import register_plugin as register_llm_plugin
+from plugins.core_codex import register_plugin as register_codex_plugin
+# --- MODIFICATION END ---
+
 
 # --- Session-wide Fixtures ---
+
+@pytest.fixture(scope="session", autouse=True)
+def set_test_environment():
+    """
+    Set environment variables for the entire test session.
+    This ensures E2E tests use mock services where appropriate.
+    """
+    original_value = os.environ.get("HEVNO_LLM_DEBUG_MODE")
+    os.environ["HEVNO_LLM_DEBUG_MODE"] = "true"
+    yield
+    # Restore original environment state after tests
+    if original_value is None:
+        del os.environ["HEVNO_LLM_DEBUG_MODE"]
+    else:
+        os.environ["HEVNO_LLM_DEBUG_MODE"] = original_value
 
 @pytest.fixture(scope="session")
 def app() -> Generator[TestClient, None, None]:
@@ -18,7 +50,8 @@ def app() -> Generator[TestClient, None, None]:
     一个会话级别的 fixture，用于创建一个完整的 FastAPI 应用实例。
     这个实例会完整地执行 lifespan，加载所有插件。
     """
-    return create_app()
+    # This just returns the app object; TestClient will manage its lifespan.
+    yield create_app()
 
 @pytest.fixture
 def test_client(app) -> Generator[TestClient, None, None]:
@@ -26,31 +59,74 @@ def test_client(app) -> Generator[TestClient, None, None]:
     一个函数级别的 fixture，为每个测试提供一个干净的 TestClient 和状态。
     它依赖于会话级别的 app fixture。
     """
-    container: Container = app.state.container
-    
-    # 获取由插件注册的存储服务
-    sandbox_store: dict = container.resolve("sandbox_store")
-    snapshot_store: any = container.resolve("snapshot_store")
-    
-    # 在每次测试前清理状态
-    sandbox_store.clear()
-    if hasattr(snapshot_store, 'clear'):
+    # The TestClient context manager runs the app's lifespan events.
+    # We must access app.state *inside* this context.
+    with TestClient(app) as client:
+        # Now client.app.state is guaranteed to be populated.
+        container: Container = client.app.state.container
+        
+        # 获取由插件注册的存储服务
+        sandbox_store: dict = container.resolve("sandbox_store")
+        snapshot_store: SnapshotStoreInterface = container.resolve("snapshot_store")
+        
+        # 在每次测试前清理状态
+        sandbox_store.clear()
         snapshot_store.clear()
 
-    with TestClient(app) as client:
         yield client
+    # No explicit cleanup needed here, as state is cleared before each test.
+
+
+# The test_engine integration fixture is moved here to be accessible by all plugin tests.
+@pytest_asyncio.fixture 
+async def test_engine() -> AsyncGenerator[ExecutionEngine, None]:
+    """
+    为集成测试提供一个完全配置好的 ExecutionEngine 实例。
+    这个 fixture 模拟了应用启动时的插件加载和服务装配过程。
+    """
+    # 1. 创建平台核心服务
+    #    Now using the concrete implementations imported above.
+    container = Container()
+    hook_manager = HookManager()
+
+    # 2. 手动注册 core_engine 自身的服务
+    container.register("snapshot_store", lambda: SnapshotStore(), singleton=True)
+    container.register("sandbox_store", lambda: {}, singleton=True)
     
-    # 测试后再次清理
-    sandbox_store.clear()
-    if hasattr(snapshot_store, 'clear'):
-        snapshot_store.clear()
+    runtime_registry = RuntimeRegistry()
+    container.register("runtime_registry", lambda: runtime_registry)
+    
+    engine_factory = lambda c: ExecutionEngine(
+        registry=c.resolve("runtime_registry"),
+        container=c,
+        hook_manager=hook_manager
+    )
+    container.register("execution_engine", engine_factory, singleton=True)
+
+    # 3. 手动注册 core_engine 的内置运行时
+    runtime_registry.register("system.input", InputRuntime)
+    runtime_registry.register("system.set_world_var", SetWorldVariableRuntime)
+    runtime_registry.register("system.execute", ExecuteRuntime)
+    runtime_registry.register("system.call", CallRuntime)
+    runtime_registry.register("system.map", MapRuntime)
+
+    # 4. 手动注册依赖插件 (core_llm, core_codex) 的服务和钩子
+    register_llm_plugin(container, hook_manager)
+    register_codex_plugin(container, hook_manager)
+
+    # 5. 手动触发异步钩子来填充 RuntimeRegistry
+    external_runtimes = await hook_manager.filter("collect_runtimes", {})
+    for name, runtime_class in external_runtimes.items():
+        runtime_registry.register(name, runtime_class)
+
+    # 6. 从容器中解析出最终配置好的引擎实例
+    engine = container.resolve("execution_engine")
+    
+    yield engine
 
 
 # --- Shared Graph Collection Fixtures ---
-# 这些图定义被多个插件的测试所使用，放在这里以便共享。
-# (这里的内容与您提供的 conftest.py 中的图定义 fixture 完全相同，因此省略以保持简洁)
-# ... (linear_collection, parallel_collection, etc. fixtures go here) ...
-# 注意：你需要将旧 conftest.py 中的所有 GraphCollection fixture 复制到这里。
+# These are unchanged but included for completeness.
 
 @pytest.fixture
 def linear_collection() -> GraphCollection:
@@ -466,7 +542,7 @@ def map_collection_basic() -> GraphCollection:
         "prompt": "{{ f'Create a bio for {nodes.character_input.output} in the context of {nodes.global_story_setting.output}. Index: {nodes.character_index.output}' }}"
         }}]}]}
     }
-return GraphCollection.model_validate(base)
+    return GraphCollection.model_validate(base)
 
 
 @pytest.fixture

@@ -3,9 +3,15 @@
 import logging
 from typing import Dict, Any, Callable
 
+
+from backend.core.contracts import Container as ContainerInterface
+
+
 logger = logging.getLogger(__name__)
 
-class Container:
+
+class Container(ContainerInterface):
+
     """一个简单的、通用的依赖注入容器。"""
     def __init__(self):
         self._factories: Dict[str, Callable] = {}

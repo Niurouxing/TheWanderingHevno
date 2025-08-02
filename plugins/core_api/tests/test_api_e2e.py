@@ -1,8 +1,11 @@
 # plugins/core_api/tests/test_api_e2e.py
 
 import pytest
+import zipfile
+import io
+import json
 from fastapi.testclient import TestClient
-from uuid import uuid4
+from uuid import uuid4, UUID
 
 # 从平台核心契约导入数据模型
 from backend.core.contracts import GraphCollection
@@ -184,7 +187,7 @@ class TestSandboxImportExport:
             zf.writestr("manifest.json", json.dumps(manifest))
             zf.writestr("data/sandbox.json", json.dumps(sandbox))
             # 为了通过验证，至少需要一个快照
-            snapshot = {"id": str(UUID()), "sandbox_id": sandbox_id, "graph_collection": linear_collection.model_dump()}
+            snapshot = {"id": str(uuid4()), "sandbox_id": sandbox_id, "graph_collection": linear_collection.model_dump()}
             zf.writestr(f"data/snapshots/{snapshot['id']}.json", json.dumps(snapshot))
 
         # 3. 尝试导入

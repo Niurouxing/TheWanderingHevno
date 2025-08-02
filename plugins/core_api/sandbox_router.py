@@ -100,10 +100,14 @@ async def execute_sandbox_step(
 @router.get("/{sandbox_id}/history", response_model=List[StateSnapshot], summary="Get history")
 async def get_sandbox_history(
     sandbox_id: UUID,
+    sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
     snapshot_store: SnapshotStoreInterface = Depends(get_snapshot_store)
 ):
     """获取一个沙盒的所有历史快照，按时间顺序排列。"""
-    # 无需检查沙盒是否存在，如果不存在，find_by_sandbox 将返回空列表
+    if sandbox_id not in sandbox_store:
+        raise HTTPException(status_code=404, detail="Sandbox not found.")
+        
+    # 如果存在，则继续执行原逻辑
     return snapshot_store.find_by_sandbox(sandbox_id)
 
 @router.put("/{sandbox_id}/revert", status_code=200, summary="Revert to a snapshot")

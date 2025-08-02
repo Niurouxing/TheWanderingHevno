@@ -3,7 +3,8 @@ import asyncio
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Awaitable, TypeVar
+from typing import Any, Callable, Dict, List, Awaitable, TypeVar, Optional
+from backend.core.contracts import HookManager as HookManagerInterface
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ class HookImplementation:
     func: HookCallable = field(compare=False)
     plugin_name: str = field(compare=False, default="<unknown>")
 
-class HookManager:
+class HookManager(HookManagerInterface):
     """
     一个中心化的服务，负责发现、注册和调度所有钩子实现。
     它的设计是完全通用的，不与任何特定的钩子绑定。
@@ -84,4 +85,26 @@ class HookManager:
         
         return current_data
 
-    # decide 方法可以根据需要添加
+    async def decide(self, hook_name: str, **kwargs: Any) -> Optional[Any]:
+        """
+        触发一个“决策型”钩子。按优先级从高到低执行，并返回第一个非 None 的结果。
+        """
+        if hook_name not in self._hooks:
+            return None
+
+        # self._hooks is sorted low-to-high priority, so iterate in reverse.
+        for impl in reversed(self._hooks[hook_name]):
+            try:
+                result = await impl.func(**kwargs)
+                if result is not None:
+                    logger.debug(
+                        f"DECIDE hook '{hook_name}' was resolved by plugin "
+                        f"'{impl.plugin_name}' with priority {impl.priority}."
+                    )
+                    return result
+            except Exception as e:
+                logger.error(
+                    f"Error in DECIDE hook '{hook_name}' from plugin '{impl.plugin_name}'. Skipping. Error: {e}",
+                    exc_info=e
+                )
+        return None

@@ -46,7 +46,7 @@ class SnapshotStore:
         )
 
     def clear(self):
-        self._store = {}
+        self._store.clear()
 
 
 # --- Section 2: 核心上下文与快照的工厂/助手函数 ---

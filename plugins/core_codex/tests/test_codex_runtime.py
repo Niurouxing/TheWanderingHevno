@@ -4,7 +4,7 @@ import pytest
 from uuid import uuid4
 
 from backend.core.contracts import StateSnapshot, GraphCollection
-from plugins.core_engine.interfaces import ExecutionEngineInterface
+from backend.core.contracts import ExecutionEngineInterface
 
 @pytest.mark.asyncio
 class TestCodexSystem:

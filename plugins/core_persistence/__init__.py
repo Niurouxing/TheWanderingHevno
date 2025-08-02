@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 def _create_persistence_service() -> PersistenceService:
     """服务工厂：创建 PersistenceService 实例。"""
-    assets_dir = os.getenv("HEVNO_ASSETS_DIR", "hevno_project/assets")
+    assets_dir = os.getenv("HEVNO_ASSETS_DIR", "assets")
     return PersistenceService(assets_base_dir=assets_dir)
 
 async def provide_router(routers: list) -> list:
