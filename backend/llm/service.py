@@ -18,8 +18,9 @@ from backend.llm.models import (
     LLMResponseStatus,
     LLMRequestFailedError,
 )
-from backend.llm.registry import provider_registry
+from backend.llm.registry import provider_registry, ProviderRegistry
 from backend.core.services import service_registry, ServiceInterface
+
 
 
 @service_registry.register("llm")

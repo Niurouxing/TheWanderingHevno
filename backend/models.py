@@ -26,10 +26,12 @@ class GenericNode(BaseModel):
         default=None,
         description="一个可选的列表，用于明确声明此节点在执行前必须等待的其他节点的ID。用于处理无法通过宏自动推断的隐式依赖。"
     )
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class GraphDefinition(BaseModel):
     """图定义，包含一个节点列表。"""
     nodes: List[GenericNode]
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class GraphCollection(RootModel[Dict[str, GraphDefinition]]):
     """

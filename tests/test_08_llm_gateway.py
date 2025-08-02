@@ -61,7 +61,6 @@ class TestKeyPoolManager:
     async def test_key_banning_reduces_concurrency(self, key_pool_manager: KeyPoolManager):
         pool = key_pool_manager.get_pool("gemini")
         initial_concurrency = pool._semaphore._value
-        # 【修复】使用 await 调用异步方法
         await key_pool_manager.mark_as_banned("gemini", "test_key_1")
         assert pool._semaphore._value == initial_concurrency - 1
         banned_key_info = next(k for k in pool._keys if k.key_string == "test_key_1")

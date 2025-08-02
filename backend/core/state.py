@@ -1,6 +1,7 @@
 # backend/core/state.py
 
 from __future__ import annotations
+from fastapi import Request
 import asyncio
 import json
 from datetime import datetime, timezone
@@ -13,7 +14,7 @@ from pydantic import BaseModel, Field, ConfigDict, ValidationError
 from backend.models import GraphCollection
 from backend.core.utils import DotAccessibleDict
 
-# --- 1. 来自原 state_models.py 的内容 (持久化状态模型) ---
+# --- 1. 持久化状态模型 (原 state_models.py) ---
 # 这些模型定义了存储在数据库或内存中的长期状态
 
 class StateSnapshot(BaseModel):
@@ -66,10 +67,12 @@ class SnapshotStore:
         self._store = {}
 
 
-# --- 2. 来自原 types.py 的内容 (运行时上下文模型) ---
+# --- 2. 运行时上下文模型 (原 types.py) ---
 # 这些模型定义了在单次图执行期间，存在于内存中的临时状态和上下文
 
-ServiceRegistry = Dict[str, Any]
+# 【已删除】移除了 ServiceRegistry = Dict[str, Any] 类型别名。
+# 它与 backend/core/services.py 中的 ServiceRegistry 类名冲突。
+# 现在统一使用 ServiceRegistry 类，并在需要的地方使用 Dict[str, Any] 进行类型提示。
 
 class SharedContext(BaseModel):
     """
@@ -98,7 +101,8 @@ class ExecutionContext(BaseModel):
     def create_for_main_run(
         cls, 
         snapshot: StateSnapshot, 
-        services: ServiceRegistry, 
+        # 【已修改】将类型提示从冲突的 ServiceRegistry 别名改为明确的字典类型
+        services: Dict[str, Any], 
         run_vars: Dict[str, Any] = None
     ) -> 'ExecutionContext':
         """为顶层图执行创建初始上下文。"""
@@ -156,6 +160,14 @@ class ExecutionContext(BaseModel):
             run_output=final_node_states,
             triggering_input=triggering_input
         )
+
+def get_sandbox_store(request: Request) -> Dict[UUID, Sandbox]:
+    """依赖注入函数，用于获取沙盒存储。"""
+    return request.app.state.sandbox_store
+
+def get_snapshot_store(request: Request) -> SnapshotStore:
+    """依赖注入函数，用于获取快照存储。"""
+    return request.app.state.snapshot_store
 
 
 # --- 3. 统一的模型重建 ---

@@ -29,6 +29,7 @@ class Codex(BaseModel):
     description: Optional[str] = None
     config: CodexConfig = Field(default_factory=CodexConfig)
     entries: List[CodexEntry]
+    metadata: Dict[str, Any] = Field(default_factory=dict) 
 
     model_config = ConfigDict(extra='forbid')
 

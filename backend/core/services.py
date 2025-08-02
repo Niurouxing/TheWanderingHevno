@@ -1,5 +1,6 @@
-# backend/core/services.py (新文件)
+# backend/core/services.py
 from typing import Dict, Any, Type, Callable
+
 
 class ServiceInterface:
     """一个可选的基类或标记接口，用于所有服务。"""
@@ -25,6 +26,7 @@ class ServiceRegistry:
     def get_class(self, name: str) -> Type[ServiceInterface] | None:
         """获取已注册的服务类。"""
         return self._service_classes.get(name)
+
 
 # 全局单例
 service_registry = ServiceRegistry()

@@ -14,8 +14,8 @@ class TestApiSandboxLifecycle:
         # 1. 创建沙盒
         response = test_client.post(
             "/api/sandboxes",
-            params={"name": "E2E Test"},
             json={
+                "name": "E2E Test",
                 "graph_collection": linear_collection.model_dump(),
                 "initial_state": {} 
             }
@@ -69,14 +69,25 @@ class TestApiErrorHandling:
     def test_create_sandbox_with_invalid_graph(self, test_client: TestClient, invalid_graph_no_main: dict):
         response = test_client.post(
             "/api/sandboxes",
-            params={"name": "Invalid Graph Test"},
-            json={"graph_collection": invalid_graph_no_main}
+            json={
+                "name": "Invalid Graph Test",
+                "graph_collection": invalid_graph_no_main
+            }
         )
         assert response.status_code == 422, "Should fail with Unprocessable Entity for invalid graph structure"
+        
         error_data = response.json()
-        assert "A 'main' graph must be defined" in error_data["detail"][0]["msg"]
-        # 验证 pydantic v2 对 RootModel 的错误路径
-        assert error_data["detail"][0]["loc"] == ["body", "graph_collection"]
+        print("Received error data:", error_data) # <--- 增加这行来调试，确认结构
+
+        error_detail = error_data["detail"][0]
+        
+        # 【最终修正】直接检查 `msg` 字段，这是处理 RootModel 验证错误的更可靠方法
+        assert "A 'main' graph must be defined" in error_detail["msg"]
+        
+        # 我们仍然可以检查错误类型和位置
+        assert error_detail["type"] == "value_error"
+        # 对于 RootModel，位置可能只指向模型本身，而不是 'root' 字段
+        assert error_detail["loc"] == ["body", "graph_collection"]
 
     def test_operations_on_nonexistent_sandbox(self, test_client: TestClient):
         nonexistent_id = uuid4()
@@ -105,8 +116,8 @@ class TestApiWithComplexGraphs:
         # 1. 创建沙盒
         response = test_client.post(
             "/api/sandboxes",
-            params={"name": "E2E Subgraph Test"},
             json={
+                "name": "E2E Subgraph Test",
                 "graph_collection": subgraph_call_collection.model_dump(),
                 "initial_state": {"global_setting": "Omega"}
             }

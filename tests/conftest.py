@@ -1,54 +1,63 @@
 # tests/conftest.py
-import json
 import pytest
 from fastapi.testclient import TestClient
-from fastapi import FastAPI, Request # 导入 Request
-from typing import Generator, Dict
-from dotenv import load_dotenv 
+from typing import Generator
 
 # --- Session-wide setup ---
 @pytest.fixture(scope="session", autouse=True)
-def load_test_env():
+def load_test_env_and_modules():
+    from dotenv import load_dotenv
+    from backend.core.loader import load_modules
+    
+    # 确保测试环境和模块在所有测试运行前被加载
     load_dotenv(dotenv_path=".env.test", override=True)
+    
+    PLUGGABLE_MODULES = [
+        "backend.runtimes",
+        "backend.llm.providers",
+        "backend.services"
+    ]
+    load_modules(PLUGGABLE_MODULES)
 
 # --- 导入核心组件 ---
-from backend.main import app, configure_app 
 from backend.models import GraphCollection
 from backend.core.engine import ExecutionEngine
-from backend.core.state import SnapshotStore
+from backend.container import container  # <-- 【核心修改】直接从容器导入
+from backend.app import create_app
 
 # --- Fixtures for Core Components ---
 
-@pytest.fixture(scope="session")
-def test_app() -> FastAPI:
-
-    # 直接对导入的全局 app 运行配置
-    configure_app(app)
-    # 返回这个唯一的、配置好的、带路由的 app
-    return app
-    
 @pytest.fixture
-def test_engine(test_app: FastAPI) -> ExecutionEngine:
-    """从配置好的 test_app 中获取引擎实例"""
-    return test_app.state.engine
+def test_engine() -> ExecutionEngine:
+    """
+    【重构后】直接从容器获取引擎实例。
+    这使得引擎的集成测试完全脱离了 FastAPI 应用。
+    """
+    return container.execution_engine
 
 @pytest.fixture
-def test_client(test_app: FastAPI) -> Generator[TestClient, None, None]:
+def test_client() -> Generator[TestClient, None, None]:
+    """
+    【重构后】这个 fixture 现在只为 API E2E 测试服务。
+    """
+    # 每次测试都创建一个新的 app 实例
+    app = create_app()
 
-    # 从 app.state 获取存储实例，而不是从全局导入
-    sandbox_store: Dict = test_app.state.sandbox_store
-    snapshot_store: SnapshotStore = test_app.state.snapshot_store
+    # 从容器中获取存储实例，用于清理
+    sandbox_store = container.sandbox_store
+    snapshot_store = container.snapshot_store
     
     # 在每次测试前清理
     sandbox_store.clear()
     snapshot_store.clear()
     
-    with TestClient(test_app) as client:
+    with TestClient(app) as client:
         yield client
     
     # 在每次测试后再次清理
     sandbox_store.clear()
     snapshot_store.clear()
+    
 # ---------------------------------------------------------------------------
 # Fixtures for Graph Collections (更新 llm.default 配置)
 # ---------------------------------------------------------------------------
@@ -62,7 +71,6 @@ def linear_collection() -> GraphCollection:
             {"id": "C", "run": [{"runtime": "llm.default", "config": {"model": "mock/model", "prompt": "{{ nodes.B.llm_output }}"}}]}
         ]}
     })
-
 @pytest.fixture
 def parallel_collection() -> GraphCollection:
     """一个扇出再扇入的图 (A, B) -> C。"""
@@ -88,7 +96,6 @@ def pipeline_collection() -> GraphCollection:
             "run": [
                 {"runtime": "system.set_world_var", "config": {"variable_name": "main_character", "value": "Sir Reginald"}},
                 {"runtime": "system.input", "config": {"value": "A secret message"}},
-                # 【修正】添加 model 字段
                 {"runtime": "llm.default", "config": {"model": "mock/model", "prompt": "{{ f'Tell a story about {world.main_character}. He just received this message: {pipe.output}' }}"}}
             ]
         }]}
@@ -477,7 +484,7 @@ def map_collection_basic() -> GraphCollection:
 def map_collection_with_collect(map_collection_basic: GraphCollection) -> GraphCollection:
     """
     一个测试 system.map 的 `collect` 功能的集合。
-    - 它只从每个子图执行中提取 `summary` 字段，最终输出一个扁平的字符串列表。
+    - 它只从每个子图执行中提取 `generate_bio` 节点的 `llm_output` 字段。
     """
     # 【修正】通过参数接收 fixture，而不是直接调用
     base_data = map_collection_basic.model_dump()
@@ -535,9 +542,8 @@ def map_collection_concurrent_write() -> GraphCollection:
 def map_collection_with_failure() -> GraphCollection:
     """
     一个 map 迭代中部分子图会失败的集合。
-    - list 中有一个 None，会导致子图中的宏求值失败。
+    - list 中有一个 str，会导致子图中的宏求值失败。
     - system.map 应该能正确返回所有结果，包括成功和失败的项。
-    【修正】子图通过 `using` 字段来接收数据，而不是直接引用 `source`。
     """
     return GraphCollection.model_validate({
         "main": {
@@ -569,13 +575,14 @@ def map_collection_with_failure() -> GraphCollection:
                     "run": [{
                         "runtime": "system.input",
                         # 【关键修正】从占位符节点获取数据
-                        # 当 character_data.output 是 "Bob" (str) 时，.name 会触发 AttributeError
+                        # 当 character_data 是 "Bob" (str) 时，.name 会触发 AttributeError
                         "config": {"value": "{{ nodes.character_data.output.name }}"}
                     }]
                 }
             ]
         }
     })
+
 
 
 # ---------------------------------------------------------------------------
