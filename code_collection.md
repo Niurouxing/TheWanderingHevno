@@ -1,8 +1,140 @@
 # Directory: .
 
+### conftest.py
+```
+# conftest.py
+import pytest
+import asyncio
+from typing import Generator, List
+from fastapi import FastAPI
+# 导入 ASGITransport 以包装我们的 app
+from httpx import AsyncClient, ASGITransport
+
+# 从平台核心导入
+from backend.app import create_app
+from backend.container import Container
+from backend.core.hooks import HookManager
+from backend.core.loader import PluginLoader
+
+# --- 核心 Fixtures ---
+
+@pytest.fixture(scope="session")
+def event_loop():
+    """为整个测试会话创建一个事件循环。"""
+    policy = asyncio.get_event_loop_policy()
+    loop = policy.new_event_loop()
+    yield loop
+    loop.close()
+
+@pytest.fixture
+def clean_container() -> Container:
+    """提供一个全新的、空的 DI 容器实例。"""
+    return Container()
+
+@pytest.fixture
+def hook_manager() -> HookManager:
+    """提供一个全新的、空的 HookManager 实例。"""
+    return HookManager()
+
+# --- 插件加载 Fixtures ---
+
+class TestPluginLoader(PluginLoader):
+    """一个特殊的插件加载器，可以按需加载指定的插件。"""
+    def __init__(self, container: Container, hook_manager: HookManager, enabled_plugins: List[str]):
+        super().__init__(container, hook_manager)
+        self.enabled_plugins = enabled_plugins
+
+    def _discover_plugins(self) -> List[dict]:
+        """重写发现逻辑，只“发现”被启用的插件。"""
+        all_plugins = super()._discover_plugins()
+        print(f"TestPluginLoader: Found {len(all_plugins)} total plugins, filtering for {self.enabled_plugins}")
+        enabled = [p for p in all_plugins if p['name'] in self.enabled_plugins]
+        print(f"TestPluginLoader: Enabled {len(enabled)} plugins.")
+        return enabled
+
+@pytest.fixture
+def loaded_plugins(
+    clean_container: Container,
+    hook_manager: HookManager
+) -> Generator[None, List[str], None]:
+    """
+    一个【生成器 fixture】，允许测试按需加载一组特定的插件。
+    """
+    _loader = None
+    
+    def _load(plugin_names: List[str]):
+        nonlocal _loader
+        _loader = TestPluginLoader(clean_container, hook_manager, enabled_plugins=plugin_names)
+        _loader.load_plugins()
+
+    yield _load
+    
+    print("Plugin loading fixture teardown.")
+
+
+# --- 应用与客户端 Fixtures ---
+
+@pytest.fixture
+async def test_app(
+    loaded_plugins: Generator[None, List[str], None]
+) -> Generator[FastAPI, List[str], None]:
+    """
+    一个更高阶的 fixture，它创建一个 FastAPI 应用实例，并加载指定的插件。
+    """
+    app_instance = None
+    
+    async def _create(plugin_names: List[str]):
+        nonlocal app_instance
+        
+        if "core-logging" not in plugin_names:
+            plugin_names.insert(0, "core-logging")
+
+        app_instance = create_app()
+
+        container = Container()
+        hook_manager = HookManager()
+
+        loader = TestPluginLoader(container, hook_manager, enabled_plugins=plugin_names)
+        loader.load_plugins()
+
+        app_instance.state.container = container
+        app_instance.state.hook_manager = hook_manager
+
+        routers_to_add = await hook_manager.filter("collect_api_routers", [])
+        for router in routers_to_add:
+            app_instance.include_router(router)
+        
+        return app_instance
+
+    yield _create
+
+@pytest.fixture
+async def async_client(test_app: Generator[FastAPI, List[str], None]) -> Generator[AsyncClient, List[str], None]:
+    """
+    一个终极测试客户端 fixture。
+    它接收一个插件列表，构建一个只包含这些插件的应用，并返回一个可以对其进行 HTTP 请求的客户端。
+    """
+    client_instance = None
+    
+    async def _create_client(plugin_names: List[str]):
+        nonlocal client_instance
+        app = await test_app(plugin_names)
+        
+        # --- 核心修复：使用 ASGITransport 来包装 app ---
+        transport = ASGITransport(app=app)
+        client_instance = AsyncClient(transport=transport, base_url="http://test")
+        
+        return client_instance
+
+    yield _create_client
+    
+    if client_instance:
+        await client_instance.aclose()
+```
+
 ### pyproject.toml
 ```
-# Hevno/pyproject.toml (修正版)
+# Hevno/pyproject.toml
 
 [build-system]
 requires = ["setuptools>=61.0"]
@@ -27,37 +159,36 @@ dependencies = [
     "fastapi",
     "pydantic",
     "pyyaml",
+    "pytest",
+    "pytest-asyncio",
+    "httpx",
 ]
 
 [project.optional-dependencies]
-# 开发环境依赖
-dev = [
-    "uvicorn[standard]",
+dev = [ "uvicorn[standard]" ]
+
+[project.entry-points."hevno.plugins"]
+core_logging = "plugins.core_logging"
+
+[tool.setuptools]
+namespace-packages = ["plugins"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backend*", "plugins*"]
+[tool.setuptools.package-data]
+"plugins.*" = ["*.json", "*.yaml"]
+
+
+# --- Pytest 配置 (已修正) ---
+[tool.pytest.ini_options]
+# 明确指定测试文件的搜索路径
+testpaths = [
+    "tests",
+    "plugins",
 ]
 
-# --- 新增：定义插件入口点 ---
-[project.entry-points."hevno.plugins"]
-# "入口点名称" = "模块路径:可调用对象"
-# 我们这里只需要模块，所以不需要指定对象
-core_logging = "plugins.core_logging"
-# 当你添加新插件 `core_auth` 时，只需在这里加一行：
-# core_auth = "plugins.core_auth"
-
-# --- setuptools 配置 ---
-[tool.setuptools]
-# 明确告诉 setuptools 将 plugins 视为一个命名空间包
-# 这对于未来的扩展性非常重要
-namespace-packages = ["plugins"]
-
-[tool.setuptools.packages.find]
-# 自动发现所有包
-where = ["."] # 在根目录下寻找
-include = ["backend*", "plugins*"] # 包含 backend 和所有以 plugins 开头的包
-
-[tool.setuptools.package-data]
-# 使用通配符包含所有插件的非py文件
-# 当你添加新插件时，无需再修改这里
-"plugins.*" = ["*.json", "*.yaml"]
+# 配置 pytest-asyncio
+asyncio_mode = "auto"
 ```
 
 ### MANIFEST.in
@@ -74,6 +205,11 @@ global-include *.json *.yaml
 ```
 
 ### plugins/__init__.py
+```
+
+```
+
+### tests/__init__.py
 ```
 
 ```
@@ -146,7 +282,7 @@ class Container:
 # backend/app.py
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 
 # 导入微核心组件
@@ -169,19 +305,28 @@ async def lifespan(app: FastAPI):
     loader = PluginLoader(container, hook_manager)
     loader.load_plugins()
     
-    # 日志系统已配置
+    # 日志系统此时应该已经由 core_logging 插件配置好了
     logger = logging.getLogger(__name__)
     logger.info("--- FastAPI Application Assembly ---")
 
-    # 将核心服务附加到 app.state
+    # 将核心服务附加到 app.state，以便 API 路由可以访问它们
     app.state.container = container
     app.state.hook_manager = hook_manager
     logger.info("Core services (Container, HookManager) attached to app.state.")
 
-    # 触发异步钩子
-    logger.info("Triggering 'add_api_routers' hook to collect API routes from plugins...")
-    await hook_manager.trigger("add_api_routers", app=app)
-    logger.info("API routes collected.")
+    # 阶段三：装配 (使用钩子系统)
+    logger.info("Triggering 'collect_api_routers' filter hook to collect API routers from plugins...")
+    # 我们启动一个空的列表，然后让 filter 钩子去填充它
+    routers_to_add: list[APIRouter] = await hook_manager.filter("collect_api_routers", [])
+    
+    if routers_to_add:
+        logger.info(f"Collected {len(routers_to_add)} router(s). Adding to application...")
+        for router in routers_to_add:
+            app.include_router(router)
+            logger.debug(f"Added router with prefix '{router.prefix}' and tags {router.tags}")
+    else:
+        logger.info("No API routers were collected from plugins.")
+
 
     logger.info("--- Hevno Engine Ready ---")
 
@@ -247,9 +392,12 @@ import asyncio
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Awaitable
+from typing import Any, Callable, Dict, List, Awaitable, TypeVar
 
 logger = logging.getLogger(__name__)
+
+# 定义可被过滤的数据类型变量
+T = TypeVar('T')
 
 # 定义钩子函数的通用签名
 HookCallable = Callable[..., Awaitable[Any]]
@@ -268,7 +416,6 @@ class HookManager:
     """
     def __init__(self):
         self._hooks: Dict[str, List[HookImplementation]] = defaultdict(list)
-        # 注意: 此时日志系统可能还未配置，所以这条日志可能不会按预期格式显示
         logger.info("HookManager initialized.")
 
     def add_implementation(
@@ -304,7 +451,29 @@ class HookManager:
                     exc_info=result
                 )
 
-    # filter 和 decide 方法可以根据需要添加
+    async def filter(self, hook_name: str, data: T, **kwargs: Any) -> T:
+        """
+        触发一个“过滤型”钩子，形成处理链。
+        非常适合用于收集数据。
+        """
+        if hook_name not in self._hooks:
+            return data
+
+        current_data = data
+        # 按优先级顺序执行
+        for impl in self._hooks[hook_name]:
+            try:
+                # 每个钩子实现都会接收上一个实现返回的数据
+                current_data = await impl.func(current_data, **kwargs)
+            except Exception as e:
+                logger.error(
+                    f"Error in FILTER hook '{hook_name}' from plugin '{impl.plugin_name}'. Skipping. Error: {e}",
+                    exc_info=e
+                )
+        
+        return current_data
+
+    # decide 方法可以根据需要添加
 ```
 
 ### backend/core/__init__.py
@@ -319,12 +488,13 @@ class HookManager:
 import json
 import logging
 import importlib
-import importlib.resources  # 关键导入！
+import importlib.resources
+import traceback
 from typing import List, Dict
 
-# 从 contracts 导入类型
 from backend.core.contracts import Container, HookManager, PluginRegisterFunc
 
+# 在模块级别获取 logger
 logger = logging.getLogger(__name__)
 
 class PluginLoader:
@@ -333,68 +503,61 @@ class PluginLoader:
         self._hook_manager = hook_manager
 
     def load_plugins(self):
-        """
-        执行插件加载的全过程：发现、排序、注册。
-        """
-        logger.info("--- Starting Plugin Loading (File-based Discovery) ---")
+        """执行插件加载的全过程：发现、排序、注册。"""
+        # 使用 print 是因为此时日志系统可能还未配置
+        print("\n--- Hevno 插件系统：开始加载 ---")
         
-        # 阶段一：发现与读取元数据
+        # 阶段一：发现
         all_plugins = self._discover_plugins()
         if not all_plugins:
-            logger.warning("No plugins discovered. Skipping loading.")
+            print("警告：未发现任何插件。")
+            print("--- Hevno 插件系统：加载完成 ---\n")
             return
 
         # 阶段二：排序
-        sorted_plugins = sorted(all_plugins, key=lambda p: p['manifest'].get('priority', 100))
+        sorted_plugins = sorted(all_plugins, key=lambda p: (p['manifest'].get('priority', 100), p['name']))
+        
+        # 打印加载顺序，这是一个有用的元信息
+        print("插件加载顺序已确定：")
+        for i, p_info in enumerate(sorted_plugins):
+            print(f"  {i+1}. {p_info['name']} (优先级: {p_info['manifest'].get('priority', 100)})")
 
         # 阶段三：注册
         self._register_plugins(sorted_plugins)
         
-        logger.info("--- Finished Plugin Loading ---")
+        # 使用配置好的 logger 记录最终信息
+        logger.info("所有插件均已加载并注册完毕。")
+        print("--- Hevno 插件系统：加载完成 ---\n")
+
 
     def _discover_plugins(self) -> List[Dict]:
-        """
-        扫描 'plugins' 包，读取所有子包中的 manifest.json 文件。
-        这种方法在开发环境和安装后都能正常工作。
-        """
+        """扫描 'plugins' 包，读取所有子包中的 manifest.json 文件。"""
         discovered = []
         try:
-            # 使用 importlib.resources.files() 获取到 'plugins' 包的路径
-            # 这会返回一个 Traversable 对象，无论是在文件系统还是在 zip 包里都能用
             plugins_package_path = importlib.resources.files('plugins')
             
             for plugin_path in plugins_package_path.iterdir():
-                if not plugin_path.is_dir():
+                if not plugin_path.is_dir() or plugin_path.name.startswith(('__', '.')):
                     continue
 
                 manifest_path = plugin_path / "manifest.json"
                 if not manifest_path.is_file():
-                    logger.warning(f"Plugin directory '{plugin_path.name}' is missing manifest.json, skipping.")
                     continue
                 
                 try:
-                    # 读取 manifest 文件内容
                     manifest_content = manifest_path.read_text(encoding='utf-8')
                     manifest = json.loads(manifest_content)
-                    
-                    # 构造插件的导入路径，例如 "plugins.core_logging"
                     import_path = f"plugins.{plugin_path.name}"
                     
-                    plugin_info = {
-                        "name": manifest.get('name', plugin_path.name),
-                        "manifest": manifest,
-                        "import_path": import_path
-                    }
-                    
-                    logger.debug(f"Discovered plugin '{plugin_info['name']}' with priority {manifest.get('priority', 100)}")
+                    plugin_info = { "name": manifest.get('name', plugin_path.name), "manifest": manifest, "import_path": import_path }
                     discovered.append(plugin_info)
-                except Exception as e:
-                    logger.error(f"Failed to read or parse manifest for '{plugin_path.name}': {e}")
+                except Exception:
+                    # 在发现阶段保持静默，只处理能成功解析的
+                    pass
         
-        except ModuleNotFoundError:
-            logger.warning("Could not find the 'plugins' package. Make sure it's installed and has an __init__.py.")
-        except Exception as e:
-            logger.error(f"An unexpected error occurred during plugin discovery: {e}", exc_info=True)
+        except (ModuleNotFoundError, FileNotFoundError):
+             # 同样保持静默，如果没有 plugins 目录就算了
+            pass
             
         return discovered
     
@@ -405,20 +568,23 @@ class PluginLoader:
             import_path = plugin_info['import_path']
             
             try:
-                logger.info(f"Loading plugin: '{plugin_name}' from module '{import_path}'...")
+                # --- 核心改动：这里不再打印日志 ---
+                # 日志记录的责任已移交插件本身
                 plugin_module = importlib.import_module(import_path)
-                
                 register_func: PluginRegisterFunc = getattr(plugin_module, "register_plugin")
-                
-                # 注意：manifest.json 中不再需要 entry_point 字段了，因为我们是根据目录结构自动推断的
                 register_func(self._container, self._hook_manager)
-                
-                logger.info(f"Successfully loaded and registered plugin: '{plugin_name}'")
 
-            except AttributeError:
-                logger.error(f"Plugin '{plugin_name}' module '{import_path}' has no 'register_plugin' function.")
             except Exception as e:
-                logger.critical(f"FATAL: Failed to load plugin '{plugin_name}': {e}", exc_info=True)
+                # 只有在发生致命错误时，加载器才需要“发声”
+                # 并且使用 print，因为它不依赖于可能出问题的日志系统
+                print("\n" + "="*80)
+                print(f"!!! 致命错误：加载插件 '{plugin_name}' ({import_path}) 失败 !!!")
+                print("="*80)
+                traceback.print_exc()
+                print("="*80)
+                # 遇到错误时，可以选择停止应用或继续加载其他插件
+                # 这里我们选择停止，因为插件依赖可能被破坏
+                raise RuntimeError(f"无法加载插件 {plugin_name}") from e
 ```
 
 ### backend/core/contracts.py
@@ -471,6 +637,8 @@ class AddApiRouterContext(BaseModel):
 ```
 version: 1
 
+disable_existing_loggers: false
+
 # 定义格式化器
 formatters:
   simple:
@@ -510,53 +678,37 @@ loggers:
 
 ### plugins/core_logging/__init__.py
 ```
-# plugins/core-logging/__init__.py
+# plugins/core_logging/__init__.py
 import os
 import yaml
 import logging
 import logging.config
 from pathlib import Path
 
-# 从平台核心导入所需的类型，以实现类型提示和解耦
 from backend.core.contracts import Container, HookManager
 
-# 获取当前插件的目录
-# 这使得配置文件路径的定位更加健壮
 PLUGIN_DIR = Path(__file__).parent
 
 def register_plugin(container: Container, hook_manager: HookManager):
-    """
-    这是 core-logging 插件的注册入口。
-    它在应用启动流程的极早期被调用。
-    """
-    print("[core-logging] register_plugin called.")
+    """这是 core-logging 插件的注册入口。"""
+    # 统一的入口消息
+    print("--> 正在注册 [core-logging] 插件...")
     
-    # 1. 加载日志配置
     config_path = PLUGIN_DIR / "logging_config.yaml"
     with open(config_path, 'r', encoding='utf-8') as f:
         logging_config = yaml.safe_load(f)
-
-    # 2. 检查环境变量覆盖
-    # 这允许我们在容器或生产环境中轻松修改日志级别，而无需更改文件
+    
     env_log_level = os.getenv("LOG_LEVEL")
     if env_log_level and env_log_level.upper() in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
-        print(f"[core-logging] Overriding root log level with env var LOG_LEVEL={env_log_level.upper()}")
-        logging_config['root']['level'] = env_log_level.upper()
+        log_level_override = env_log_level.upper()
+        logging_config['root']['level'] = log_level_override
 
-    # 3. 应用配置
-    # 这是最关键的一步：配置 Python 全局的 logging 系统
     logging.config.dictConfig(logging_config)
     
-    # 4. 获取一个 logger 实例并打印一条消息，以验证配置是否生效
-    # 从此刻起，任何模块调用 `logging.getLogger()` 都会获得一个已配置好的记录器
     logger = logging.getLogger(__name__)
-    logger.info("核心日志系统已成功配置。Hevno 平台的所有后续日志将遵循此配置。")
-    logger.debug("这是一个 DEBUG 级别的消息，只有当日志级别设置为 DEBUG 时才会显示。")
     
-    # 未来：在这里注册 SSE 流式传输服务和 API 端点
-    # from .streamer import LogStreamerService, create_log_stream_router
-    # container.register("log_streamer", LogStreamerService)
-    # hook_manager.add_implementation("add_api_routers", create_log_stream_router)
+    # 统一的成功消息
+    logger.info("插件 [core-logging] 注册成功。")
 ```
 
 ### plugins/core_logging/manifest.json
@@ -568,4 +720,321 @@ def register_plugin(container: Container, hook_manager: HookManager):
     "author": "Hevno Team",
     "priority": -100
 }
+```
+
+### plugins/core_persistence/service.py
+```
+# plugins/core_persistence/service.py
+
+import io
+import json
+import zipfile
+import logging
+from pathlib import Path
+from typing import Type, TypeVar, Tuple, Dict, Any, List
+from pydantic import BaseModel, ValidationError
+
+# --- 核心修复：从本插件的 models.py 中导入所需的模型 ---
+from .models import PackageManifest, AssetType, FILE_EXTENSIONS
+
+T = TypeVar('T', bound=BaseModel)
+logger = logging.getLogger(__name__)
+
+class PersistenceService:
+    """
+    处理所有文件系统和包导入/导出操作的核心服务。
+    """
+    def __init__(self, assets_base_dir: str):
+        self.assets_base_dir = Path(assets_base_dir)
+        self.assets_base_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"PersistenceService initialized. Assets directory: {self.assets_base_dir.resolve()}")
+
+    def _get_asset_path(self, asset_type: AssetType, asset_name: str) -> Path:
+        """根据资产类型和名称构造标准化的文件路径。"""
+        extension = FILE_EXTENSIONS[asset_type]
+        # 简单的安全措施，防止路径遍历
+        safe_name = Path(asset_name).name 
+        return self.assets_base_dir / asset_type.value / f"{safe_name}{extension}"
+
+    def save_asset(self, asset_model: T, asset_type: AssetType, asset_name: str) -> Path:
+        """将 Pydantic 模型保存为格式化的 JSON 文件。"""
+        file_path = self._get_asset_path(asset_type, asset_name)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        json_content = asset_model.model_dump_json(indent=2)
+        file_path.write_text(json_content, encoding='utf-8')
+        return file_path
+
+    def load_asset(self, asset_type: AssetType, asset_name: str, model_class: Type[T]) -> T:
+        """从文件加载并验证 Pydantic 模型。"""
+        file_path = self._get_asset_path(asset_type, asset_name)
+        if not file_path.exists():
+            raise FileNotFoundError(f"Asset '{asset_name}' of type '{asset_type.value}' not found.")
+        
+        json_content = file_path.read_text(encoding='utf-8')
+        try:
+            return model_class.model_validate_json(json_content)
+        except ValidationError as e:
+            raise ValueError(f"Failed to validate asset '{asset_name}': {e}") from e
+
+    def list_assets(self, asset_type: AssetType) -> List[str]:
+        """列出指定类型的所有资产名称。"""
+        asset_dir = self.assets_base_dir / asset_type.value
+        if not asset_dir.exists():
+            return []
+        
+        extension = FILE_EXTENSIONS[asset_type]
+        # 使用 .stem 获取不带扩展名的文件名
+        return sorted([p.stem.replace(extension.rsplit('.', 1)[0], '') for p in asset_dir.glob(f"*{extension}")])
+
+
+    def export_package(self, manifest: PackageManifest, data_files: Dict[str, BaseModel]) -> bytes:
+        """在内存中创建一个 .hevno.zip 包并返回其字节流。"""
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('manifest.json', manifest.model_dump_json(indent=2))
+            for filename, model_instance in data_files.items():
+                file_content = model_instance.model_dump_json(indent=2)
+                zf.writestr(f'data/{filename}', file_content)
+        
+        return zip_buffer.getvalue()
+
+    def import_package(self, zip_bytes: bytes) -> Tuple[PackageManifest, Dict[str, str]]:
+        """解压包，读取清单和所有数据文件（作为原始字符串）。"""
+        zip_buffer = io.BytesIO(zip_bytes)
+        data_files: Dict[str, str] = {}
+        
+        with zipfile.ZipFile(zip_buffer, 'r') as zf:
+            try:
+                manifest_content = zf.read('manifest.json').decode('utf-8')
+                manifest = PackageManifest.model_validate_json(manifest_content)
+            except KeyError:
+                raise ValueError("Package is missing 'manifest.json'.")
+            except (ValidationError, json.JSONDecodeError) as e:
+                raise ValueError(f"Invalid 'manifest.json': {e}") from e
+
+            for item in zf.infolist():
+                if item.filename.startswith('data/') and not item.is_dir():
+                    relative_path = item.filename.split('data/', 1)[1]
+                    data_files[relative_path] = zf.read(item).decode('utf-8')
+        
+        return manifest, data_files
+```
+
+### plugins/core_persistence/models.py
+```
+# plugins/core_persistence/models.py
+
+from enum import Enum
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field
+from datetime import datetime, timezone
+
+# --- 文件约定 ---
+class AssetType(str, Enum):
+    GRAPH = "graph"
+    CODEX = "codex"
+    SANDBOX = "sandbox"
+
+FILE_EXTENSIONS = {
+    AssetType.GRAPH: ".graph.hevno.json",
+    AssetType.CODEX: ".codex.hevno.json",
+}
+
+# --- 插件占位符模型 ---
+class PluginRequirement(BaseModel):
+    name: str = Field(..., description="Plugin identifier, e.g., 'hevno-dice-roller'")
+    source_url: str = Field(..., description="Plugin source, e.g., 'https://github.com/user/repo'")
+    version: str = Field(..., description="Compatible version or Git ref")
+
+# --- 包清单模型 ---
+class PackageType(str, Enum):
+    SANDBOX_ARCHIVE = "sandbox_archive"
+    GRAPH_COLLECTION = "graph_collection"
+    CODEX_COLLECTION = "codex_collection"
+
+class PackageManifest(BaseModel):
+    format_version: str = Field(default="1.0")
+    package_type: PackageType
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    entry_point: str
+    required_plugins: List[PluginRequirement] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+```
+
+### plugins/core_persistence/__init__.py
+```
+# plugins/core_persistence/__init__.py
+import os
+import logging
+
+from backend.core.contracts import Container, HookManager
+from .service import PersistenceService
+from .api import router as persistence_router
+
+logger = logging.getLogger(__name__)
+
+def _create_persistence_service() -> PersistenceService:
+    """服务工厂：创建 PersistenceService 实例。"""
+    assets_dir = os.getenv("HEVNO_ASSETS_DIR", "hevno_project/assets")
+    return PersistenceService(assets_base_dir=assets_dir)
+
+async def provide_router(routers: list) -> list:
+    """钩子实现：提供本插件的 API 路由。"""
+    routers.append(persistence_router)
+    return routers
+
+def register_plugin(container: Container, hook_manager: HookManager):
+    """这是 core_persistence 插件的注册入口。"""
+    # 统一的入口消息
+    logger.info("--> 正在注册 [core-persistence] 插件...")
+    
+    # 注册服务
+    container.register("persistence_service", _create_persistence_service)
+    logger.debug("服务 'persistence_service' 已注册。")
+    
+    # 注册钩子
+    hook_manager.add_implementation("collect_api_routers", provide_router, plugin_name="core_persistence")
+    logger.debug("钩子实现 'collect_api_routers' 已注册。")
+    
+    # 统一的成功消息
+    logger.info("插件 [core-persistence] 注册成功。")
+```
+
+### plugins/core_persistence/api.py
+```
+# plugins/core_persistence/api.py
+
+import logging
+from uuid import UUID
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
+from fastapi.responses import StreamingResponse
+import io
+
+from .service import PersistenceService
+from .models import PackageManifest, PackageType
+
+# 注意：为了解耦，我们不从其他插件导入模型，如 Sandbox 或 StateSnapshot
+# 在实际的 API 实现中，我们将处理原始的字典或 Pydantic BaseModel
+
+logger = logging.getLogger(__name__)
+
+# --- 依赖注入函数 ---
+# 这个函数定义了如何为请求获取 PersistenceService 实例
+def get_persistence_service(request: Request) -> PersistenceService:
+    # 从 app.state 获取容器，然后解析服务
+    return request.app.state.container.resolve("persistence_service")
+
+# --- API 路由 ---
+router = APIRouter(prefix="/api/persistence", tags=["Core-Persistence"])
+
+@router.get("/assets")
+async def list_all_assets(
+    # service: PersistenceService = Depends(get_persistence_service) # 示例
+):
+    # 这里的逻辑需要根据您希望如何列出资产来具体实现
+    # 例如：service.list_assets(...)
+    return {"message": "Asset listing endpoint for core_persistence."}
+
+
+# 导入/导出功能可以像旧的 api/persistence.py 一样实现
+# 这里只给出一个示例以展示路由的创建
+@router.post("/package/import")
+async def import_package(
+    file: UploadFile = File(...),
+    service: PersistenceService = Depends(get_persistence_service)
+):
+    logger.info(f"Received package for import: {file.filename}")
+    if not file.filename.endswith(".hevno.zip"):
+        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a .hevno.zip file.")
+    
+    zip_bytes = await file.read()
+    try:
+        manifest, _ = service.import_package(zip_bytes)
+        # 在这里，我们可以根据 manifest 的内容，触发其他钩子来处理导入的数据
+        # 例如: await hook_manager.trigger("sandbox_imported", manifest=manifest, data=data_files)
+        logger.info(f"Successfully parsed package '{manifest.package_type}' created at {manifest.created_at}")
+        return manifest
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+```
+
+### plugins/core_persistence/manifest.json
+```
+{
+    "name": "core-persistence",
+    "version": "1.0.0",
+    "description": "Provides file system persistence, asset management, and package import/export.",
+    "author": "Hevno Team",
+    "priority": 10
+}
+```
+
+### plugins/core_persistence/tests/conftest.py
+```
+
+```
+
+### plugins/core_persistence/tests/test_service.py
+```
+# plugins/core_persistence/tests/test_service.py
+import pytest
+from plugins.core_persistence.service import PersistenceService
+
+# 使用 pytest.mark.asyncio 来标记异步测试函数
+@pytest.mark.asyncio
+async def test_persistence_service_initialization(tmp_path):
+    """
+    测试 PersistenceService 能否在临时目录中正确初始化。
+    `tmp_path` 是 pytest 内置的一个 fixture，提供一个临时的目录路径。
+    """
+    assets_dir = tmp_path / "assets"
+    service = PersistenceService(assets_base_dir=str(assets_dir))
+    
+    assert assets_dir.exists()
+    assert service.assets_base_dir == assets_dir
+
+# 可以在这里添加更多关于 save_asset, load_asset, import/export 的单元测试
+```
+
+### plugins/core_persistence/tests/__init__.py
+```
+
+```
+
+### plugins/core_persistence/tests/test_api.py
+```
+# plugins/core_persistence/tests/test_api.py
+import pytest
+from httpx import AsyncClient
+
+@pytest.mark.asyncio
+async def test_persistence_api_exists(async_client: AsyncClient):
+    """
+    测试场景：当只加载 `core_persistence` 插件时，它的 API 端点应该存在。
+    """
+    # 1. 使用 fixture 创建一个只包含 `core_persistence` 的应用客户端
+    # `core-logging` 会被自动包含
+    client = await async_client(["core-persistence"])
+    
+    # 2. 向插件的 API 端点发送请求
+    response = await client.get("/api/persistence/assets")
+    
+    # 3. 断言结果
+    assert response.status_code == 200
+    assert response.json() == {"message": "Asset listing endpoint for core_persistence."}
+
+@pytest.mark.asyncio
+async def test_api_does_not_exist_without_plugin(async_client: AsyncClient):
+    """
+    测试场景：当不加载 `core_persistence` 插件时，它的 API 端点不应该存在。
+    """
+    # 1. 创建一个只包含 `core-logging` 的应用 (或者一个不存在的虚拟插件)
+    client = await async_client(["core-logging"]) 
+    
+    # 2. 向本应不存在的端点发送请求
+    response = await client.get("/api/persistence/assets")
+    
+    # 3. 断言它返回 404 Not Found
+    assert response.status_code == 404
 ```

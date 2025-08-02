@@ -1,4 +1,4 @@
-# Hevno/pyproject.toml (修正版)
+# Hevno/pyproject.toml
 
 [build-system]
 requires = ["setuptools>=61.0"]
@@ -23,34 +23,33 @@ dependencies = [
     "fastapi",
     "pydantic",
     "pyyaml",
+    "pytest",
+    "pytest-asyncio",
+    "httpx",
 ]
 
 [project.optional-dependencies]
-# 开发环境依赖
-dev = [
-    "uvicorn[standard]",
+dev = [ "uvicorn[standard]" ]
+
+[project.entry-points."hevno.plugins"]
+core_logging = "plugins.core_logging"
+
+[tool.setuptools]
+namespace-packages = ["plugins"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backend*", "plugins*"]
+[tool.setuptools.package-data]
+"plugins.*" = ["*.json", "*.yaml"]
+
+
+# --- Pytest 配置 (已修正) ---
+[tool.pytest.ini_options]
+# 明确指定测试文件的搜索路径
+testpaths = [
+    "tests",
+    "plugins",
 ]
 
-# --- 新增：定义插件入口点 ---
-[project.entry-points."hevno.plugins"]
-# "入口点名称" = "模块路径:可调用对象"
-# 我们这里只需要模块，所以不需要指定对象
-core_logging = "plugins.core_logging"
-# 当你添加新插件 `core_auth` 时，只需在这里加一行：
-# core_auth = "plugins.core_auth"
-
-# --- setuptools 配置 ---
-[tool.setuptools]
-# 明确告诉 setuptools 将 plugins 视为一个命名空间包
-# 这对于未来的扩展性非常重要
-namespace-packages = ["plugins"]
-
-[tool.setuptools.packages.find]
-# 自动发现所有包
-where = ["."] # 在根目录下寻找
-include = ["backend*", "plugins*"] # 包含 backend 和所有以 plugins 开头的包
-
-[tool.setuptools.package-data]
-# 使用通配符包含所有插件的非py文件
-# 当你添加新插件时，无需再修改这里
-"plugins.*" = ["*.json", "*.yaml"]
+# 配置 pytest-asyncio
+asyncio_mode = "auto"
