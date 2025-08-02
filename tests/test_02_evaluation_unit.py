@@ -8,7 +8,7 @@ from backend.core.evaluation import (
 )
 from backend.core.state import ExecutionContext
 from backend.core.state import StateSnapshot
-from backend.models import GraphCollection
+from backend.core.models import GraphCollection
 from backend.runtimes.base_runtimes import SetWorldVariableRuntime
 from backend.runtimes.control_runtimes import ExecuteRuntime
 from backend.llm.service import MockLLMService

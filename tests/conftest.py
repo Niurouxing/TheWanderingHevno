@@ -20,7 +20,7 @@ def load_test_env_and_modules():
     load_modules(PLUGGABLE_MODULES)
 
 # --- 导入核心组件 ---
-from backend.models import GraphCollection
+from backend.core.models import GraphCollection
 from backend.core.engine import ExecutionEngine
 from backend.container import container  # <-- 【核心修改】直接从容器导入
 from backend.app import create_app

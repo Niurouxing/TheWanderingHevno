@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from backend.models import GraphCollection
+from backend.core.models import GraphCollection
 from backend.core.engine import ExecutionEngine, get_engine
 from backend.core.state import Sandbox, StateSnapshot, SnapshotStore, get_sandbox_store, get_snapshot_store
 

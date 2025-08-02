@@ -9,7 +9,7 @@ from fastapi import Request
 from pydantic import BaseModel, ValidationError
 
 from backend.persistence.models import PackageManifest, AssetType, FILE_EXTENSIONS
-from backend.models import GraphCollection
+from backend.core.models import GraphCollection
 from backend.runtimes.codex.models import CodexCollection
 from backend.core.state import Sandbox, StateSnapshot
 

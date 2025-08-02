@@ -6,7 +6,7 @@ from typing import Dict, Any, Set, List, Optional
 from collections import defaultdict
 from fastapi import Request
 
-from backend.models import GraphCollection, GraphDefinition, GenericNode
+from backend.core.models import GraphCollection, GraphDefinition, GenericNode
 from backend.core.dependency_parser import build_dependency_graph
 from backend.core.registry import RuntimeRegistry
 from backend.core.evaluation import build_evaluation_context, evaluate_data

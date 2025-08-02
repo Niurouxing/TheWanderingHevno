@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, ConfigDict, ValidationError
 
 
-from backend.models import GraphCollection
+from backend.core.models import GraphCollection
 from backend.core.utils import DotAccessibleDict
 
 # --- 1. 持久化状态模型 (原 state_models.py) ---

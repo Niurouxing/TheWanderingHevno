@@ -7,7 +7,7 @@ import zipfile
 from uuid import UUID
 
 from fastapi.testclient import TestClient
-from backend.models import GraphCollection
+from backend.core.models import GraphCollection
 from backend.core.state import Sandbox, SnapshotStore
 
 # pytest 会自动发现并使用 conftest.py 中的 fixtures，无需显式导入
