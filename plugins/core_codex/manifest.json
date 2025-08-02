@@ -1,0 +1,8 @@
+{
+    "name": "core-codex",
+    "version": "1.0.0",
+    "description": "Provides the Codex knowledge base system and the 'system.invoke' runtime.",
+    "author": "Hevno Team",
+    "priority": 30,
+    "dependencies": ["core-engine"]
+}

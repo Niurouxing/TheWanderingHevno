@@ -1,0 +1,29 @@
+# plugins/core_codex/__init__.py
+import logging
+from backend.core.contracts import Container, HookManager
+
+from .invoke_runtime import InvokeRuntime
+
+logger = logging.getLogger(__name__)
+
+# --- 钩子实现 ---
+async def register_codex_runtime(runtimes: dict) -> dict:
+    """钩子实现：向引擎注册本插件提供的 'system.invoke' 运行时。"""
+    runtimes["system.invoke"] = InvokeRuntime
+    logger.debug("Runtime 'system.invoke' provided to runtime registry.")
+    return runtimes
+
+# --- 主注册函数 ---
+def register_plugin(container: Container, hook_manager: HookManager):
+    logger.info("--> 正在注册 [core-codex] 插件...")
+
+    # 本插件只提供运行时，不注册服务。
+    # 它通过钩子与 core-engine 通信。
+    hook_manager.add_implementation(
+        "collect_runtimes", 
+        register_codex_runtime, 
+        plugin_name="core-codex"
+    )
+    logger.debug("钩子实现 'collect_runtimes' 已注册。")
+
+    logger.info("插件 [core-codex] 注册成功。")
