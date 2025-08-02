@@ -1,6 +1,6 @@
 # plugins/core_llm/reporters.py
 from typing import Any
-from plugins.core_api.auditor import Reportable 
+from backend.core.contracts import Reportable 
 from .registry import provider_registry
 
 

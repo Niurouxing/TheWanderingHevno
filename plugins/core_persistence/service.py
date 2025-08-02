@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Type, TypeVar, Tuple, Dict, Any, List
 from pydantic import BaseModel, ValidationError
 
-# --- 核心修复：从本插件的 models.py 中导入所需的模型 ---
 from .models import PackageManifest, AssetType, FILE_EXTENSIONS
 
 T = TypeVar('T', bound=BaseModel)
@@ -58,9 +57,12 @@ class PersistenceService:
             return []
         
         extension = FILE_EXTENSIONS[asset_type]
-        # 使用 .stem 获取不带扩展名的文件名
-        return sorted([p.stem.replace(extension.rsplit('.', 1)[0], '') for p in asset_dir.glob(f"*{extension}")])
-
+        
+        asset_names = [
+            p.name.removesuffix(extension) 
+            for p in asset_dir.glob(f"*{extension}")
+        ]
+        return sorted(asset_names)
 
     def export_package(self, manifest: PackageManifest, data_files: Dict[str, BaseModel]) -> bytes:
         """在内存中创建一个 .hevno.zip 包并返回其字节流。"""

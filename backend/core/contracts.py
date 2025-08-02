@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set, TypeVar
 from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, RootModel, ConfigDict, field_validator
+from abc import ABC, abstractmethod
 
 # --- 1. 核心服务接口与类型别名 (用于类型提示) ---
 
@@ -122,3 +123,32 @@ class BeforeSnapshotCreateContext(BaseModel):
 class ResolveNodeDependenciesContext(BaseModel):
     node: GenericNode
     auto_inferred_deps: Set[str]
+
+
+# --- 5. 核心服务接口契约 ---
+# 这些是插件应该依赖的抽象接口，而不是具体实现类。
+
+class ExecutionEngineInterface:
+    async def step(self, initial_snapshot: 'StateSnapshot', triggering_input: Dict[str, Any] = None) -> 'StateSnapshot':
+        raise NotImplementedError
+
+class SnapshotStoreInterface:
+    def save(self, snapshot: 'StateSnapshot') -> None: raise NotImplementedError
+    def get(self, snapshot_id: UUID) -> Optional['StateSnapshot']: raise NotImplementedError
+    def find_by_sandbox(self, sandbox_id: UUID) -> List['StateSnapshot']: raise NotImplementedError
+
+class AuditorInterface:
+    async def generate_full_report(self) -> Dict[str, Any]: raise NotImplementedError
+    def set_reporters(self, reporters: List['Reportable']) -> None: raise NotImplementedError
+
+class Reportable(ABC): # 如果还没定义成抽象类，现在定义
+    @property
+    @abstractmethod
+    def report_key(self) -> str: pass
+    
+    @property
+    def is_static(self) -> bool: return True
+    
+    @abstractmethod
+    async def generate_report(self) -> Any: pass
+

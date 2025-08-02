@@ -12,9 +12,9 @@ from backend.core.contracts import Sandbox, StateSnapshot, GraphCollection
 # 从本插件的依赖注入文件中导入 "getters"
 from .dependencies import get_sandbox_store, get_snapshot_store, get_engine
 
-# 从 core_engine 插件导入其服务/类
-from plugins.core_engine.engine import ExecutionEngine
-from plugins.core_engine.state import SnapshotStore
+# 只从 contracts 导入接口
+from backend.core.contracts import ExecutionEngineInterface, SnapshotStoreInterface
+
 
 router = APIRouter(prefix="/api/sandboxes", tags=["Sandboxes"])
 
@@ -29,7 +29,7 @@ class CreateSandboxRequest(BaseModel):
 async def create_sandbox(
     request_body: CreateSandboxRequest, 
     sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
-    snapshot_store: SnapshotStore = Depends(get_snapshot_store)
+    snapshot_store: SnapshotStoreInterface = Depends(get_snapshot_store)
 ):
     """创建一个新的沙盒并生成其初始（创世）快照。"""
     sandbox = Sandbox(name=request_body.name)
@@ -54,8 +54,8 @@ async def execute_sandbox_step(
     sandbox_id: UUID, 
     user_input: Dict[str, Any] = Body(...),
     sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
-    snapshot_store: SnapshotStore = Depends(get_snapshot_store),
-    engine: ExecutionEngine = Depends(get_engine)
+    snapshot_store: SnapshotStoreInterface = Depends(get_snapshot_store),
+    engine: ExecutionEngineInterface = Depends(get_engine)
 ):
     """在沙盒的最新状态上执行一步计算。"""
     sandbox = sandbox_store.get(sandbox_id)
@@ -79,10 +79,9 @@ async def execute_sandbox_step(
 @router.get("/{sandbox_id}/history", response_model=List[StateSnapshot])
 async def get_sandbox_history(
     sandbox_id: UUID,
-    snapshot_store: SnapshotStore = Depends(get_snapshot_store)
+    snapshot_store: SnapshotStoreInterface = Depends(get_snapshot_store)
 ):
     """获取一个沙盒的所有历史快照，按时间顺序排列。"""
-    # 无需检查沙盒是否存在，如果不存在，find_by_sandbox 将返回空列表
     snapshots = snapshot_store.find_by_sandbox(sandbox_id)
     return snapshots
 
@@ -91,7 +90,7 @@ async def revert_sandbox_to_snapshot(
     sandbox_id: UUID, 
     snapshot_id: UUID,
     sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
-    snapshot_store: SnapshotStore = Depends(get_snapshot_store)
+    snapshot_store: SnapshotStoreInterface = Depends(get_snapshot_store)
 ):
     """将沙盒的状态回滚到指定的历史快照。"""
     sandbox = sandbox_store.get(sandbox_id)

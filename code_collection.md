@@ -81,29 +81,34 @@ from backend.core.loader import PluginLoader
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- 应用启动 ---
+    # --- 启动阶段 ---
     container = Container()
     hook_manager = HookManager()
 
-    # 将核心服务实例注册到容器中，以便插件可以解析它们
+    # 1. 注册平台核心服务
     container.register("container", lambda: container)
     container.register("hook_manager", lambda: hook_manager)
 
-    # 阶段一 & 二：发现、排序、注册
-    # 此时日志系统应该由 core-logging 插件配置完毕
+    # 2. 加载插件（插件此时仅注册工厂和同步钩子）
     loader = PluginLoader(container, hook_manager)
     loader.load_plugins()
     
-    logger = logging.getLogger(__name__) # 此时日志已由插件配置
+    logger = logging.getLogger(__name__)
     logger.info("--- FastAPI Application Assembly ---")
 
-    # 将核心服务附加到 app.state，以便 API 依赖注入函数可以访问
+    # 3. 将核心服务附加到 app.state，以便依赖注入函数可以访问
     app.state.container = container
-    app.state.hook_manager = hook_manager
-    logger.info("Core services (Container, HookManager) attached to app.state.")
+    # hook_manager 不再需要直接附加，因为可以通过容器获取
 
-    # 阶段三：装配 API 路由 (通过钩子)
-    logger.info("Triggering 'collect_api_routers' filter hook...")
+    # 4. 【关键】触发异步服务初始化钩子
+    #    这会填充 Auditor, RuntimeRegistry 等
+    logger.info("Triggering 'services_post_register' for async initializations...")
+    await hook_manager.trigger('services_post_register', container=container)
+    logger.info("Async service initialization complete.")
+
+    # 5. 【关键】平台核心负责收集并装配 API 路由
+    logger.info("Collecting API routers from all plugins...")
+    # 通过钩子收集所有由插件提供的 APIRouter 实例
     routers_to_add: list[APIRouter] = await hook_manager.filter("collect_api_routers", [])
     
     if routers_to_add:
@@ -114,12 +119,12 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("No API routers were collected from plugins.")
     
-    # 可以在此触发其他装配钩子，如 'initialize_services'
+    # 6. 触发最终启动完成钩子
     await hook_manager.trigger('app_startup_complete', app=app, container=container)
     
     logger.info("--- Hevno Engine Ready ---")
     yield
-    # --- 应用关闭 ---
+    # --- 关闭阶段 ---
     logger.info("--- Hevno Engine Shutting Down ---")
     await hook_manager.trigger('app_shutdown', app=app)
 
@@ -132,10 +137,9 @@ def create_app() -> FastAPI:
         lifespan=lifespan
     )
 
-    # CORS 中间件可以保留
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"], # 生产中应使用具体域名
+        allow_origins=["*"], 
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -502,6 +506,34 @@ class BeforeSnapshotCreateContext(BaseModel):
 class ResolveNodeDependenciesContext(BaseModel):
     node: GenericNode
     auto_inferred_deps: Set[str]
+
+
+# --- 5. 核心服务接口契约 ---
+# 这些是插件应该依赖的抽象接口，而不是具体实现类。
+
+class ExecutionEngineInterface:
+    async def step(self, initial_snapshot: 'StateSnapshot', triggering_input: Dict[str, Any] = None) -> 'StateSnapshot':
+        raise NotImplementedError
+
+class SnapshotStoreInterface:
+    def save(self, snapshot: 'StateSnapshot') -> None: raise NotImplementedError
+    def get(self, snapshot_id: UUID) -> Optional['StateSnapshot']: raise NotImplementedError
+    def find_by_sandbox(self, sandbox_id: UUID) -> List['StateSnapshot']: raise NotImplementedError
+
+class AuditorInterface:
+    async def generate_full_report(self) -> Dict[str, Any]: raise NotImplementedError
+    def set_reporters(self, reporters: List['Reportable']) -> None: raise NotImplementedError
+
+class Reportable(ABC): # 如果还没定义成抽象类，现在定义
+    @property
+    @abstractmethod
+    def report_key(self) -> str: pass
+    
+    @property
+    def is_static(self) -> bool: return True
+    
+    @abstractmethod
+    async def generate_report(self) -> Any: pass
 ```
 
 # Directory: plugins
@@ -527,7 +559,7 @@ from tenacity import (
     retry_if_exception_type,
 )
 
-# --- 核心修改: 导入路径本地化 ---
+# --- 从本插件内部导入组件 ---
 from .manager import KeyPoolManager, KeyInfo
 from .models import (
     LLMResponse,
@@ -540,7 +572,23 @@ from .registry import ProviderRegistry
 
 logger = logging.getLogger(__name__)
 
+def is_retryable_llm_error(exception: Exception) -> bool:
+    """
+    一个 tenacity 重试条件函数。
+    仅当异常是 LLMRequestFailedError 并且其内部的 last_error 
+    被明确标记为 is_retryable=True 时，才返回 True。
+    """
+    return (
+        isinstance(exception, LLMRequestFailedError) and
+        exception.last_error is not None and
+        exception.last_error.is_retryable
+    )
+
 class LLMService:
+    """
+    LLM 网关的核心服务，负责协调所有组件并执行请求。
+    实现了带有密钥轮换、状态管理和指数退避的健壮重试逻辑。
+    """
     def __init__(
         self,
         key_manager: KeyPoolManager,
@@ -550,6 +598,7 @@ class LLMService:
         self.key_manager = key_manager
         self.provider_registry = provider_registry
         self.max_retries = max_retries
+        self.last_known_error: Optional[LLMError] = None
 
     async def request(
         self,
@@ -557,6 +606,9 @@ class LLMService:
         prompt: str,
         **kwargs
     ) -> LLMResponse:
+        """
+        向指定的 LLM 发起请求，并处理重试逻辑。
+        """
         self.last_known_error = None
         try:
             provider_name, actual_model_name = self._parse_model_name(model_name)
@@ -571,13 +623,22 @@ class LLMService:
             )
 
         def log_before_sleep(retry_state):
-            # Log retry attempts
-            logger.debug(f"Retrying LLM request for {model_name}, attempt {retry_state.attempt_number}...")
+            """在 tenacity 每次重试前调用的日志记录函数。"""
+            exc = retry_state.outcome.exception()
+            if exc and isinstance(exc, LLMRequestFailedError) and exc.last_error:
+                error_type = exc.last_error.error_type.value
+            else:
+                error_type = "unknown"
+            
+            logger.warning(
+                f"LLM request for {model_name} failed with a retryable error ({error_type}). "
+                f"Waiting {retry_state.next_action.sleep:.2f}s before attempt {retry_state.attempt_number + 1}."
+            )
         
         retry_decorator = retry(
             stop=stop_after_attempt(self.max_retries),
             wait=wait_exponential(multiplier=1, min=2, max=10),
-            retry=retry_if_exception_type(LLMRequestFailedError), # Only retry on our custom retryable errors
+            retry=is_retryable_llm_error,
             reraise=True,
             before_sleep=log_before_sleep
         )
@@ -587,8 +648,11 @@ class LLMService:
             return await wrapped_attempt(provider_name, actual_model_name, prompt, **kwargs)
         
         except LLMRequestFailedError as e:
-            final_message = f"LLM request for model '{model_name}' failed after {self.max_retries} attempt(s)."
-            logger.error(final_message, exc_info=e)
+            final_message = (
+                f"LLM request for model '{model_name}' failed permanently after {self.max_retries} attempt(s)."
+            )
+            logger.error(final_message, exc_info=True)
+            # 重新抛出，以便上层（如运行时）可以捕获并格式化最终错误
             raise LLMRequestFailedError(final_message, last_error=self.last_known_error) from e
         
         except Exception as e:
@@ -602,9 +666,15 @@ class LLMService:
         prompt: str,
         **kwargs
     ) -> LLMResponse:
+        """
+        执行单次 LLM 请求尝试。
+        - 如果成功，返回 LLMResponse。
+        - 如果遇到可重试的错误，抛出 LLMRequestFailedError 以便 tenacity 捕获。
+        - 如果遇到不可重试的错误，返回带有 error_details 的 LLMResponse。
+        """
         provider = self.provider_registry.get(provider_name)
         if not provider:
-            raise LLMRequestFailedError(f"Provider '{provider_name}' not found.")
+            raise ValueError(f"Provider '{provider_name}' not found.")
 
         try:
             async with self.key_manager.acquire_key(provider_name) as key_info:
@@ -612,50 +682,67 @@ class LLMService:
                     response = await provider.generate(
                         prompt=prompt, model_name=model_name, api_key=key_info.key_string, **kwargs
                     )
-                    if response.status in [LLMResponseStatus.SUCCESS, LLMResponseStatus.FILTERED]:
-                        return response
                     
-                    # If provider returns an error response, treat it as a failure to be handled
-                    if response.error_details:
-                         self.last_known_error = response.error_details
-                         await self._handle_error(provider_name, key_info, response.error_details)
-                         if response.error_details.is_retryable:
+                    # Case 1: Provider 返回了一个带有逻辑错误的响应 (e.g., 内容过滤)
+                    if response.status in [LLMResponseStatus.ERROR, LLMResponseStatus.FILTERED] and response.error_details:
+                        self.last_known_error = response.error_details
+                        await self._handle_error(provider_name, key_info, response.error_details)
+                        
+                        # 如果此逻辑错误是可重试的，则抛出异常以触发 tenacity
+                        if response.error_details.is_retryable:
                             raise LLMRequestFailedError("Provider returned a retryable error response.", last_error=response.error_details)
-                    
-                    return response # Not retryable but not success (e.g. filtered)
+
+                    # Case 2: 成功，或遇到不可重试的逻辑错误。无论哪种，本次尝试都结束了。
+                    return response
                 
                 except Exception as e:
-                    # Translate provider-specific SDK exceptions into our standard LLMError
+                    # Case 3: Provider 抛出了一个 SDK 或网络层面的异常
                     llm_error = provider.translate_error(e)
                     self.last_known_error = llm_error
                     await self._handle_error(provider_name, key_info, llm_error)
-                    error_message = f"Request attempt failed: {llm_error.message}"
-                    # Raise our custom exception to trigger tenacity retry if applicable
+                    
+                    error_message = f"Request attempt failed due to an exception: {llm_error.message}"
+                    # 抛出我们的自定义异常，tenacity 将根据 is_retryable 决定是否重试
                     raise LLMRequestFailedError(error_message, last_error=llm_error) from e
         
         except (RuntimeError, ValueError) as e:
-            raise LLMRequestFailedError(str(e))
+            # 捕获我们自己的内部错误 (e.g., 'No key pool registered for provider')
+            # 这些错误通常是配置问题，不可重试。
+            raise LLMRequestFailedError(str(e), last_error=LLMError(
+                error_type=LLMErrorType.INVALID_REQUEST_ERROR,
+                message=str(e),
+                is_retryable=False
+            ))
 
     async def _handle_error(self, provider_name: str, key_info: KeyInfo, error: LLMError):
+        """根据错误类型更新密钥池中密钥的状态。"""
         if error.error_type == LLMErrorType.AUTHENTICATION_ERROR:
+            logger.warning(f"Authentication error with key for '{provider_name}'. Banning key.")
             await self.key_manager.mark_as_banned(provider_name, key_info.key_string)
         elif error.error_type == LLMErrorType.RATE_LIMIT_ERROR:
-            self.key_manager.mark_as_rate_limited(
-                provider_name, key_info.key_string, error.retry_after_seconds or 60
-            )
+            cooldown = error.retry_after_seconds or 60
+            logger.info(f"Rate limit hit for key on '{provider_name}'. Cooling down for {cooldown}s.")
+            self.key_manager.mark_as_rate_limited(provider_name, key_info.key_string, cooldown)
 
     def _parse_model_name(self, model_name: str) -> tuple[str, str]:
+        """将 'provider/model_id' 格式的字符串解析为元组。"""
         parts = model_name.split('/', 1)
         if len(parts) != 2 or not all(parts):
             raise ValueError(f"Invalid model name format: '{model_name}'. Expected 'provider/model_id'.")
         return parts[0], parts[1]
     
     def _create_failure_response(self, model_name: str, error: LLMError) -> LLMResponse:
+        """创建一个标准的错误响应对象。"""
         return LLMResponse(status=LLMResponseStatus.ERROR, model_name=model_name, error_details=error)
 
+
 class MockLLMService:
+    """
+    一个 LLMService 的模拟实现，用于调试和测试。
+    它不进行任何网络调用，而是立即返回一个可预测的假响应。
+    """
     def __init__(self, *args, **kwargs):
-        logger.info("--- MockLLMService Initialized ---")
+        logger.info("--- MockLLMService Initialized: Real LLM calls are disabled. ---")
 
     async def request(
         self,
@@ -665,6 +752,7 @@ class MockLLMService:
     ) -> LLMResponse:
         await asyncio.sleep(0.05)
         mock_content = f"[MOCK RESPONSE for {model_name}] - Prompt received: '{prompt[:50]}...'"
+        
         return LLMResponse(
             status=LLMResponseStatus.SUCCESS,
             content=mock_content,
@@ -924,12 +1012,8 @@ def register_plugin(container: Container, hook_manager: HookManager):
 
 from typing import Dict, Any
 
-# --- 核心修改: 导入路径修正 ---
-# 从平台契约导入 ExecutionContext
 from backend.core.contracts import ExecutionContext
-# 从 core_engine 插件导入接口定义
 from plugins.core_engine.interfaces import RuntimeInterface
-# 从本插件内部导入模型
 from .models import LLMResponse, LLMRequestFailedError
 
 # --- 核心修改: 移除 @runtime_registry 装饰器 ---
@@ -948,7 +1032,7 @@ class LLMRuntime(RuntimeInterface):
 
         llm_params = {k: v for k, v in config.items() if k not in ["model", "prompt"]}
 
-        llm_service = context.shared.services.resolve("llm_service")
+        llm_service = context.shared.services.llm_service
 
         try:
             response: LLMResponse = await llm_service.request(
@@ -1213,58 +1297,61 @@ import logging
 from typing import List
 from fastapi import APIRouter
 
-from backend.core.contracts import Container, HookManager
+from backend.core.contracts import Container, HookManager, Reportable
 from .auditor import Auditor
 from .base_router import router as base_router
 from .sandbox_router import router as sandbox_router
 
 logger = logging.getLogger(__name__)
 
-# --- 服务工厂 (Service Factories) ---
-def _create_auditor(container: Container) -> Auditor:
-    """工厂：创建并配置 Auditor 服务。"""
+# --- 服务工厂 ---
+def _create_auditor() -> Auditor:
+    """工厂：只创建 Auditor 的空实例。它的内容将在之后被异步填充。"""
+    return Auditor([])
+
+# --- 钩子实现 ---
+async def populate_auditor(container: Container):
+    """钩子实现：监听启动事件，异步地收集报告器并填充 Auditor。"""
+    logger.debug("Async task: Populating auditor with reporters...")
     hook_manager = container.resolve("hook_manager")
+    auditor: Auditor = container.resolve("auditor")
     
-    # 异步任务，用于通过钩子收集所有报告器
-    async def collect_reporters_task() -> List:
-        logger.debug("Triggering 'collect_reporters' hook to discover reporters...")
-        reporters = await hook_manager.filter("collect_reporters", [])
-        logger.info(f"Discovered {len(reporters)} reporter(s).")
-        return reporters
-
-    # 在同步工厂中运行异步任务
-    import asyncio
-    reporters_list = asyncio.run(collect_reporters_task())
+    reporters_list: List[Reportable] = await hook_manager.filter("collect_reporters", [])
     
-    return Auditor(reporters_list)
+    auditor.set_reporters(reporters_list)
+    logger.info(f"Auditor populated with {len(reporters_list)} reporter(s).")
 
-# --- 钩子实现 (Hook Implementations) ---
 async def provide_own_routers(routers: List[APIRouter]) -> List[APIRouter]:
     """钩子实现：将本插件的路由添加到收集中。"""
     routers.append(base_router)
     routers.append(sandbox_router)
-    logger.debug("Provided base_router and sandbox_router to the application.")
+    logger.debug("Provided own routers (base, sandbox) to the application.")
     return routers
 
-# --- 主注册函数 (Main Registration Function) ---
+# --- 主注册函数 ---
 def register_plugin(container: Container, hook_manager: HookManager):
-    """这是 core_api 插件的注册入口。"""
     logger.info("--> 正在注册 [core-api] 插件...")
 
-    # 1. 注册服务
+    # 1. 注册服务（仅创建空实例）
     container.register("auditor", _create_auditor, singleton=True)
-    logger.debug("服务 'auditor' 已注册。")
+    logger.debug("服务 'auditor' 已注册 (initially empty)。")
 
-    # 2. 注册钩子实现
-    # 这个插件既是 API 路由的提供者，也是收集者。
-    # 它的钩子实现应该有较高的优先级，以确保基础路由被优先考虑。
+    # 2. 注册异步填充钩子
+    hook_manager.add_implementation(
+        "services_post_register",
+        populate_auditor,
+        plugin_name="core-api"
+    )
+
+    # 3. 【关键】注册路由【提供者】钩子
+    #    它现在和其他插件一样，只是一个提供者。
     hook_manager.add_implementation(
         "collect_api_routers", 
         provide_own_routers, 
-        priority=10, # 较低的优先级数字意味着先执行
+        priority=100, # 较高的 priority 意味着后执行
         plugin_name="core-api"
     )
-    logger.debug("钩子实现 'collect_api_routers' (for self) 已注册。")
+    logger.debug("钩子实现 'collect_api_routers' 和 'services_post_register' 已注册。")
 
     logger.info("插件 [core-api] 注册成功。")
 ```
@@ -1285,9 +1372,9 @@ from backend.core.contracts import Sandbox, StateSnapshot, GraphCollection
 # 从本插件的依赖注入文件中导入 "getters"
 from .dependencies import get_sandbox_store, get_snapshot_store, get_engine
 
-# 从 core_engine 插件导入其服务/类
-from plugins.core_engine.engine import ExecutionEngine
-from plugins.core_engine.state import SnapshotStore
+# 只从 contracts 导入接口
+from backend.core.contracts import ExecutionEngineInterface, SnapshotStoreInterface
+
 
 router = APIRouter(prefix="/api/sandboxes", tags=["Sandboxes"])
 
@@ -1302,7 +1389,7 @@ class CreateSandboxRequest(BaseModel):
 async def create_sandbox(
     request_body: CreateSandboxRequest, 
     sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
-    snapshot_store: SnapshotStore = Depends(get_snapshot_store)
+    snapshot_store: SnapshotStoreInterface = Depends(get_snapshot_store)
 ):
     """创建一个新的沙盒并生成其初始（创世）快照。"""
     sandbox = Sandbox(name=request_body.name)
@@ -1327,8 +1414,8 @@ async def execute_sandbox_step(
     sandbox_id: UUID, 
     user_input: Dict[str, Any] = Body(...),
     sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
-    snapshot_store: SnapshotStore = Depends(get_snapshot_store),
-    engine: ExecutionEngine = Depends(get_engine)
+    snapshot_store: SnapshotStoreInterface = Depends(get_snapshot_store),
+    engine: ExecutionEngineInterface = Depends(get_engine)
 ):
     """在沙盒的最新状态上执行一步计算。"""
     sandbox = sandbox_store.get(sandbox_id)
@@ -1352,10 +1439,9 @@ async def execute_sandbox_step(
 @router.get("/{sandbox_id}/history", response_model=List[StateSnapshot])
 async def get_sandbox_history(
     sandbox_id: UUID,
-    snapshot_store: SnapshotStore = Depends(get_snapshot_store)
+    snapshot_store: SnapshotStoreInterface = Depends(get_snapshot_store)
 ):
     """获取一个沙盒的所有历史快照，按时间顺序排列。"""
-    # 无需检查沙盒是否存在，如果不存在，find_by_sandbox 将返回空列表
     snapshots = snapshot_store.find_by_sandbox(sandbox_id)
     return snapshots
 
@@ -1364,7 +1450,7 @@ async def revert_sandbox_to_snapshot(
     sandbox_id: UUID, 
     snapshot_id: UUID,
     sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
-    snapshot_store: SnapshotStore = Depends(get_snapshot_store)
+    snapshot_store: SnapshotStoreInterface = Depends(get_snapshot_store)
 ):
     """将沙盒的状态回滚到指定的历史快照。"""
     sandbox = sandbox_store.get(sandbox_id)
@@ -1427,6 +1513,11 @@ class Auditor:
         self._reporters = reporters
         self._static_report_cache: Dict[str, Any] | None = None
 
+    def set_reporters(self, reporters: List[Reportable]):
+        """允许在创建后设置/替换报告器列表。"""
+        self._reporters = reporters
+        self._static_report_cache = None
+
     async def generate_full_report(self) -> Dict[str, Any]:
         """生成完整的系统报告。"""
         full_report = {}
@@ -1486,30 +1577,33 @@ async def get_system_report(auditor: Auditor = Depends(get_auditor)):
 ```
 # plugins/core_api/dependencies.py
 
-from typing import Dict
+from typing import Dict, Any, List
 from uuid import UUID
 from fastapi import Request
 
-# 导入其他插件提供的服务或类
-from plugins.core_engine.engine import ExecutionEngine
-from plugins.core_engine.state import SnapshotStore
+# 只从 backend.core.contracts 导入数据模型和接口
+from backend.core.contracts import (
+    Sandbox, 
+    StateSnapshot,
+    ExecutionEngineInterface, 
+    SnapshotStoreInterface,
+    AuditorInterface
+)
 
-# 导入平台核心的契约
-from backend.core.contracts import Sandbox
+# 每个依赖注入函数现在只做一件事：从容器中解析服务。
+# 类型提示使用我们新定义的接口。
 
-# 注意：我们不直接导入 `Auditor`，因为 `get_auditor` 可以通过容器解析
-# from .auditor import Auditor
-
-def get_engine(request: Request) -> ExecutionEngine:
+def get_engine(request: Request) -> ExecutionEngineInterface:
     return request.app.state.container.resolve("execution_engine")
 
-def get_snapshot_store(request: Request) -> SnapshotStore:
+def get_snapshot_store(request: Request) -> SnapshotStoreInterface:
     return request.app.state.container.resolve("snapshot_store")
 
 def get_sandbox_store(request: Request) -> Dict[UUID, Sandbox]:
+    # 对于简单的字典存储，可以直接用 Dict
     return request.app.state.container.resolve("sandbox_store")
 
-def get_auditor(request: Request): # -> Auditor
+def get_auditor(request: Request) -> AuditorInterface:
     return request.app.state.container.resolve("auditor")
 ```
 
@@ -2422,33 +2516,25 @@ async def evaluate_data(data: Any, eval_context: Dict[str, Any], lock: asyncio.L
 # plugins/core_engine/__init__.py
 
 import logging
-import asyncio
 from typing import Dict, Type
 
-# 从平台核心导入接口和类型
 from backend.core.contracts import Container, HookManager
-
-# 导入本插件内部的组件
 from .engine import ExecutionEngine
 from .registry import RuntimeRegistry
 from .state import SnapshotStore
-from .interfaces import RuntimeInterface # 导入接口定义
-
-# 导入本插件自带的运行时实现
+from .interfaces import RuntimeInterface
 from .runtimes.base_runtimes import InputRuntime, SetWorldVariableRuntime
 from .runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
 
 logger = logging.getLogger(__name__)
 
-# --- 服务工厂 (Service Factories) ---
+# --- 服务工厂 ---
 
-def _create_runtime_registry(container: Container) -> RuntimeRegistry:
-    """工厂：创建并填充运行时注册表。"""
-    hook_manager = container.resolve("hook_manager")
+def _create_runtime_registry() -> RuntimeRegistry:
+    """工厂：仅创建 RuntimeRegistry 的【空】实例，并注册内置运行时。"""
     registry = RuntimeRegistry()
     logger.debug("RuntimeRegistry instance created.")
 
-    # 1. 注册本插件内置的基础运行时
     base_runtimes: Dict[str, Type[RuntimeInterface]] = {
         "system.input": InputRuntime,
         "system.set_world_var": SetWorldVariableRuntime,
@@ -2459,54 +2545,54 @@ def _create_runtime_registry(container: Container) -> RuntimeRegistry:
     for name, runtime_class in base_runtimes.items():
         registry.register(name, runtime_class)
     logger.info(f"Registered {len(base_runtimes)} built-in system runtimes.")
-
-    # 2. 通过钩子，从其他插件收集并注册运行时
-    async def collect_and_register_runtimes():
-        logger.debug("Triggering 'collect_runtimes' hook to discover external runtimes...")
-        # 初始字典为空，让钩子实现去填充
-        external_runtimes: Dict[str, Type[RuntimeInterface]] = await hook_manager.filter("collect_runtimes", {})
-        
-        if not external_runtimes:
-            logger.info("No external runtimes discovered from other plugins.")
-            return
-
-        logger.info(f"Discovered {len(external_runtimes)} external runtime(s): {list(external_runtimes.keys())}")
-        for name, runtime_class in external_runtimes.items():
-            registry.register(name, runtime_class)
-    
-    # 在同步工厂中运行这个一次性的异步任务
-    asyncio.run(collect_and_register_runtimes())
-    
     return registry
 
 def _create_execution_engine(container: Container) -> ExecutionEngine:
     """工厂：创建执行引擎，并注入其所有依赖。"""
     logger.debug("Creating ExecutionEngine instance...")
-    
-    # 从容器中解析它需要的所有服务
-    runtime_registry = container.resolve("runtime_registry")
-    hook_manager = container.resolve("hook_manager") # 从平台核心获取
-
-    # 不要传递一个解析好的字典，而是传递整个容器实例。
-    # 引擎的构造函数也需要相应地调整。
     return ExecutionEngine(
-        registry=runtime_registry,
-        container=container,  # 传递容器本身
-        hook_manager=hook_manager
+        registry=container.resolve("runtime_registry"),
+        container=container,
+        hook_manager=container.resolve("hook_manager")
     )
 
-# --- 主注册函数 (Main Registration Function) ---
+# --- 钩子实现 ---
+async def populate_runtime_registry(container: Container):
+    """
+    【新】钩子实现：监听应用启动事件，【异步地】收集并填充运行时注册表。
+    """
+    logger.debug("Async task: Populating runtime registry from other plugins...")
+    hook_manager = container.resolve("hook_manager")
+    registry = container.resolve("runtime_registry")
+
+    external_runtimes: Dict[str, Type[RuntimeInterface]] = await hook_manager.filter("collect_runtimes", {})
+    
+    if not external_runtimes:
+        logger.info("No external runtimes discovered from other plugins.")
+        return
+
+    logger.info(f"Discovered {len(external_runtimes)} external runtime(s): {list(external_runtimes.keys())}")
+    for name, runtime_class in external_runtimes.items():
+        registry.register(name, runtime_class)
+
+# --- 主注册函数 ---
 def register_plugin(container: Container, hook_manager: HookManager):
-    """这是 core_engine 插件的注册入口。"""
     logger.info("--> 正在注册 [core-engine] 插件...")
 
-    # 注册核心服务到 DI 容器。容器会根据依赖关系自动处理实例化顺序。
     container.register("snapshot_store", lambda: SnapshotStore(), singleton=True)
-    container.register("sandbox_store", lambda: {}, singleton=True) # 简单的内存字典存储
+    container.register("sandbox_store", lambda: {}, singleton=True)
     
+    # 注册工厂，它只做同步部分
     container.register("runtime_registry", _create_runtime_registry, singleton=True)
     container.register("execution_engine", _create_execution_engine, singleton=True)
     
+    # 【新】注册一个监听器，它将在应用启动的异步阶段被调用
+    hook_manager.add_implementation(
+        "services_post_register", 
+        populate_runtime_registry, 
+        plugin_name="core-engine"
+    )
+
     logger.info("插件 [core-engine] 注册成功。")
 ```
 
@@ -3602,7 +3688,7 @@ async def test_import_package_api_invalid_file(async_client):
 
 ### core_llm/providers/gemini.py
 ```
-# backend/llm/providers/gemini.py
+# plugins/core_llm/providers/gemini.py
 
 from typing import Any
 import google.generativeai as genai

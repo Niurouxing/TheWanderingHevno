@@ -1,29 +1,9 @@
 # plugins/core_api/auditor.py
 
 import asyncio
-from abc import ABC, abstractmethod
+from backend.core.contracts import Reportable
 from typing import Any, Dict, List
 
-class Reportable(ABC):
-    """
-    一个统一的汇报协议 (契约)。
-    任何希望向系统提供状态或元数据的组件都应实现此接口。
-    """
-    @property
-    @abstractmethod
-    def report_key(self) -> str:
-        """返回此报告在最终JSON对象中的唯一键名。"""
-        pass
-
-    @property
-    def is_static(self) -> bool:
-        """指明此报告是否为静态（可缓存）。默认为 True。"""
-        return True
-
-    @abstractmethod
-    async def generate_report(self) -> Any:
-        """生成并返回报告内容。"""
-        pass
 
 class Auditor:
     """
