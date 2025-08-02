@@ -9,7 +9,6 @@ from backend.core.evaluation import (
 from backend.core.types import ExecutionContext
 from backend.core.state_models import StateSnapshot
 from backend.models import GraphCollection
-# 【修改】导入新的运行时
 from backend.runtimes.base_runtimes import SetWorldVariableRuntime
 from backend.runtimes.control_runtimes import ExecuteRuntime
 from backend.llm.service import MockLLMService
@@ -18,20 +17,18 @@ from backend.llm.service import MockLLMService
 def mock_exec_context() -> ExecutionContext:
     """提供一个可复用的、模拟的 ExecutionContext。"""
     graph_coll = GraphCollection.model_validate({"main": {"nodes": []}})
-    # --- 修正: 在创建 Snapshot 时提供初始世界状态 ---
     initial_world = {"user_name": "Alice", "hp": 100}
     snapshot = StateSnapshot(
         sandbox_id=uuid4(),
         graph_collection=graph_coll,
         world_state=initial_world
     )
-    # --- 修正: 使用新的工厂方法 ---
+    # 使用正确的工厂方法创建上下文
     context = ExecutionContext.create_for_main_run(
         snapshot, 
         services={"llm": MockLLMService()}
     )
     
-    # 这部分保持不变，是正确的
     context.node_states = {"node_A": {"output": "Success"}}
     context.run_vars = {"trigger_input": {"message": "Do it!"}}
 
@@ -50,46 +47,39 @@ def test_lock() -> asyncio.Lock:
 @pytest.mark.asyncio
 class TestEvaluationCore:
     """对宏求值核心 `evaluate_expression` 进行深度单元测试。"""
-    # --- 修正: 添加 lock fixture ---
+    
     async def test_simple_expressions(self, mock_eval_context, test_lock):
         assert await evaluate_expression("1 + 1", mock_eval_context, test_lock) == 2
 
-    # --- 修正: 添加 lock fixture ---
     async def test_context_access(self, mock_eval_context, test_lock):
         code = "f'{nodes.node_A.output}, {world.user_name}, {run.trigger_input.message}, {pipe.from_pipe}'"
         result = await evaluate_expression(code, mock_eval_context, test_lock)
         assert result == "Success, Alice, Do it!, pipe_data"
 
-    # --- 修正: 添加 lock fixture ---
     async def test_side_effects_on_world_state(self, mock_exec_context: ExecutionContext, test_lock):
         eval_context = build_evaluation_context(mock_exec_context)
         assert eval_context["world"].hp == 100
         await evaluate_expression("world.hp -= 10", eval_context, test_lock)
         assert eval_context["world"].hp == 90
-        # --- 修正: 从 shared.world_state 验证 ---
+        # 验证底层共享状态是否真的被修改
         assert mock_exec_context.shared.world_state["hp"] == 90
 
-    # --- 修正: 添加 lock fixture ---
     async def test_multiline_script_with_return(self, mock_eval_context, test_lock):
-        # --- 【核心修复】 ---
-        # 移除 Ellipsis (...) 并替换为实际的 Python 代码
         code = """
 bonus = 0
 if world.hp > 50:
     bonus = 20
 else:
-    bonus = 5.0
+    bonus = 5
 bonus
 """
         # 测试 if 分支
         mock_eval_context["world"].hp = 80
-        # 断言现在可以正确工作
         assert await evaluate_expression(code, mock_eval_context, test_lock) == 20
         # 测试 else 分支
         mock_eval_context["world"].hp = 40
-        assert await evaluate_expression(code, mock_eval_context, test_lock) == 5.0
+        assert await evaluate_expression(code, mock_eval_context, test_lock) == 5
 
-    # --- 修正: 添加 lock fixture ---
     async def test_syntax_error_handling(self, mock_eval_context, test_lock):
         with pytest.raises(ValueError, match="Macro syntax error"):
             await evaluate_expression("1 +", mock_eval_context, test_lock)
@@ -97,7 +87,7 @@ bonus
 @pytest.mark.asyncio
 class TestRecursiveEvaluation:
     """对递归求值函数 `evaluate_data` 进行测试。"""
-    # --- 修正: 添加 lock fixture ---
+    
     async def test_evaluate_data_recursively(self, mock_eval_context, test_lock):
         data = {
             "static": "hello",
@@ -116,28 +106,23 @@ class TestRecursiveEvaluation:
 class TestRuntimesWithMacros:
     """对每个运行时进行独立的单元测试，假设宏预处理已完成。"""
 
-    # 【关键修改】更新 execute 方法的调用签名
     async def test_set_world_variable_runtime(self, mock_exec_context: ExecutionContext):
         runtime = SetWorldVariableRuntime()
-        # --- 修正: 检查 shared.world_state ---
         assert "new_var" not in mock_exec_context.shared.world_state
         await runtime.execute(
             config={"variable_name": "new_var", "value": "is_set"},
             context=mock_exec_context
         )
-        # --- 修正: 验证 shared.world_state ---
         assert mock_exec_context.shared.world_state["new_var"] == "is_set"
 
     async def test_execute_runtime(self, mock_exec_context: ExecutionContext):
         runtime = ExecuteRuntime()
-        # --- 修正: 检查 shared.world_state ---
         assert mock_exec_context.shared.world_state["hp"] == 100
         code_str = "world.hp -= 25"
         await runtime.execute(
             config={"code": code_str}, 
             context=mock_exec_context
         )
-        # --- 修正: 验证 shared.world_state ---
         assert mock_exec_context.shared.world_state["hp"] == 75
 
         code_str_with_return = "f'New HP is {world.hp}'"
@@ -150,7 +135,7 @@ class TestRuntimesWithMacros:
 
 @pytest.mark.asyncio
 class TestBuiltinModules:
-    # --- 修正: 为所有测试添加 lock fixture ---
+    
     async def test_random_module(self, mock_eval_context, test_lock):
         result = await evaluate_expression("random.randint(10, 10)", mock_eval_context, test_lock)
         assert result == 10
@@ -160,7 +145,7 @@ class TestBuiltinModules:
         assert result == 4
 
     async def test_json_module(self, mock_eval_context, test_lock):
-        code = "import json\njson.dumps({'a': 1})"
+        code = "json.dumps({'a': 1})" # `import json` is not needed due to pre-imported modules
         result = await evaluate_expression(code, mock_eval_context, test_lock)
         assert result == '{"a": 1}'
 
@@ -169,12 +154,10 @@ class TestBuiltinModules:
         result = await evaluate_expression(code, mock_eval_context, test_lock)
         assert result == "hello"
 
-# TestDotAccessibleDictInteraction 类中的测试需要修改
 @pytest.mark.asyncio
 class TestDotAccessibleDictInteraction:
-    # --- 修正: 为所有测试添加 lock fixture ---
+    
     async def test_deep_read(self, mock_exec_context, test_lock):
-        # --- 修正: 修改 shared.world_state ---
         mock_exec_context.shared.world_state["player"] = {"stats": {"strength": 10}}
         eval_context = build_evaluation_context(mock_exec_context)
         result = await evaluate_expression("world.player.stats.strength", eval_context, test_lock)
@@ -188,6 +171,7 @@ class TestDotAccessibleDictInteraction:
     
     async def test_attribute_error_on_missing_key(self, mock_eval_context, test_lock):
         with pytest.raises(AttributeError):
+            # The evaluator will raise AttributeError when a key is not found
             await evaluate_expression("world.non_existent_key", mock_eval_context, test_lock)
 
     async def test_list_of_dicts_access(self, mock_exec_context, test_lock):
@@ -196,12 +180,11 @@ class TestDotAccessibleDictInteraction:
         result = await evaluate_expression("world.inventory[1].name", eval_context, test_lock)
         assert result == "shield"
 
-# TestEdgeCases 类中的测试需要修改
 @pytest.mark.asyncio
 class TestEdgeCases:
-    # --- 修正: 为所有测试添加 lock fixture ---
+    
     async def test_macro_returning_none(self, mock_eval_context, test_lock):
-        code = "x = 1"
+        code = "x = 1" # This script doesn't have an expression as its last line
         result = await evaluate_expression(code, mock_eval_context, test_lock)
         assert result is None
 

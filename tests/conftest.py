@@ -2,76 +2,66 @@
 import json
 import pytest
 from fastapi.testclient import TestClient
-from fastapi import FastAPI
-from typing import Generator
+from fastapi import FastAPI, Request # 导入 Request
+from typing import Generator, Dict
 from dotenv import load_dotenv 
 
-# --- Session-wide setup (不变) ---
+# --- Session-wide setup ---
 @pytest.fixture(scope="session", autouse=True)
 def load_test_env():
     load_dotenv(dotenv_path=".env.test", override=True)
-    print("\n--- Loaded .env.test for the test session ---")
 
-# --- 导入核心组件 (大部分不变) ---
-from backend.main import app, create_app, configure_app, sandbox_store, snapshot_store
+# --- 导入核心组件 ---
+from backend.main import app, configure_app 
 from backend.models import GraphCollection
 from backend.core.engine import ExecutionEngine
+from backend.core.state_models import SnapshotStore
 
-
-
-# ---------------------------------------------------------------------------
-# Fixtures for Core Components (Engine, Registry, API Client)
-# ---------------------------------------------------------------------------
-
+# --- Fixtures for Core Components ---
 
 @pytest.fixture(scope="session")
 def test_app() -> FastAPI:
-    """
-    【修正】这个 fixture 现在不再创建新的 app，而是配置从 main.py 导入的全局 app。
-    """
-    print("\n--- Configuring Test Application for the session ---")
-    
-    # 1. 直接使用从 main.py 导入的、已经附加了路由的 app 对象
-    # 2. 对这个 app 对象进行配置
+
+    # 直接对导入的全局 app 运行配置
     configure_app(app)
-    
-    print("--- Test Application configured ---")
-    return app # 返回配置好的全局 app
+    # 返回这个唯一的、配置好的、带路由的 app
+    return app
     
 @pytest.fixture
 def test_engine(test_app: FastAPI) -> ExecutionEngine:
-    """【修正】现在从配置好的 test_app 中获取引擎实例。"""
+    """从配置好的 test_app 中获取引擎实例"""
     return test_app.state.engine
 
 @pytest.fixture
 def test_client(test_app: FastAPI) -> Generator[TestClient, None, None]:
-    """【修正】现在使用配置好的 test_app 来创建 TestClient。"""
+
+    # 从 app.state 获取存储实例，而不是从全局导入
+    sandbox_store: Dict = test_app.state.sandbox_store
+    snapshot_store: SnapshotStore = test_app.state.snapshot_store
+    
+    # 在每次测试前清理
     sandbox_store.clear()
     snapshot_store.clear()
     
     with TestClient(test_app) as client:
         yield client
     
+    # 在每次测试后再次清理
     sandbox_store.clear()
     snapshot_store.clear()
-
 # ---------------------------------------------------------------------------
 # Fixtures for Graph Collections (更新 llm.default 配置)
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
 def linear_collection() -> GraphCollection:
-    """一个简单的三节点线性图：A -> B -> C。"""
     return GraphCollection.model_validate({
         "main": { "nodes": [
             {"id": "A", "run": [{"runtime": "system.input", "config": {"value": "a story about a cat"}}]},
-            # 【修正】添加 model 字段
             {"id": "B", "run": [{"runtime": "llm.default", "config": {"model": "mock/model", "prompt": "{{ f'The story is: {nodes.A.output}' }}"}}]},
-            # 【修正】添加 model 字段
             {"id": "C", "run": [{"runtime": "llm.default", "config": {"model": "mock/model", "prompt": "{{ nodes.B.llm_output }}"}}]}
         ]}
     })
-
 
 @pytest.fixture
 def parallel_collection() -> GraphCollection:
@@ -92,35 +82,14 @@ def parallel_collection() -> GraphCollection:
 
 @pytest.fixture
 def pipeline_collection() -> GraphCollection:
-    """
-    一个测试节点内运行时管道数据流的图。
-    节点A包含三个有序指令，演示了状态设置、数据生成和数据消费。
-    """
     return GraphCollection.model_validate({
         "main": { "nodes": [{
             "id": "A",
             "run": [
-                {
-                    "runtime": "system.set_world_var",
-                    "config": {
-                        "variable_name": "main_character",
-                        "value": "Sir Reginald"
-                    }
-                },
-                {
-                    "runtime": "system.input",
-                    "config": {
-                        "value": "A secret message"
-                    }
-                },
-                {
-                    "runtime": "llm.default",
-                    "config": {
-                        "model": "mock/model",
-                        # 这个宏现在可以安全地访问 world 状态和上一步的管道输出
-                        "prompt": "{{ f'Tell a story about {world.main_character}. He just received this message: {pipe.output}' }}"
-                    }
-                }
+                {"runtime": "system.set_world_var", "config": {"variable_name": "main_character", "value": "Sir Reginald"}},
+                {"runtime": "system.input", "config": {"value": "A secret message"}},
+                # 【修正】添加 model 字段
+                {"runtime": "llm.default", "config": {"model": "mock/model", "prompt": "{{ f'Tell a story about {world.main_character}. He just received this message: {pipe.output}' }}"}}
             ]
         }]}
     })
@@ -482,56 +451,26 @@ for i in range({increment_loop_count}):
 
 @pytest.fixture
 def map_collection_basic() -> GraphCollection:
-    """
-    一个基本的 system.map 测试集合。
-    - main 图提供一个角色列表。
-    - main 图使用 system.map 调用 process_character 子图处理每个角色。
-    - process_character 子图接收一个 character_input 和一个 global_story_setting。
-    """
-    return GraphCollection.model_validate({
-        "main": {
-            "nodes": [
-                {
-                    "id": "character_provider",
-                    "run": [{"runtime": "system.input", "config": {"value": ["Aragorn", "Gandalf", "Legolas"]}}]
-                },
-                {
-                    "id": "global_setting_provider",
-                    "run": [{"runtime": "system.input", "config": {"value": "The Fellowship of the Ring"}}]
-                },
-                {
-                    "id": "character_processor_map",
-                    "run": [{
-                        "runtime": "system.map",
-                        "config": {
-                            "list": "{{ nodes.character_provider.output }}",
-                            "graph": "process_character",
-                            "using": {
-                                "character_input": "{{ source.item }}",
-                                "global_story_setting": "{{ nodes.global_setting_provider.output }}",
-                                "character_index": "{{ source.index }}"
-                            }
-                        }
-                    }]
-                }
-            ]
-        },
-        "process_character": {
-            "nodes": [
-                {
-                    "id": "generate_bio",
-                    "run": [{
-                        "runtime": "llm.default",
-                        "config": {
-                            # V-- 【这 是 唯 一 且 关 键 的 修 正】 --V
-                            "model": "mock/model",
-                            "prompt": "{{ f'Create a bio for {nodes.character_input.output} in the context of {nodes.global_story_setting.output}. Index: {nodes.character_index.output}' }}"
-                        }
-                    }]
-                }
-            ]
-        }
-    })
+    base = {
+        "main": { "nodes": [
+            {"id": "character_provider", "run": [{"runtime": "system.input", "config": {"value": ["Aragorn", "Gandalf", "Legolas"]}}]},
+            {"id": "global_setting_provider", "run": [{"runtime": "system.input", "config": {"value": "The Fellowship of the Ring"}}]},
+            {"id": "character_processor_map", "run": [{"runtime": "system.map", "config": {
+                "list": "{{ nodes.character_provider.output }}",
+                "graph": "process_character",
+                "using": {
+                    "character_input": "{{ source.item }}",
+                    "global_story_setting": "{{ nodes.global_setting_provider.output }}",
+                    "character_index": "{{ source.index }}"
+                }}}]}
+            ]},
+        "process_character": {"nodes": [{"id": "generate_bio", "run": [{"runtime": "llm.default", "config": {
+            # 【修正】添加 model 字段
+            "model": "mock/model",
+            "prompt": "{{ f'Create a bio for {nodes.character_input.output} in the context of {nodes.global_story_setting.output}. Index: {nodes.character_index.output}' }}"
+            }}]}]}
+    }
+    return GraphCollection.model_validate(base)
 
 
 @pytest.fixture
