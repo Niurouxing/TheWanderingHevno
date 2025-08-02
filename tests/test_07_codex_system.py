@@ -3,7 +3,7 @@
 import pytest
 from uuid import uuid4
 
-from backend.core.state_models import StateSnapshot
+from backend.core.state import StateSnapshot
 from backend.models import GraphCollection
 
 @pytest.mark.asyncio

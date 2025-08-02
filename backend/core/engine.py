@@ -8,7 +8,7 @@ from backend.models import GraphCollection, GraphDefinition, GenericNode
 from backend.core.dependency_parser import build_dependency_graph
 from backend.core.registry import RuntimeRegistry
 from backend.core.evaluation import build_evaluation_context, evaluate_data
-from backend.core.types import ExecutionContext, ServiceRegistry
+from backend.core.state import ExecutionContext, ServiceRegistry
 from backend.core.interfaces import RuntimeInterface, SubGraphRunner
 
 

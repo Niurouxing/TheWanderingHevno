@@ -7,7 +7,7 @@ import pprint  # 导入 pprint 以便美观地打印字典
 from pydantic import ValidationError
 
 from backend.core.interfaces import RuntimeInterface
-from backend.core.types import ExecutionContext
+from backend.core.state import ExecutionContext
 from backend.core.evaluation import evaluate_data, build_evaluation_context
 from backend.core.utils import DotAccessibleDict
 from backend.core.registry import runtime_registry

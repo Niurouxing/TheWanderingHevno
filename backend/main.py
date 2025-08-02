@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from backend.models import GraphCollection
 from backend.core.engine import ExecutionEngine
-from backend.core.state_models import Sandbox, SnapshotStore, StateSnapshot
+from backend.core.state import Sandbox, SnapshotStore, StateSnapshot
 from backend.core.loader import load_modules
 from backend.core.registry import runtime_registry
 from backend.core.services import service_registry

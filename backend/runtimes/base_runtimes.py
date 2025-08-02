@@ -3,7 +3,7 @@ import asyncio
 from typing import Dict, Any, Optional
 from backend.core.interfaces import RuntimeInterface
 from backend.core.registry import runtime_registry 
-from backend.core.types import ExecutionContext
+from backend.core.state import ExecutionContext
 from backend.llm.models import LLMResponse, LLMRequestFailedError
 
 @runtime_registry.register("system.input") 

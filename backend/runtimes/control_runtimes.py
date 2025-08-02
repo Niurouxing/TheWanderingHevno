@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional
 from backend.core.interfaces import RuntimeInterface, SubGraphRunner # <-- 从新位置导入
 # 导入所有需要的核心组件
 from backend.core.evaluation import evaluate_data, evaluate_expression, build_evaluation_context
-from backend.core.types import ExecutionContext
+from backend.core.state import ExecutionContext
 from backend.core.utils import DotAccessibleDict
 from backend.core.registry import runtime_registry
 

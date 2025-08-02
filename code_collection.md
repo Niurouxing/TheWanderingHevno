@@ -944,7 +944,7 @@ from pydantic import BaseModel, Field
 
 from backend.models import GraphCollection
 from backend.core.engine import ExecutionEngine
-from backend.core.state_models import Sandbox, SnapshotStore, StateSnapshot
+from backend.core.state import Sandbox, SnapshotStore, StateSnapshot
 from backend.core.loader import load_modules
 from backend.core.registry import runtime_registry
 from backend.core.services import service_registry
@@ -1691,7 +1691,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 
-from backend.core.types import ExecutionContext
+from backend.core.state import ExecutionContext
 
 
 class SubGraphRunner(ABC):
@@ -1812,7 +1812,7 @@ import re
 from typing import Any, Dict, List, Optional   
 from functools import partial
 from backend.core.utils import DotAccessibleDict
-from backend.core.types import ExecutionContext # 显式导入
+from backend.core.state import ExecutionContext # 显式导入
 
 # 预编译宏的正则表达式和预置模块保持不变...
 INLINE_MACRO_REGEX = re.compile(r"{{\s*(.+?)\s*}}", re.DOTALL)
@@ -1956,7 +1956,7 @@ from typing import Dict, Any, Callable, Optional
 from pydantic import BaseModel, Field, ValidationError
 from datetime import datetime, timezone
 
-from backend.core.state_models import StateSnapshot
+from backend.core.state import StateSnapshot
 from backend.models import GraphCollection
 from backend.core.utils import DotAccessibleDict
 
@@ -2083,7 +2083,7 @@ from backend.models import GraphCollection, GraphDefinition, GenericNode
 from backend.core.dependency_parser import build_dependency_graph
 from backend.core.registry import RuntimeRegistry
 from backend.core.evaluation import build_evaluation_context, evaluate_data
-from backend.core.types import ExecutionContext, ServiceRegistry
+from backend.core.state import ExecutionContext, ServiceRegistry
 from backend.core.interfaces import RuntimeInterface, SubGraphRunner
 
 
@@ -2740,7 +2740,7 @@ import asyncio
 from typing import Dict, Any, Optional
 from backend.core.interfaces import RuntimeInterface
 from backend.core.registry import runtime_registry 
-from backend.core.types import ExecutionContext
+from backend.core.state import ExecutionContext
 from backend.llm.models import LLMResponse, LLMRequestFailedError
 
 @runtime_registry.register("system.input") 
@@ -2831,7 +2831,7 @@ from typing import Dict, Any, List, Optional
 from backend.core.interfaces import RuntimeInterface, SubGraphRunner # <-- 从新位置导入
 # 导入所有需要的核心组件
 from backend.core.evaluation import evaluate_data, evaluate_expression, build_evaluation_context
-from backend.core.types import ExecutionContext
+from backend.core.state import ExecutionContext
 from backend.core.utils import DotAccessibleDict
 from backend.core.registry import runtime_registry
 
@@ -3024,7 +3024,7 @@ import pprint  # 导入 pprint 以便美观地打印字典
 from pydantic import ValidationError
 
 from backend.core.interfaces import RuntimeInterface
-from backend.core.types import ExecutionContext
+from backend.core.state import ExecutionContext
 from backend.core.evaluation import evaluate_data, build_evaluation_context
 from backend.core.utils import DotAccessibleDict
 from backend.core.registry import runtime_registry

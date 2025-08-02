@@ -1,14 +1,73 @@
-# backend/core/types.py 
-from __future__ import annotations
-import json 
-import asyncio # <-- 需要导入 asyncio 来处理锁
-from typing import Dict, Any, Callable, Optional
-from pydantic import BaseModel, Field, ValidationError
-from datetime import datetime, timezone
+# backend/core/state.py
 
-from backend.core.state_models import StateSnapshot
+from __future__ import annotations
+import asyncio
+import json
+from datetime import datetime, timezone
+from typing import Dict, Any, List, Optional
+from uuid import UUID, uuid4
+
+from pydantic import BaseModel, Field, ConfigDict, ValidationError
+
+
 from backend.models import GraphCollection
 from backend.core.utils import DotAccessibleDict
+
+# --- 1. 来自原 state_models.py 的内容 (持久化状态模型) ---
+# 这些模型定义了存储在数据库或内存中的长期状态
+
+class StateSnapshot(BaseModel):
+    """
+    一个不可变的快照，代表 Sandbox 在某个时间点的完整状态。
+    """
+    id: UUID = Field(default_factory=uuid4)
+    sandbox_id: UUID
+    graph_collection: GraphCollection
+    world_state: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    parent_snapshot_id: Optional[UUID] = None
+    triggering_input: Dict[str, Any] = Field(default_factory=dict)
+    run_output: Optional[Dict[str, Any]] = None
+
+    model_config = ConfigDict(frozen=True)
+
+class Sandbox(BaseModel):
+    """
+    一个交互式模拟环境的容器。
+    它管理着一系列的状态快照。
+    """
+    id: UUID = Field(default_factory=uuid4)
+    name: str
+    head_snapshot_id: Optional[UUID] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def get_latest_snapshot(self, store: SnapshotStore) -> Optional[StateSnapshot]:
+        if self.head_snapshot_id:
+            return store.get(self.head_snapshot_id)
+        return None
+
+class SnapshotStore:
+    """一个简单的内存快照存储。"""
+    def __init__(self):
+        self._store: Dict[UUID, StateSnapshot] = {}
+
+    def save(self, snapshot: StateSnapshot):
+        if snapshot.id in self._store:
+            raise ValueError(f"Snapshot with id {snapshot.id} already exists.")
+        self._store[snapshot.id] = snapshot
+
+    def get(self, snapshot_id: UUID) -> Optional[StateSnapshot]:
+        return self._store.get(snapshot_id)
+
+    def find_by_sandbox(self, sandbox_id: UUID) -> List[StateSnapshot]:
+        return [s for s in self._store.values() if s.sandbox_id == sandbox_id]
+
+    def clear(self):
+        self._store = {}
+
+
+# --- 2. 来自原 types.py 的内容 (运行时上下文模型) ---
+# 这些模型定义了在单次图执行期间，存在于内存中的临时状态和上下文
 
 ServiceRegistry = Dict[str, Any]
 
@@ -19,7 +78,6 @@ class SharedContext(BaseModel):
     world_state: Dict[str, Any]
     session_info: Dict[str, Any]
     global_write_lock: asyncio.Lock
-    # 【核心修改】用一个通用的服务容器替代了特定的 llm_service
     services: DotAccessibleDict
 
     model_config = {"arbitrary_types_allowed": True}
@@ -29,14 +87,8 @@ class ExecutionContext(BaseModel):
     代表一个【单次图执行】的上下文。
     它包含私有状态（如 node_states）和对全局共享状态的引用。
     """
-    # --- 私有状态 (Per-Graph-Run State) ---
-    # 每次调用 execute_graph 时，都会为这次运行创建一个新的 ExecutionContext
-    # 这确保了 node_states 是隔离的。
     node_states: Dict[str, Any] = Field(default_factory=dict)
     run_vars: Dict[str, Any] = Field(default_factory=dict)
-    
-    # --- 共享状态 (Shared State) ---
-    # 这不是一个副本，而是对一个共享对象的引用。
     shared: SharedContext
     initial_snapshot: StateSnapshot # 引用初始快照以获取图定义等信息
 
@@ -46,7 +98,6 @@ class ExecutionContext(BaseModel):
     def create_for_main_run(
         cls, 
         snapshot: StateSnapshot, 
-        # 【核心修改】接收一个服务注册表，而不是某个特定服务
         services: ServiceRegistry, 
         run_vars: Dict[str, Any] = None
     ) -> 'ExecutionContext':
@@ -58,7 +109,6 @@ class ExecutionContext(BaseModel):
                 "conversation_turn": 0,
             },
             global_write_lock=asyncio.Lock(),
-            # 将传入的服务注册表包装成可点访问的字典，并存入共享上下文
             services=DotAccessibleDict(services)
         )
         return cls(
@@ -69,18 +119,11 @@ class ExecutionContext(BaseModel):
 
     @classmethod
     def create_for_sub_run(cls, parent_context: 'ExecutionContext', run_vars: Dict[str, Any] = None) -> 'ExecutionContext':
-        """
-        为子图（由 call/map 调用）创建一个新的执行上下文。
-        关键在于它【共享】父上下文的 `shared` 对象。
-        """
+        """为子图（由 call/map 调用）创建一个新的执行上下文。"""
         return cls(
-            # 传递对同一个共享对象的引用
             shared=parent_context.shared,
-            # 初始快照和图定义保持不变
             initial_snapshot=parent_context.initial_snapshot,
-            # 子运行可以有自己的 run_vars，例如 map 迭代时的 item
             run_vars=run_vars or {}
-            # 注意：node_states 会自动被 Pydantic 创建为一个新的空字典，实现了隔离！
         )
 
     def to_next_snapshot(
@@ -89,11 +132,9 @@ class ExecutionContext(BaseModel):
         triggering_input: Dict[str, Any]
     ) -> StateSnapshot:
         """从当前上下文的状态生成下一个快照。"""
-        # 从共享状态中获取最终的世界状态
         final_world_state = self.shared.world_state
         
         current_graphs = self.initial_snapshot.graph_collection
-        # 检查世界状态中是否有演化的图定义
         if '__graph_collection__' in final_world_state:
             try:
                 evolved_graph_value = final_world_state['__graph_collection__']
@@ -110,12 +151,16 @@ class ExecutionContext(BaseModel):
         return StateSnapshot(
             sandbox_id=self.initial_snapshot.sandbox_id,
             graph_collection=current_graphs,
-            world_state=final_world_state, # 使用最终的世界状态
+            world_state=final_world_state,
             parent_snapshot_id=self.initial_snapshot.id,
             run_output=final_node_states,
             triggering_input=triggering_input
         )
 
-# 重建模型以确保所有引用都已解析
+
+# --- 3. 统一的模型重建 ---
+# 确保 Pydantic 能够正确处理所有内部引用和向前引用
+StateSnapshot.model_rebuild()
+Sandbox.model_rebuild()
 SharedContext.model_rebuild()
 ExecutionContext.model_rebuild()

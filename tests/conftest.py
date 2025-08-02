@@ -15,7 +15,7 @@ def load_test_env():
 from backend.main import app, configure_app 
 from backend.models import GraphCollection
 from backend.core.engine import ExecutionEngine
-from backend.core.state_models import SnapshotStore
+from backend.core.state import SnapshotStore
 
 # --- Fixtures for Core Components ---
 

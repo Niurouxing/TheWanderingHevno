@@ -4,7 +4,7 @@ from pydantic import ValidationError
 from uuid import uuid4
 
 from backend.models import GraphCollection, GenericNode, GraphDefinition, RuntimeInstruction
-from backend.core.state_models import StateSnapshot, Sandbox, SnapshotStore
+from backend.core.state import StateSnapshot, Sandbox, SnapshotStore
 from backend.core.dependency_parser import build_dependency_graph
 
 

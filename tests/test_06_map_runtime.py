@@ -4,7 +4,7 @@ import pytest
 from uuid import uuid4
 
 
-from backend.core.state_models import StateSnapshot
+from backend.core.state import StateSnapshot
 from backend.models import GraphCollection
 
 # 使用 pytest.mark.asyncio 来标记所有异步测试

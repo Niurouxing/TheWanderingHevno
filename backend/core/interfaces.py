@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 
-from backend.core.types import ExecutionContext
+from backend.core.state import ExecutionContext
 
 
 class SubGraphRunner(ABC):
