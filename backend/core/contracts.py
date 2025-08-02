@@ -1,28 +1,33 @@
 # backend/core/contracts.py
+
 from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Set, Coroutine, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Set, TypeVar
 from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, RootModel, ConfigDict, field_validator
 
-# --- 类型别名 ---
-PluginRegisterFunc = Callable[['Container', 'HookManager'], None]
-T = TypeVar('T') # 用于泛型
+# --- 1. 核心服务接口与类型别名 (用于类型提示) ---
 
-# --- 核心服务接口契约 (用于类型提示) ---
+# 定义一个泛型，常用于 filter 钩子
+T = TypeVar('T')
+
+# 插件注册函数的标准签名
+PluginRegisterFunc = Callable[['Container', 'HookManager'], None]
+
+# 为核心服务定义接口，插件不应直接导入实现，而应依赖这些接口
 class Container:
     def register(self, name: str, factory: Callable, singleton: bool = True) -> None: raise NotImplementedError
     def resolve(self, name: str) -> Any: raise NotImplementedError
 
 class HookManager:
+    def add_implementation(self, hook_name: str, implementation: Callable, priority: int = 10, plugin_name: str = "<unknown>"): raise NotImplementedError
     async def trigger(self, hook_name: str, **kwargs: Any) -> None: raise NotImplementedError
     async def filter(self, hook_name: str, data: T, **kwargs: Any) -> T: raise NotImplementedError
     async def decide(self, hook_name: str, **kwargs: Any) -> Optional[Any]: raise NotImplementedError
 
 
-# --- 核心持久化状态模型 ---
-# (从原 core/contracts.py, core/models.py, persistence/models.py 迁移和合并)
+# --- 2. 核心持久化状态模型 (从旧 core/models.py 和 core/contracts.py 合并) ---
 
 class RuntimeInstruction(BaseModel):
     runtime: str
@@ -64,14 +69,13 @@ class Sandbox(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-# --- 核心运行时上下文模型 ---
-# (从原 core/contracts.py 迁移)
+# --- 3. 核心运行时上下文模型 (从旧 core/contracts.py 迁移) ---
 
 class SharedContext(BaseModel):
     world_state: Dict[str, Any]
     session_info: Dict[str, Any]
     global_write_lock: asyncio.Lock
-    services: Any
+    services: Any # 通常是一个 DotAccessibleDict 包装的容器
     model_config = {"arbitrary_types_allowed": True}
 
 class ExecutionContext(BaseModel):
@@ -83,8 +87,7 @@ class ExecutionContext(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
-# --- 系统事件契约 (用于钩子) ---
-# (从原 core/contracts.py 迁移)
+# --- 4. 系统事件契约 (用于钩子, 从旧 core/contracts.py 迁移) ---
 
 class NodeContext(BaseModel):
     node: GenericNode

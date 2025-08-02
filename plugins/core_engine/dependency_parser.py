@@ -4,9 +4,7 @@ from typing import Set, Dict, Any, List
 import asyncio
 
 
-from backend.core.hooks import HookManager
-from backend.core.contracts import ResolveNodeDependenciesContext
-from backend.core.models import GenericNode
+from backend.core.contracts import HookManager, ResolveNodeDependenciesContext, GenericNode
 
 
 NODE_DEP_REGEX = re.compile(r'nodes\.([a-zA-Z0-9_]+)')

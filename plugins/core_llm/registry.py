@@ -2,8 +2,10 @@
 
 from typing import Dict, Type, Optional, Callable
 from pydantic import BaseModel
-from plugins.core_llm.providers.base import LLMProvider
+from .providers.base import LLMProvider
+import logging
 
+logger = logging.getLogger(__name__)
 
 class ProviderInfo(BaseModel):
     provider_class: Type[LLMProvider]
@@ -18,14 +20,11 @@ class ProviderRegistry:
         self._provider_info: Dict[str, ProviderInfo] = {}
 
     def register(self, name: str, key_env_var: str) -> Callable[[Type[LLMProvider]], Type[LLMProvider]]:
-        """
-        装饰器，用于注册 LLM Provider 类及其关联的环境变量。
-        """
         def decorator(provider_class: Type[LLMProvider]) -> Type[LLMProvider]:
             if name in self._provider_info:
-                print(f"Warning: Overwriting LLM provider registration for '{name}'.")
+                logger.warning(f"Overwriting LLM provider registration for '{name}'.")
             self._provider_info[name] = ProviderInfo(provider_class=provider_class, key_env_var=key_env_var)
-            print(f"LLM Provider '{name}' registered via decorator (keys from '{key_env_var}').")
+            logger.info(f"LLM Provider '{name}' discovered (keys from '{key_env_var}').")
             return provider_class
         return decorator
     

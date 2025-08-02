@@ -1,32 +1,31 @@
-# plugins/core_engine/engine.py
+# plugins/core_engine/engine.py 
 
 import asyncio
+import logging
 from enum import Enum, auto
 from typing import Dict, Any, Set, List, Optional
 from collections import defaultdict
-from fastapi import Request
 import traceback
 
-# --- 核心架构导入 ---
-from backend.core.models import GraphCollection, GraphDefinition, GenericNode
-from backend.core.dependency_parser import build_dependency_graph_async
-from backend.core.registry import RuntimeRegistry
-from backend.core.evaluation import build_evaluation_context, evaluate_data
-# 【核心修改】从新的位置导入
-from backend.core.contracts import ExecutionContext
-from backend.core.state import (
+from backend.core.contracts import (
+    GraphCollection, GraphDefinition, GenericNode, Container,
+    ExecutionContext,
+    EngineStepStartContext, EngineStepEndContext,
+    BeforeConfigEvaluationContext, AfterMacroEvaluationContext,
+    NodeExecutionStartContext, NodeExecutionSuccessContext, NodeExecutionErrorContext,
+    HookManager
+)
+from .dependency_parser import build_dependency_graph_async
+from .registry import RuntimeRegistry
+from .evaluation import build_evaluation_context, evaluate_data
+from .state import (
     create_main_execution_context, 
     create_sub_execution_context, 
     create_next_snapshot
 )
-from backend.core.hooks import HookManager
-# 【核心修改】从 contracts 导入上下文模型
-from backend.core.contracts import (
-    EngineStepStartContext, EngineStepEndContext,
-    BeforeConfigEvaluationContext, AfterMacroEvaluationContext,
-    NodeExecutionStartContext, NodeExecutionSuccessContext, NodeExecutionErrorContext
-)
-from backend.core.interfaces import RuntimeInterface, SubGraphRunner
+from .interfaces import RuntimeInterface, SubGraphRunner
+
+logger = logging.getLogger(__name__)
 
 class NodeState(Enum):
     PENDING = auto()
@@ -114,12 +113,12 @@ class ExecutionEngine(SubGraphRunner):
     def __init__(
         self,
         registry: RuntimeRegistry,
-        services: Dict[str, Any],
+        container: Container,
         hook_manager: HookManager,
         num_workers: int = 5
     ):
         self.registry = registry
-        self.services = services
+        self.container = container
         self.hook_manager = hook_manager
         self.num_workers = num_workers
         
@@ -136,11 +135,11 @@ class ExecutionEngine(SubGraphRunner):
         
         context = create_main_execution_context(
             snapshot=initial_snapshot,
-            services=self.services,
+            container=self.container,
             run_vars={"triggering_input": triggering_input},
             hook_manager=self.hook_manager
         )
-        
+
         main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
         if not main_graph_def: raise ValueError("'main' graph not found.")
         

@@ -1,21 +1,21 @@
-# backend/llm/providers/gemini.py
+# plugins/core_llm/providers/gemini.py
 
-from typing import Dict, Any
-
+from typing import Any
 import google.generativeai as genai
 from google.api_core import exceptions as google_exceptions
 from google.generativeai import types as generation_types
 
-from backend.llm.providers.base import LLMProvider
-from backend.llm.models import (
+# --- 核心修改: 导入路径修正 ---
+from .base import LLMProvider
+from ..models import (
     LLMResponse,
     LLMError,
     LLMResponseStatus,
     LLMErrorType,
 )
-from backend.llm.registry import provider_registry
+from ..registry import provider_registry
 
-@provider_registry.register("gemini", key_env_var="GEMINI_API_KEYS")
+
 class GeminiProvider(LLMProvider):
     """
     针对 Google Gemini API 的 LLMProvider 实现。

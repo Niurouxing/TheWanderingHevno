@@ -9,17 +9,17 @@ from typing import Dict, Any, List, Optional
 from fastapi import Request
 from pydantic import ValidationError
 
-# 【核心】所有数据模型和事件契约都从唯一的真实来源 'contracts.py' 导入
 from backend.core.contracts import (
     Sandbox, 
     StateSnapshot, 
     ExecutionContext, 
     SharedContext,
-    BeforeSnapshotCreateContext
+    BeforeSnapshotCreateContext,
+    GraphCollection,
+    HookManager,
+    Container
 )
-from backend.core.models import GraphCollection
-from backend.core.hooks import HookManager
-from backend.core.utils import DotAccessibleDict
+from .utils import DotAccessibleDict, ServiceResolverProxy 
 
 # --- Section 1: 状态存储类 (包含逻辑) ---
 
@@ -53,7 +53,7 @@ class SnapshotStore:
 
 def create_main_execution_context(
     snapshot: StateSnapshot, 
-    services: Dict[str, Any],
+    container: Container,
     hook_manager: HookManager, 
     run_vars: Dict[str, Any] = None
 ) -> ExecutionContext:
@@ -64,7 +64,16 @@ def create_main_execution_context(
             "turn_count": 0
         },
         global_write_lock=asyncio.Lock(),
-        services=DotAccessibleDict(services)
+        
+        # 关键步骤：
+        # 1. 创建 ServiceResolverProxy 实例，它包装了我们的容器。
+        # 2. 将这个代理实例传递给 DotAccessibleDict。
+        #
+        # 这样，`services` 字段就是一个 DotAccessibleDict，
+        # 当宏执行 `services.llm_service` 时，
+        # DotAccessibleDict 会调用 `proxy['llm_service']`，
+        # 进而触发 `ServiceResolverProxy` 去调用 `container.resolve('llm_service')`。
+        services=DotAccessibleDict(ServiceResolverProxy(container))
     )
     return ExecutionContext(
         shared=shared_context,

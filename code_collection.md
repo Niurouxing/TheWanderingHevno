@@ -1,377 +1,26 @@
-# Directory: .
+# Directory: backend
 
-### conftest.py
-```
-# conftest.py
-import pytest
-import asyncio
-from typing import Generator, List
-from fastapi import FastAPI
-# 导入 ASGITransport 以包装我们的 app
-from httpx import AsyncClient, ASGITransport
-
-# 从平台核心导入
-from backend.app import create_app
-from backend.container import Container
-from backend.core.hooks import HookManager
-from backend.core.loader import PluginLoader
-
-# --- 核心 Fixtures ---
-
-@pytest.fixture(scope="session")
-def event_loop():
-    """为整个测试会话创建一个事件循环。"""
-    policy = asyncio.get_event_loop_policy()
-    loop = policy.new_event_loop()
-    yield loop
-    loop.close()
-
-@pytest.fixture
-def clean_container() -> Container:
-    """提供一个全新的、空的 DI 容器实例。"""
-    return Container()
-
-@pytest.fixture
-def hook_manager() -> HookManager:
-    """提供一个全新的、空的 HookManager 实例。"""
-    return HookManager()
-
-# --- 插件加载 Fixtures ---
-
-class TestPluginLoader(PluginLoader):
-    """一个特殊的插件加载器，可以按需加载指定的插件。"""
-    def __init__(self, container: Container, hook_manager: HookManager, enabled_plugins: List[str]):
-        super().__init__(container, hook_manager)
-        self.enabled_plugins = enabled_plugins
-
-    def _discover_plugins(self) -> List[dict]:
-        """重写发现逻辑，只“发现”被启用的插件。"""
-        all_plugins = super()._discover_plugins()
-        print(f"TestPluginLoader: Found {len(all_plugins)} total plugins, filtering for {self.enabled_plugins}")
-        enabled = [p for p in all_plugins if p['name'] in self.enabled_plugins]
-        print(f"TestPluginLoader: Enabled {len(enabled)} plugins.")
-        return enabled
-
-@pytest.fixture
-def loaded_plugins(
-    clean_container: Container,
-    hook_manager: HookManager
-) -> Generator[None, List[str], None]:
-    """
-    一个【生成器 fixture】，允许测试按需加载一组特定的插件。
-    """
-    _loader = None
-    
-    def _load(plugin_names: List[str]):
-        nonlocal _loader
-        _loader = TestPluginLoader(clean_container, hook_manager, enabled_plugins=plugin_names)
-        _loader.load_plugins()
-
-    yield _load
-    
-    print("Plugin loading fixture teardown.")
-
-
-# --- 应用与客户端 Fixtures ---
-
-@pytest.fixture
-async def test_app(
-    loaded_plugins: Generator[None, List[str], None]
-) -> Generator[FastAPI, List[str], None]:
-    """
-    一个更高阶的 fixture，它创建一个 FastAPI 应用实例，并加载指定的插件。
-    """
-    app_instance = None
-    
-    async def _create(plugin_names: List[str]):
-        nonlocal app_instance
-        
-        if "core-logging" not in plugin_names:
-            plugin_names.insert(0, "core-logging")
-
-        app_instance = create_app()
-
-        container = Container()
-        hook_manager = HookManager()
-
-        loader = TestPluginLoader(container, hook_manager, enabled_plugins=plugin_names)
-        loader.load_plugins()
-
-        app_instance.state.container = container
-        app_instance.state.hook_manager = hook_manager
-
-        routers_to_add = await hook_manager.filter("collect_api_routers", [])
-        for router in routers_to_add:
-            app_instance.include_router(router)
-        
-        return app_instance
-
-    yield _create
-
-@pytest.fixture
-async def async_client(test_app: Generator[FastAPI, List[str], None]) -> Generator[AsyncClient, List[str], None]:
-    """
-    一个终极测试客户端 fixture。
-    它接收一个插件列表，构建一个只包含这些插件的应用，并返回一个可以对其进行 HTTP 请求的客户端。
-    """
-    client_instance = None
-    
-    async def _create_client(plugin_names: List[str]):
-        nonlocal client_instance
-        app = await test_app(plugin_names)
-        
-        # --- 核心修复：使用 ASGITransport 来包装 app ---
-        transport = ASGITransport(app=app)
-        client_instance = AsyncClient(transport=transport, base_url="http://test")
-        
-        return client_instance
-
-    yield _create_client
-    
-    if client_instance:
-        await client_instance.aclose()
-```
-
-### pyproject.toml
-```
-# Hevno/pyproject.toml
-
-[build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
-
-[project]
-name = "hevno-engine"
-version = "1.2.0"
-authors = [
-    { name="Hevno Team", email="contact@example.com" },
-]
-description = "A dynamically loaded, modular execution engine for Hevno, built with a plugin-first architecture."
-readme = "README.md"
-requires-python = ">=3.8"
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-]
-# 核心依赖
-dependencies = [
-    "fastapi",
-    "pydantic",
-    "pyyaml",
-    "pytest",
-    "pytest-asyncio",
-    "httpx",
-]
-
-[project.optional-dependencies]
-dev = [ "uvicorn[standard]" ]
-
-[project.entry-points."hevno.plugins"]
-core_logging = "plugins.core_logging"
-
-[tool.setuptools]
-namespace-packages = ["plugins"]
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["backend*", "plugins*"]
-[tool.setuptools.package-data]
-"plugins.*" = ["*.json", "*.yaml"]
-
-
-# --- Pytest 配置 (已修正) ---
-[tool.pytest.ini_options]
-# 明确指定测试文件的搜索路径
-testpaths = [
-    "tests",
-    "plugins",
-]
-
-# 配置 pytest-asyncio
-asyncio_mode = "auto"
-```
-
-### MANIFEST.in
-```
-# Hevno/MANIFEST.in
-
-# 递归地包含 plugins 目录下的所有 .json 和 .yaml 文件
-graft plugins
-global-include *.json *.yaml
-
-# 你也可以更精确地指定
-# recursive-include plugins *.json
-# recursive-include plugins *.yaml
-```
-
-### plugins/__init__.py
+### __init__.py
 ```
 
 ```
 
-### tests/test_platform_core.py
-```
-# tests/test_platform_core.py
-
-import pytest
-import asyncio
-from unittest.mock import MagicMock
-
-from backend.container import Container
-from backend.core.hooks import HookManager
-
-class TestContainer:
-    """对 DI 容器的单元测试。"""
-    
-    def test_register_and_resolve_singleton(self):
-        """测试单例服务的注册和解析。"""
-        container = Container()
-        
-        # 使用 MagicMock 来追踪工厂函数的调用
-        mock_factory = MagicMock(return_value="service_instance")
-        
-        container.register("my_service", mock_factory, singleton=True)
-        
-        # 第一次解析
-        instance1 = container.resolve("my_service")
-        assert instance1 == "service_instance"
-        mock_factory.assert_called_once() # 工厂只应被调用一次
-
-        # 第二次解析
-        instance2 = container.resolve("my_service")
-        assert instance2 == "service_instance"
-        assert instance1 is instance2 # 应该是同一个实例
-        mock_factory.assert_called_once() # 工厂仍然只被调用一次
-
-    def test_register_and_resolve_transient(self):
-        """测试非单例（瞬态）服务的注册和解析。"""
-        container = Container()
-        mock_factory = MagicMock(side_effect=["instance1", "instance2"])
-        
-        container.register("my_service", mock_factory, singleton=False)
-
-        instance1 = container.resolve("my_service")
-        assert instance1 == "instance1"
-        assert mock_factory.call_count == 1
-
-        instance2 = container.resolve("my_service")
-        assert instance2 == "instance2"
-        assert instance1 is not instance2 # 应该是不同的实例
-        assert mock_factory.call_count == 2
-        
-    def test_resolve_nonexistent_service(self):
-        """测试解析一个未注册的服务时应抛出异常。"""
-        container = Container()
-        with pytest.raises(ValueError, match="Service 'nonexistent' not found"):
-            container.resolve("nonexistent")
-
-    def test_factory_with_container_dependency(self):
-        """测试工厂函数可以接收容器本身作为依赖。"""
-        container = Container()
-        
-        def dependent_factory(c: Container):
-            # 这个工厂依赖于 'base_service'
-            base = c.resolve("base_service")
-            return f"dependent_on_{base}"
-            
-        container.register("base_service", lambda: "base_instance")
-        container.register("dependent_service", dependent_factory)
-        
-        result = container.resolve("dependent_service")
-        assert result == "dependent_on_base_instance"
-
-
-@pytest.mark.asyncio
-class TestHookManager:
-    """对事件总线 HookManager 的单元测试。"""
-
-    async def test_filter_hook(self):
-        """测试 filter 钩子的链式处理和优先级。"""
-        hook_manager = HookManager()
-        
-        # 定义两个钩子实现
-        async def low_priority_filter(data: list, **kwargs):
-            data.append("low")
-            return data
-
-        async def high_priority_filter(data: list, **kwargs):
-            data.append("high")
-            return data
-
-        # 以错误的优先级顺序注册
-        hook_manager.add_implementation("test_filter", low_priority_filter, priority=20)
-        hook_manager.add_implementation("test_filter", high_priority_filter, priority=10)
-        
-        initial_data = ["start"]
-        result = await hook_manager.filter("test_filter", initial_data)
-        
-        # 因为 high_priority_filter 的优先级更高(10 < 20)，它应该先执行
-        assert result == ["start", "high", "low"]
-
-    async def test_trigger_hook(self):
-        """测试 trigger 钩子的并发执行。"""
-        hook_manager = HookManager()
-        
-        # 使用一个列表来记录调用顺序（尽管是并发的）
-        call_log = []
-        
-        async def hook1(**kwargs):
-            await asyncio.sleep(0.02)
-            call_log.append("hook1")
-
-        async def hook2(**kwargs):
-            call_log.append("hook2")
-
-        hook_manager.add_implementation("test_trigger", hook1)
-        hook_manager.add_implementation("test_trigger", hook2)
-
-        await hook_manager.trigger("test_trigger")
-
-        # 因为是并发执行，我们只关心它们是否都被调用了
-        assert "hook1" in call_log
-        assert "hook2" in call_log
-        assert len(call_log) == 2
-
-    async def test_hooks_with_no_implementations(self):
-        """测试在没有实现的情况下调用钩子不会出错。"""
-        hook_manager = HookManager()
-        
-        # Filter 应该原样返回数据
-        result = await hook_manager.filter("nonexistent_filter", "data")
-        assert result == "data"
-        
-        # Trigger 应该什么都不做
-        try:
-            await hook_manager.trigger("nonexistent_trigger")
-        except Exception:
-            pytest.fail("Triggering a hook with no implementations should not raise an error.")
-```
-
-### tests/__init__.py
-```
-
-```
-
-### backend/__init__.py
-```
-
-```
-
-### backend/container.py
+### container.py
 ```
 # backend/container.py
+
 import logging
 from typing import Dict, Any, Callable
 
 logger = logging.getLogger(__name__)
 
 class Container:
-    """一个简单的依赖注入容器。"""
+    """一个简单的、通用的依赖注入容器。"""
     def __init__(self):
         self._factories: Dict[str, Callable] = {}
         self._singletons: Dict[str, bool] = {}
         self._instances: Dict[str, Any] = {}
-        # 注意: 此时日志系统可能还未配置
+        # 注意：此处日志可能还未完全配置，但可以安全调用
         # logger.info("DI Container initialized.")
 
     def register(self, name: str, factory: Callable, singleton: bool = True) -> None:
@@ -380,7 +29,7 @@ class Container:
 
         :param name: 服务的唯一名称。
         :param factory: 一个创建服务实例的函数 (可以无参，或接收 container 实例)。
-        :param singleton: 如果为 True，服务只会被创建一次。
+        :param singleton: 如果为 True，服务只会被创建一次（单例）。
         """
         if name in self._factories:
             logger.warning(f"Overwriting service registration for '{name}'")
@@ -403,13 +52,13 @@ class Container:
         factory = self._factories[name]
         
         try:
-            # 尝试将容器作为依赖注入
+            # 尝试将容器本身作为依赖注入到工厂中
             instance = factory(self)
         except TypeError:
             # 如果工厂不接受参数，则直接调用
             instance = factory()
 
-        logger.debug(f"Resolved service '{name}'.")
+        logger.debug(f"Resolved service '{name}'. Singleton: {self._singletons.get(name, True)}")
 
         if self._singletons.get(name, True):
             self._instances[name] = instance
@@ -417,9 +66,10 @@ class Container:
         return instance
 ```
 
-### backend/app.py
+### app.py
 ```
 # backend/app.py
+
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, APIRouter
@@ -440,18 +90,19 @@ async def lifespan(app: FastAPI):
     container.register("hook_manager", lambda: hook_manager)
 
     # 阶段一 & 二：发现、排序、注册
+    # 此时日志系统应该由 core-logging 插件配置完毕
     loader = PluginLoader(container, hook_manager)
     loader.load_plugins()
     
-    logger = logging.getLogger(__name__) # 此时日志已配置
+    logger = logging.getLogger(__name__) # 此时日志已由插件配置
     logger.info("--- FastAPI Application Assembly ---")
 
-    # 将核心服务附加到 app.state
+    # 将核心服务附加到 app.state，以便 API 依赖注入函数可以访问
     app.state.container = container
     app.state.hook_manager = hook_manager
     logger.info("Core services (Container, HookManager) attached to app.state.")
 
-    # 阶段三：装配 API 路由
+    # 阶段三：装配 API 路由 (通过钩子)
     logger.info("Triggering 'collect_api_routers' filter hook...")
     routers_to_add: list[APIRouter] = await hook_manager.filter("collect_api_routers", [])
     
@@ -481,9 +132,10 @@ def create_app() -> FastAPI:
         lifespan=lifespan
     )
 
+    # CORS 中间件可以保留
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"], # 在生产中应配置为更严格的源
+        allow_origins=["*"], # 生产中应使用具体域名
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -492,9 +144,10 @@ def create_app() -> FastAPI:
     return app
 ```
 
-### backend/main.py
+### main.py
 ```
 # backend/main.py
+
 import uvicorn
 import os
 
@@ -518,7 +171,7 @@ if __name__ == "__main__":
     )
 ```
 
-### backend/core/hooks.py
+### core/hooks.py
 ```
 # backend/core/hooks.py
 import asyncio
@@ -609,12 +262,12 @@ class HookManager:
     # decide 方法可以根据需要添加
 ```
 
-### backend/core/__init__.py
+### core/__init__.py
 ```
 
 ```
 
-### backend/core/loader.py
+### core/loader.py
 ```
 # backend/core/loader.py
 
@@ -625,9 +278,9 @@ import importlib.resources
 import traceback
 from typing import List, Dict
 
+# 导入类型提示，而不是实现
 from backend.core.contracts import Container, HookManager, PluginRegisterFunc
 
-# 在模块级别获取 logger
 logger = logging.getLogger(__name__)
 
 class PluginLoader:
@@ -637,20 +290,19 @@ class PluginLoader:
 
     def load_plugins(self):
         """执行插件加载的全过程：发现、排序、注册。"""
-        # 使用 print 是因为此时日志系统可能还未配置
+        # 在日志系统配置前使用 print
         print("\n--- Hevno 插件系统：开始加载 ---")
         
         # 阶段一：发现
         all_plugins = self._discover_plugins()
         if not all_plugins:
-            print("警告：未发现任何插件。")
+            print("警告：在 'plugins' 目录中未发现任何插件。")
             print("--- Hevno 插件系统：加载完成 ---\n")
             return
 
-        # 阶段二：排序
+        # 阶段二：排序 (根据 manifest 中的 priority)
         sorted_plugins = sorted(all_plugins, key=lambda p: (p['manifest'].get('priority', 100), p['name']))
         
-        # 打印加载顺序，这是一个有用的元信息
         print("插件加载顺序已确定：")
         for i, p_info in enumerate(sorted_plugins):
             print(f"  {i+1}. {p_info['name']} (优先级: {p_info['manifest'].get('priority', 100)})")
@@ -658,15 +310,14 @@ class PluginLoader:
         # 阶段三：注册
         self._register_plugins(sorted_plugins)
         
-        # 使用配置好的 logger 记录最终信息
-        logger.info("所有插件均已加载并注册完毕。")
+        logger.info("所有已发现的插件均已加载并注册完毕。")
         print("--- Hevno 插件系统：加载完成 ---\n")
-
 
     def _discover_plugins(self) -> List[Dict]:
         """扫描 'plugins' 包，读取所有子包中的 manifest.json 文件。"""
         discovered = []
         try:
+            # 使用现代的 importlib.resources 来安全地访问包数据
             plugins_package_path = importlib.resources.files('plugins')
             
             for plugin_path in plugins_package_path.iterdir():
@@ -680,16 +331,21 @@ class PluginLoader:
                 try:
                     manifest_content = manifest_path.read_text(encoding='utf-8')
                     manifest = json.loads(manifest_content)
+                    # 构造 Python 导入路径
                     import_path = f"plugins.{plugin_path.name}"
                     
-                    plugin_info = { "name": manifest.get('name', plugin_path.name), "manifest": manifest, "import_path": import_path }
+                    plugin_info = {
+                        "name": manifest.get('name', plugin_path.name),
+                        "manifest": manifest,
+                        "import_path": import_path
+                    }
                     discovered.append(plugin_info)
-                except Exception:
-                    # 在发现阶段保持静默，只处理能成功解析的
+                except Exception as e:
+                    print(f"警告：无法解析插件 '{plugin_path.name}' 的 manifest.json: {e}")
                     pass
         
         except (ModuleNotFoundError, FileNotFoundError):
-             # 同样保持静默，如果没有 plugins 目录就算了
+            print("信息：'plugins' 目录不存在或为空，跳过插件加载。")
             pass
             
         return discovered
@@ -701,52 +357,57 @@ class PluginLoader:
             import_path = plugin_info['import_path']
             
             try:
-                # --- 核心改动：这里不再打印日志 ---
-                # 日志记录的责任已移交插件本身
                 plugin_module = importlib.import_module(import_path)
+                
+                if not hasattr(plugin_module, "register_plugin"):
+                    print(f"警告：插件 '{plugin_name}' 未定义 'register_plugin' 函数，已跳过。")
+                    continue
+                
                 register_func: PluginRegisterFunc = getattr(plugin_module, "register_plugin")
+                # 将核心服务注入到插件的注册函数中
                 register_func(self._container, self._hook_manager)
 
             except Exception as e:
-                # 只有在发生致命错误时，加载器才需要“发声”
-                # 并且使用 print，因为它不依赖于可能出问题的日志系统
                 print("\n" + "="*80)
                 print(f"!!! 致命错误：加载插件 '{plugin_name}' ({import_path}) 失败 !!!")
                 print("="*80)
                 traceback.print_exc()
                 print("="*80)
-                # 遇到错误时，可以选择停止应用或继续加载其他插件
-                # 这里我们选择停止，因为插件依赖可能被破坏
-                raise RuntimeError(f"无法加载插件 {plugin_name}") from e
+                raise RuntimeError(f"无法加载插件 {plugin_name}，应用启动中止。") from e
 ```
 
-### backend/core/contracts.py
+### core/contracts.py
 ```
 # backend/core/contracts.py
+
 from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Set, Coroutine, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Set, TypeVar
 from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, RootModel, ConfigDict, field_validator
 
-# --- 类型别名 ---
-PluginRegisterFunc = Callable[['Container', 'HookManager'], None]
-T = TypeVar('T') # 用于泛型
+# --- 1. 核心服务接口与类型别名 (用于类型提示) ---
 
-# --- 核心服务接口契约 (用于类型提示) ---
+# 定义一个泛型，常用于 filter 钩子
+T = TypeVar('T')
+
+# 插件注册函数的标准签名
+PluginRegisterFunc = Callable[['Container', 'HookManager'], None]
+
+# 为核心服务定义接口，插件不应直接导入实现，而应依赖这些接口
 class Container:
     def register(self, name: str, factory: Callable, singleton: bool = True) -> None: raise NotImplementedError
     def resolve(self, name: str) -> Any: raise NotImplementedError
 
 class HookManager:
+    def add_implementation(self, hook_name: str, implementation: Callable, priority: int = 10, plugin_name: str = "<unknown>"): raise NotImplementedError
     async def trigger(self, hook_name: str, **kwargs: Any) -> None: raise NotImplementedError
     async def filter(self, hook_name: str, data: T, **kwargs: Any) -> T: raise NotImplementedError
     async def decide(self, hook_name: str, **kwargs: Any) -> Optional[Any]: raise NotImplementedError
 
 
-# --- 核心持久化状态模型 ---
-# (从原 core/contracts.py, core/models.py, persistence/models.py 迁移和合并)
+# --- 2. 核心持久化状态模型 (从旧 core/models.py 和 core/contracts.py 合并) ---
 
 class RuntimeInstruction(BaseModel):
     runtime: str
@@ -788,14 +449,13 @@ class Sandbox(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-# --- 核心运行时上下文模型 ---
-# (从原 core/contracts.py 迁移)
+# --- 3. 核心运行时上下文模型 (从旧 core/contracts.py 迁移) ---
 
 class SharedContext(BaseModel):
     world_state: Dict[str, Any]
     session_info: Dict[str, Any]
     global_write_lock: asyncio.Lock
-    services: Any
+    services: Any # 通常是一个 DotAccessibleDict 包装的容器
     model_config = {"arbitrary_types_allowed": True}
 
 class ExecutionContext(BaseModel):
@@ -807,8 +467,7 @@ class ExecutionContext(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
-# --- 系统事件契约 (用于钩子) ---
-# (从原 core/contracts.py 迁移)
+# --- 4. 系统事件契约 (用于钩子, 从旧 core/contracts.py 迁移) ---
 
 class NodeContext(BaseModel):
     node: GenericNode
@@ -845,11 +504,20 @@ class ResolveNodeDependenciesContext(BaseModel):
     auto_inferred_deps: Set[str]
 ```
 
-### plugins/core_llm/service.py
+# Directory: plugins
+
+### __init__.py
+```
+
+```
+
+### core_llm/service.py
 ```
 # plugins/core_llm/service.py
+
 from __future__ import annotations
 import asyncio
+import logging
 from typing import Dict, Optional, Any
 
 from tenacity import (
@@ -859,24 +527,20 @@ from tenacity import (
     retry_if_exception_type,
 )
 
-from backend.llm.manager import KeyPoolManager, KeyInfo
-from backend.llm.models import (
+# --- 核心修改: 导入路径本地化 ---
+from .manager import KeyPoolManager, KeyInfo
+from .models import (
     LLMResponse,
     LLMError,
     LLMErrorType,
     LLMResponseStatus,
     LLMRequestFailedError,
 )
-from plugins.core_llm.registry import provider_registry, ProviderRegistry
-from backend.core.services import service_registry, ServiceInterface
+from .registry import ProviderRegistry
 
+logger = logging.getLogger(__name__)
 
-
-@service_registry.register("llm")
-class LLMService(ServiceInterface):
-    """
-    LLM Gateway 的核心服务，负责协调所有组件并执行请求。
-    """
+class LLMService:
     def __init__(
         self,
         key_manager: KeyPoolManager,
@@ -907,12 +571,13 @@ class LLMService(ServiceInterface):
             )
 
         def log_before_sleep(retry_state):
-            pass
+            # Log retry attempts
+            logger.debug(f"Retrying LLM request for {model_name}, attempt {retry_state.attempt_number}...")
         
         retry_decorator = retry(
             stop=stop_after_attempt(self.max_retries),
             wait=wait_exponential(multiplier=1, min=2, max=10),
-            retry=retry_if_exception_type(Exception),
+            retry=retry_if_exception_type(LLMRequestFailedError), # Only retry on our custom retryable errors
             reraise=True,
             before_sleep=log_before_sleep
         )
@@ -922,15 +587,12 @@ class LLMService(ServiceInterface):
             return await wrapped_attempt(provider_name, actual_model_name, prompt, **kwargs)
         
         except LLMRequestFailedError as e:
-            final_message = (
-                f"LLM request for model '{model_name}' failed after {self.max_retries} attempt(s)."
-            )
-            raise LLMRequestFailedError(
-                final_message,
-                last_error=self.last_known_error 
-            ) from e
+            final_message = f"LLM request for model '{model_name}' failed after {self.max_retries} attempt(s)."
+            logger.error(final_message, exc_info=e)
+            raise LLMRequestFailedError(final_message, last_error=self.last_known_error) from e
         
         except Exception as e:
+            logger.critical(f"An unexpected non-LLM error occurred in LLMService: {e}", exc_info=True)
             raise
 
     async def _attempt_request(
@@ -952,13 +614,23 @@ class LLMService(ServiceInterface):
                     )
                     if response.status in [LLMResponseStatus.SUCCESS, LLMResponseStatus.FILTERED]:
                         return response
-                    raise LLMRequestFailedError("Provider returned an error response.", last_error=response.error_details)
+                    
+                    # If provider returns an error response, treat it as a failure to be handled
+                    if response.error_details:
+                         self.last_known_error = response.error_details
+                         await self._handle_error(provider_name, key_info, response.error_details)
+                         if response.error_details.is_retryable:
+                            raise LLMRequestFailedError("Provider returned a retryable error response.", last_error=response.error_details)
+                    
+                    return response # Not retryable but not success (e.g. filtered)
                 
                 except Exception as e:
+                    # Translate provider-specific SDK exceptions into our standard LLMError
                     llm_error = provider.translate_error(e)
                     self.last_known_error = llm_error
                     await self._handle_error(provider_name, key_info, llm_error)
                     error_message = f"Request attempt failed: {llm_error.message}"
+                    # Raise our custom exception to trigger tenacity retry if applicable
                     raise LLMRequestFailedError(error_message, last_error=llm_error) from e
         
         except (RuntimeError, ValueError) as e:
@@ -972,7 +644,7 @@ class LLMService(ServiceInterface):
                 provider_name, key_info.key_string, error.retry_after_seconds or 60
             )
 
-    def _parse_model_name(self, model_name: str) -> (str, str):
+    def _parse_model_name(self, model_name: str) -> tuple[str, str]:
         parts = model_name.split('/', 1)
         if len(parts) != 2 or not all(parts):
             raise ValueError(f"Invalid model name format: '{model_name}'. Expected 'provider/model_id'.")
@@ -981,14 +653,9 @@ class LLMService(ServiceInterface):
     def _create_failure_response(self, model_name: str, error: LLMError) -> LLMResponse:
         return LLMResponse(status=LLMResponseStatus.ERROR, model_name=model_name, error_details=error)
 
-@service_registry.register("mock_llm")
-class MockLLMService(ServiceInterface):
-    """
-    一个 LLMService 的模拟实现，用于调试。
-    它不进行任何网络调用，而是立即返回一个可预测的假响应。
-    """
+class MockLLMService:
     def __init__(self, *args, **kwargs):
-        print("--- Hevno LLM Gateway is running in MOCK/DEBUG mode. No real API calls will be made. ---")
+        logger.info("--- MockLLMService Initialized ---")
 
     async def request(
         self,
@@ -996,22 +663,17 @@ class MockLLMService(ServiceInterface):
         prompt: str,
         **kwargs
     ) -> LLMResponse:
-        # 模拟一个非常短暂的延迟
         await asyncio.sleep(0.05)
-        
         mock_content = f"[MOCK RESPONSE for {model_name}] - Prompt received: '{prompt[:50]}...'"
-        
         return LLMResponse(
             status=LLMResponseStatus.SUCCESS,
             content=mock_content,
             model_name=model_name,
             usage={"prompt_tokens": len(prompt.split()), "completion_tokens": 15, "total_tokens": len(prompt.split()) + 15}
         )
-
-
 ```
 
-### plugins/core_llm/models.py
+### core_llm/models.py
 ```
 # plugins/core_llm/models.py
 
@@ -1120,14 +782,16 @@ class LLMRequestFailedError(Exception):
         return super().__str__()
 ```
 
-### plugins/core_llm/registry.py
+### core_llm/registry.py
 ```
 # plugins/core_llm/registry.py
 
 from typing import Dict, Type, Optional, Callable
 from pydantic import BaseModel
-from plugins.core_llm.providers.base import LLMProvider
+from .providers.base import LLMProvider
+import logging
 
+logger = logging.getLogger(__name__)
 
 class ProviderInfo(BaseModel):
     provider_class: Type[LLMProvider]
@@ -1142,14 +806,11 @@ class ProviderRegistry:
         self._provider_info: Dict[str, ProviderInfo] = {}
 
     def register(self, name: str, key_env_var: str) -> Callable[[Type[LLMProvider]], Type[LLMProvider]]:
-        """
-        装饰器，用于注册 LLM Provider 类及其关联的环境变量。
-        """
         def decorator(provider_class: Type[LLMProvider]) -> Type[LLMProvider]:
             if name in self._provider_info:
-                print(f"Warning: Overwriting LLM provider registration for '{name}'.")
+                logger.warning(f"Overwriting LLM provider registration for '{name}'.")
             self._provider_info[name] = ProviderInfo(provider_class=provider_class, key_env_var=key_env_var)
-            print(f"LLM Provider '{name}' registered via decorator (keys from '{key_env_var}').")
+            logger.info(f"LLM Provider '{name}' discovered (keys from '{key_env_var}').")
             return provider_class
         return decorator
     
@@ -1171,33 +832,38 @@ class ProviderRegistry:
 provider_registry = ProviderRegistry()
 ```
 
-### plugins/core_llm/__init__.py
+### core_llm/__init__.py
 ```
-# plugins/core_llm/__init__.py
+# plugins/core_llm/__init__.py 
+
 import logging
+import os
+
+# 从平台核心导入接口和类型
 from backend.core.contracts import Container, HookManager
+
+# 导入本插件内部的组件
 from .service import LLMService, MockLLMService
 from .manager import KeyPoolManager, CredentialManager
 from .registry import provider_registry
 from .runtime import LLMRuntime
-# (如果需要报告器，也在这里导入)
-# from .reporters import LLMProviderReporter
+from .reporters import LLMProviderReporter
+
+# 动态加载所有 provider
+from backend.core.loader import load_modules
+load_modules(["plugins.core_llm.providers"])
 
 logger = logging.getLogger(__name__)
 
-# --- 服务工厂 ---
+# --- 服务工厂 (Service Factories) ---
 def _create_llm_service(container: Container) -> LLMService:
-    """
-    这个工厂函数封装了创建 LLMService 的复杂逻辑。
-    它不依赖任何环境变量，所有配置都应来自容器或默认值。
-    """
-    # 注意：这里我们硬编码了非调试模式。未来可以从配置服务获取。
-    # is_debug_mode = container.resolve("config_service").get("llm_debug_mode", False)
-    
-    # 实例化所有 provider
+    """这个工厂函数封装了创建 LLMService 的复杂逻辑。"""
+    is_debug_mode = os.getenv("HEVNO_LLM_DEBUG_MODE", "false").lower() == "true"
+    if is_debug_mode:
+        logger.warning("LLM Gateway is in MOCK/DEBUG mode.")
+        return MockLLMService()
+
     provider_registry.instantiate_all()
-    
-    # 创建内部依赖
     cred_manager = CredentialManager()
     key_manager = KeyPoolManager(credential_manager=cred_manager)
     
@@ -1210,81 +876,88 @@ def _create_llm_service(container: Container) -> LLMService:
         max_retries=3
     )
 
-# --- 钩子实现 ---
-async def register_llm_runtime(runtimes: dict) -> dict:
-    """钩子实现：向引擎注册本插件提供的运行时。"""
-    runtimes["llm.default"] = LLMRuntime
-    logger.debug("Runtime 'llm.default' provided to runtime registry.")
+# --- 钩子实现 (Hook Implementations) ---
+async def provide_runtime(runtimes: dict) -> dict:
+    """钩子实现：向引擎注册本插件提供的 'llm.default' 运行时。"""
+    if "llm.default" not in runtimes:
+        runtimes["llm.default"] = LLMRuntime
+        logger.debug("Provided 'llm.default' runtime to the engine.")
     return runtimes
 
-# --- 主注册函数 ---
+async def provide_reporter(reporters: list) -> list:
+    """钩子实现：向审计员提供本插件的报告器。"""
+    reporters.append(LLMProviderReporter())
+    logger.debug("Provided 'LLMProviderReporter' to the auditor.")
+    return reporters
+
+# --- 主注册函数 (Main Registration Function) ---
 def register_plugin(container: Container, hook_manager: HookManager):
+    """这是 core-llm 插件的注册入口，由平台加载器调用。"""
     logger.info("--> 正在注册 [core-llm] 插件...")
 
     # 1. 注册服务到 DI 容器
+    #    'llm_service' 是单例，它的创建逻辑被封装在工厂函数中。
     container.register("llm_service", _create_llm_service)
-    container.register("mock_llm_service", lambda: MockLLMService()) # 同样注册 Mock 服务
-    logger.debug("服务 'llm_service' 和 'mock_llm_service' 已注册。")
+    logger.debug("服务 'llm_service' 已注册。")
 
     # 2. 注册钩子实现
-    # 我们将通过钩子来注册运行时，而不是直接依赖 runtime_registry
-    hook_manager.add_implementation("collect_runtimes", register_llm_runtime, plugin_name="core-llm")
-    logger.debug("钩子实现 'collect_runtimes' 已注册。")
+    #    通过 'collect_runtimes' 钩子，将我们的运行时提供给 core_engine。
+    hook_manager.add_implementation(
+        "collect_runtimes", 
+        provide_runtime, 
+        plugin_name="core-llm"
+    )
+    #    通过 'collect_reporters' 钩子，将我们的报告器提供给 core_api。
+    hook_manager.add_implementation(
+        "collect_reporters",
+        provide_reporter,
+        plugin_name="core-llm"
+    )
+    logger.debug("钩子实现 'collect_runtimes' 和 'collect_reporters' 已注册。")
     
     logger.info("插件 [core-llm] 注册成功。")
 ```
 
-### plugins/core_llm/runtime.py
+### core_llm/runtime.py
 ```
 # plugins/core_llm/runtime.py
 
-import asyncio 
-from typing import Dict, Any, Optional
-from backend.core.interfaces import RuntimeInterface
-from backend.core.registry import runtime_registry 
-from backend.core.state import ExecutionContext
-from backend.llm.models import LLMResponse, LLMRequestFailedError
+from typing import Dict, Any
 
+# --- 核心修改: 导入路径修正 ---
+# 从平台契约导入 ExecutionContext
+from backend.core.contracts import ExecutionContext
+# 从 core_engine 插件导入接口定义
+from plugins.core_engine.interfaces import RuntimeInterface
+# 从本插件内部导入模型
+from .models import LLMResponse, LLMRequestFailedError
 
-
-@runtime_registry.register("llm.default")
+# --- 核心修改: 移除 @runtime_registry 装饰器 ---
 class LLMRuntime(RuntimeInterface):
     """
     一个轻量级的运行时，它通过 Hevno LLM Gateway 发起 LLM 调用。
-    它的职责是：
-    1. 从 config 中解析出调用意图（模型、prompt 等）。
-    2. 从上下文中获取 LLMService。
-    3. 调用 LLMService.request()。
-    4. 将结果（成功或失败）格式化为标准的节点输出。
     """
     async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
-        # ... (解析 config 的逻辑不变) ...
         model_name = config.get("model")
         prompt = config.get("prompt")
-        llm_params = {k: v for k, v in config.items() if k not in ["model", "prompt"]}
-
+        
         if not model_name:
             raise ValueError("LLMRuntime requires a 'model' field in its config (e.g., 'gemini/gemini-1.5-flash').")
         if not prompt:
             raise ValueError("LLMRuntime requires a 'prompt' field in its config.")
 
-        # 所有非'model'和'prompt'的键都作为额外参数传递
         llm_params = {k: v for k, v in config.items() if k not in ["model", "prompt"]}
 
-        # 2. 从共享上下文中获取 LLM Service
-        llm_service = context.shared.services.llm
+        llm_service = context.shared.services.resolve("llm_service")
 
         try:
-            # 3. 调用 Gateway
             response: LLMResponse = await llm_service.request(
                 model_name=model_name,
                 prompt=prompt,
                 **llm_params
             )
             
-            # 4. 处理成功或过滤的响应
             if response.error_details:
-                # 这是一个“软失败”，比如内容过滤
                 return {
                     "error": response.error_details.message,
                     "error_type": response.error_details.error_type.value,
@@ -1298,16 +971,13 @@ class LLMRuntime(RuntimeInterface):
             }
 
         except LLMRequestFailedError as e:
-            # 5. 处理硬失败（所有重试都用尽后）
-            print(f"ERROR: LLM request failed for node after all retries. Error: {e}")
             return {
                 "error": str(e),
                 "details": e.last_error.model_dump() if e.last_error else None
             }
-
 ```
 
-### plugins/core_llm/manifest.json
+### core_llm/manifest.json
 ```
 {
     "name": "core-llm",
@@ -1319,12 +989,13 @@ class LLMRuntime(RuntimeInterface):
 }
 ```
 
-### plugins/core_llm/reporters.py
+### core_llm/reporters.py
 ```
 # plugins/core_llm/reporters.py
-from typing import Any, Dict
-from backend.core.reporting import Reportable
-from plugins.core_llm.registry import provider_registry
+from typing import Any
+from plugins.core_api.auditor import Reportable 
+from .registry import provider_registry
+
 
 class LLMProviderReporter(Reportable):
     
@@ -1345,7 +1016,7 @@ class LLMProviderReporter(Reportable):
         return sorted(manifest, key=lambda x: x['name'])
 ```
 
-### plugins/core_llm/manager.py
+### core_llm/manager.py
 ```
 # plugins/core_llm/manager.py
 
@@ -1534,64 +1205,63 @@ class KeyPoolManager:
             await pool.mark_as_banned(key_string)
 ```
 
-### plugins/core_api/__init__.py
+### core_api/__init__.py
 ```
 # plugins/core_api/__init__.py
+
 import logging
+from typing import List
+from fastapi import APIRouter
 
 from backend.core.contracts import Container, HookManager
-from .auditor import Auditor, AuditorRegistry, Reportable # 从本地导入
+from .auditor import Auditor
 from .base_router import router as base_router
 from .sandbox_router import router as sandbox_router
 
 logger = logging.getLogger(__name__)
 
-# --- 服务工厂 ---
+# --- 服务工厂 (Service Factories) ---
 def _create_auditor(container: Container) -> Auditor:
     """工厂：创建并配置 Auditor 服务。"""
-    # 1. 创建注册表
-    registry = AuditorRegistry()
+    hook_manager = container.resolve("hook_manager")
+    
+    # 异步任务，用于通过钩子收集所有报告器
+    async def collect_reporters_task() -> List:
+        logger.debug("Triggering 'collect_reporters' hook to discover reporters...")
+        reporters = await hook_manager.filter("collect_reporters", [])
+        logger.info(f"Discovered {len(reporters)} reporter(s).")
+        return reporters
 
-    # 2. 【关键】从容器中解析所有被标记为“reportable”的服务或组件
-    #    这是一个高级 DI 模式，但我们可以先用一个简单的方式实现。
-    #    目前，我们手动注册已知的报告器。
-    #    TODO: 实现一个自动发现机制
+    # 在同步工厂中运行异步任务
+    import asyncio
+    reporters_list = asyncio.run(collect_reporters_task())
     
-    # 手动从其他插件解析并注册报告器
-    # (这会隐式地创建对这些服务的依赖)
-    # runtime_reporter = container.resolve("runtime_reporter") 
-    # llm_reporter = container.resolve("llm_reporter")
-    # sandbox_stats_reporter = container.resolve("sandbox_stats_reporter")
-    
-    # registry.register(runtime_reporter)
-    # registry.register(llm_reporter)
-    # registry.register(sandbox_stats_reporter)
-    
-    return Auditor(registry)
+    return Auditor(reporters_list)
 
-# --- 钩子实现 ---
-async def add_own_routers(routers: list) -> list:
+# --- 钩子实现 (Hook Implementations) ---
+async def provide_own_routers(routers: List[APIRouter]) -> List[APIRouter]:
     """钩子实现：将本插件的路由添加到收集中。"""
     routers.append(base_router)
     routers.append(sandbox_router)
     logger.debug("Provided base_router and sandbox_router to the application.")
     return routers
 
+# --- 主注册函数 (Main Registration Function) ---
 def register_plugin(container: Container, hook_manager: HookManager):
+    """这是 core_api 插件的注册入口。"""
     logger.info("--> 正在注册 [core-api] 插件...")
 
     # 1. 注册服务
-    container.register("auditor", _create_auditor)
+    container.register("auditor", _create_auditor, singleton=True)
     logger.debug("服务 'auditor' 已注册。")
 
     # 2. 注册钩子实现
     # 这个插件既是 API 路由的提供者，也是收集者。
-    # 它自己的 add_own_routers 应该在所有其他插件之后运行，
-    # 以便它能首先添加自己的基础路由。
+    # 它的钩子实现应该有较高的优先级，以确保基础路由被优先考虑。
     hook_manager.add_implementation(
         "collect_api_routers", 
-        add_own_routers, 
-        priority=100, # 较高优先级，最后添加
+        provide_own_routers, 
+        priority=10, # 较低的优先级数字意味着先执行
         plugin_name="core-api"
     )
     logger.debug("钩子实现 'collect_api_routers' (for self) 已注册。")
@@ -1599,7 +1269,117 @@ def register_plugin(container: Container, hook_manager: HookManager):
     logger.info("插件 [core-api] 注册成功。")
 ```
 
-### plugins/core_api/manifest.json
+### core_api/sandbox_router.py
+```
+# plugins/core_api/sandbox_router.py
+
+from typing import Dict, Any, List, Optional
+from uuid import UUID
+from pydantic import BaseModel, Field
+
+from fastapi import APIRouter, Body, Depends, HTTPException
+
+# 从平台核心契约导入数据模型
+from backend.core.contracts import Sandbox, StateSnapshot, GraphCollection
+
+# 从本插件的依赖注入文件中导入 "getters"
+from .dependencies import get_sandbox_store, get_snapshot_store, get_engine
+
+# 从 core_engine 插件导入其服务/类
+from plugins.core_engine.engine import ExecutionEngine
+from plugins.core_engine.state import SnapshotStore
+
+router = APIRouter(prefix="/api/sandboxes", tags=["Sandboxes"])
+
+# --- Request/Response Models ---
+class CreateSandboxRequest(BaseModel):
+    name: str = Field(..., description="The human-readable name for the sandbox.")
+    graph_collection: GraphCollection
+    initial_state: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+# --- API Endpoints ---
+@router.post("", response_model=Sandbox, status_code=201)
+async def create_sandbox(
+    request_body: CreateSandboxRequest, 
+    sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
+    snapshot_store: SnapshotStore = Depends(get_snapshot_store)
+):
+    """创建一个新的沙盒并生成其初始（创世）快照。"""
+    sandbox = Sandbox(name=request_body.name)
+    
+    if sandbox.id in sandbox_store:
+        raise HTTPException(status_code=409, detail=f"Sandbox with ID {sandbox.id} already exists.")
+
+    genesis_snapshot = StateSnapshot(
+        sandbox_id=sandbox.id,
+        graph_collection=request_body.graph_collection,
+        world_state=request_body.initial_state or {}
+    )
+    snapshot_store.save(genesis_snapshot)
+    
+    sandbox.head_snapshot_id = genesis_snapshot.id
+    sandbox_store[sandbox.id] = sandbox
+    
+    return sandbox
+
+@router.post("/{sandbox_id}/step", response_model=StateSnapshot)
+async def execute_sandbox_step(
+    sandbox_id: UUID, 
+    user_input: Dict[str, Any] = Body(...),
+    sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
+    snapshot_store: SnapshotStore = Depends(get_snapshot_store),
+    engine: ExecutionEngine = Depends(get_engine)
+):
+    """在沙盒的最新状态上执行一步计算。"""
+    sandbox = sandbox_store.get(sandbox_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Sandbox not found.")
+    
+    if not sandbox.head_snapshot_id:
+        raise HTTPException(status_code=409, detail="Sandbox has no initial state.")
+        
+    latest_snapshot = snapshot_store.get(sandbox.head_snapshot_id)
+    if not latest_snapshot:
+        raise HTTPException(status_code=500, detail=f"Data inconsistency: head snapshot '{sandbox.head_snapshot_id}' not found.")
+    
+    new_snapshot = await engine.step(latest_snapshot, user_input)
+    
+    snapshot_store.save(new_snapshot)
+    sandbox.head_snapshot_id = new_snapshot.id
+    
+    return new_snapshot
+
+@router.get("/{sandbox_id}/history", response_model=List[StateSnapshot])
+async def get_sandbox_history(
+    sandbox_id: UUID,
+    snapshot_store: SnapshotStore = Depends(get_snapshot_store)
+):
+    """获取一个沙盒的所有历史快照，按时间顺序排列。"""
+    # 无需检查沙盒是否存在，如果不存在，find_by_sandbox 将返回空列表
+    snapshots = snapshot_store.find_by_sandbox(sandbox_id)
+    return snapshots
+
+@router.put("/{sandbox_id}/revert", status_code=200)
+async def revert_sandbox_to_snapshot(
+    sandbox_id: UUID, 
+    snapshot_id: UUID,
+    sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
+    snapshot_store: SnapshotStore = Depends(get_snapshot_store)
+):
+    """将沙盒的状态回滚到指定的历史快照。"""
+    sandbox = sandbox_store.get(sandbox_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Sandbox not found.")
+
+    target_snapshot = snapshot_store.get(snapshot_id)
+    if not target_snapshot or target_snapshot.sandbox_id != sandbox.id:
+        raise HTTPException(status_code=404, detail="Target snapshot not found or does not belong to this sandbox.")
+    
+    sandbox.head_snapshot_id = snapshot_id
+    return {"message": f"Sandbox '{sandbox.name}' successfully reverted to snapshot {snapshot_id}"}
+```
+
+### core_api/manifest.json
 ```
 {
     "name": "core-api",
@@ -1610,7 +1390,130 @@ def register_plugin(container: Container, hook_manager: HookManager):
 }
 ```
 
-### plugins/core_logging/logging_config.yaml
+### core_api/auditor.py
+```
+# plugins/core_api/auditor.py
+
+import asyncio
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List
+
+class Reportable(ABC):
+    """
+    一个统一的汇报协议 (契约)。
+    任何希望向系统提供状态或元数据的组件都应实现此接口。
+    """
+    @property
+    @abstractmethod
+    def report_key(self) -> str:
+        """返回此报告在最终JSON对象中的唯一键名。"""
+        pass
+
+    @property
+    def is_static(self) -> bool:
+        """指明此报告是否为静态（可缓存）。默认为 True。"""
+        return True
+
+    @abstractmethod
+    async def generate_report(self) -> Any:
+        """生成并返回报告内容。"""
+        pass
+
+class Auditor:
+    """
+    审阅官服务。负责从注册的 Reportable 实例中收集报告并聚合。
+    """
+    def __init__(self, reporters: List[Reportable]):
+        self._reporters = reporters
+        self._static_report_cache: Dict[str, Any] | None = None
+
+    async def generate_full_report(self) -> Dict[str, Any]:
+        """生成完整的系统报告。"""
+        full_report = {}
+
+        # 1. 处理静态报告 (带缓存)
+        if self._static_report_cache is None:
+            self._static_report_cache = await self._generate_static_reports()
+        full_report.update(self._static_report_cache)
+
+        # 2. 处理动态报告 (实时生成)
+        dynamic_reports = await self._generate_dynamic_reports()
+        full_report.update(dynamic_reports)
+
+        return full_report
+
+    async def _generate_reports_by_type(self, static: bool) -> Dict[str, Any]:
+        """根据报告类型（静态/动态）生成报告。"""
+        reports = {}
+        reportables_to_run = [r for r in self._reporters if r.is_static is static]
+        if not reportables_to_run:
+            return {}
+
+        tasks = [r.generate_report() for r in reportables_to_run]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for r, result in zip(reportables_to_run, results):
+            if isinstance(result, Exception):
+                reports[r.report_key] = {"error": f"Failed to generate report: {result}"}
+            else:
+                reports[r.report_key] = result
+        return reports
+
+    async def _generate_static_reports(self) -> Dict[str, Any]:
+        return await self._generate_reports_by_type(static=True)
+
+    async def _generate_dynamic_reports(self) -> Dict[str, Any]:
+        return await self._generate_reports_by_type(static=False)
+```
+
+### core_api/base_router.py
+```
+# plugins/core_api/base_router.py
+
+from fastapi import APIRouter, Depends
+from .dependencies import get_auditor
+from .auditor import Auditor
+
+router = APIRouter(prefix="/api", tags=["System"])
+
+@router.get("/system/report")
+async def get_system_report(auditor: Auditor = Depends(get_auditor)):
+    """获取完整的系统状态和元数据报告。"""
+    return await auditor.generate_full_report()
+```
+
+### core_api/dependencies.py
+```
+# plugins/core_api/dependencies.py
+
+from typing import Dict
+from uuid import UUID
+from fastapi import Request
+
+# 导入其他插件提供的服务或类
+from plugins.core_engine.engine import ExecutionEngine
+from plugins.core_engine.state import SnapshotStore
+
+# 导入平台核心的契约
+from backend.core.contracts import Sandbox
+
+# 注意：我们不直接导入 `Auditor`，因为 `get_auditor` 可以通过容器解析
+# from .auditor import Auditor
+
+def get_engine(request: Request) -> ExecutionEngine:
+    return request.app.state.container.resolve("execution_engine")
+
+def get_snapshot_store(request: Request) -> SnapshotStore:
+    return request.app.state.container.resolve("snapshot_store")
+
+def get_sandbox_store(request: Request) -> Dict[UUID, Sandbox]:
+    return request.app.state.container.resolve("sandbox_store")
+
+def get_auditor(request: Request): # -> Auditor
+    return request.app.state.container.resolve("auditor")
+```
+
+### core_logging/logging_config.yaml
 ```
 version: 1
 
@@ -1653,7 +1556,7 @@ loggers:
     level: INFO
 ```
 
-### plugins/core_logging/__init__.py
+### core_logging/__init__.py
 ```
 # plugins/core_logging/__init__.py
 import os
@@ -1688,7 +1591,7 @@ def register_plugin(container: Container, hook_manager: HookManager):
     logger.info("插件 [core-logging] 注册成功。")
 ```
 
-### plugins/core_logging/manifest.json
+### core_logging/manifest.json
 ```
 {
     "name": "core-logging",
@@ -1699,7 +1602,7 @@ def register_plugin(container: Container, hook_manager: HookManager):
 }
 ```
 
-### plugins/core_persistence/service.py
+### core_persistence/service.py
 ```
 # plugins/core_persistence/service.py
 
@@ -1798,7 +1701,7 @@ class PersistenceService:
         return manifest, data_files
 ```
 
-### plugins/core_persistence/models.py
+### core_persistence/models.py
 ```
 # plugins/core_persistence/models.py
 
@@ -1839,7 +1742,7 @@ class PackageManifest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 ```
 
-### plugins/core_persistence/__init__.py
+### core_persistence/__init__.py
 ```
 # plugins/core_persistence/__init__.py
 import os
@@ -1878,7 +1781,7 @@ def register_plugin(container: Container, hook_manager: HookManager):
     logger.info("插件 [core-persistence] 注册成功。")
 ```
 
-### plugins/core_persistence/api.py
+### core_persistence/api.py
 ```
 # plugins/core_persistence/api.py
 
@@ -1936,7 +1839,7 @@ async def import_package(
         raise HTTPException(status_code=400, detail=str(e))
 ```
 
-### plugins/core_persistence/manifest.json
+### core_persistence/manifest.json
 ```
 {
     "name": "core-persistence",
@@ -1947,27 +1850,31 @@ async def import_package(
 }
 ```
 
-### plugins/core_codex/invoke_runtime.py
+### core_codex/invoke_runtime.py
 ```
 # plugins/core_codex/invoke_runtime.py
+
 import asyncio
+import logging
 import re
 from typing import Dict, Any, List, Optional, Set
-import pprint  # 导入 pprint 以便美观地打印字典
 
 from pydantic import ValidationError
 
-from backend.core.interfaces import RuntimeInterface
-from backend.core.state import ExecutionContext
-from backend.core.evaluation import evaluate_data, build_evaluation_context
-from backend.core.utils import DotAccessibleDict
-from backend.core.registry import runtime_registry
+# 从 core_engine 插件导入接口和组件
+from plugins.core_engine.interfaces import RuntimeInterface
+from plugins.core_engine.evaluation import evaluate_data, build_evaluation_context
+from plugins.core_engine.utils import DotAccessibleDict
 
-from .models import CodexCollection, ActivatedEntry
+# 从平台核心导入数据契约
+from backend.core.contracts import ExecutionContext
 
-from .models import TriggerMode
+# 从本插件内部导入模型
+from .models import CodexCollection, ActivatedEntry, TriggerMode
 
-@runtime_registry.register("system.invoke")
+logger = logging.getLogger(__name__)
+
+
 class InvokeRuntime(RuntimeInterface):
     """
     system.invoke 运行时的实现。
@@ -1980,6 +1887,9 @@ class InvokeRuntime(RuntimeInterface):
     ) -> Dict[str, Any]:
         # --- 0. 准备工作 ---
         from_sources = config.get("from", [])
+        if not from_sources:
+            return {"output": ""}
+
         recursion_enabled = config.get("recursion_enabled", False)
         debug_mode = config.get("debug", False)
         lock = context.shared.global_write_lock
@@ -1995,15 +1905,18 @@ class InvokeRuntime(RuntimeInterface):
         rejected_entries_trace = []
         initial_activation_trace = []
         
+        # 宏求值的上下文只需要创建一次
         structural_eval_context = build_evaluation_context(context)
 
         for source_config in from_sources:
             codex_name = source_config.get("codex")
-            if not codex_name: continue
+            if not codex_name: 
+                continue
             
             codex_model = codex_collection.get(codex_name)
             if not codex_model:
-                raise ValueError(f"Codex '{codex_name}' not found in world.codices.")
+                logger.warning(f"Codex '{codex_name}' referenced in invoke config not found in world.codices.")
+                continue
 
             source_text_macro = source_config.get("source", "")
             source_text = await evaluate_data(source_text_macro, structural_eval_context, lock) if source_text_macro else ""
@@ -2011,7 +1924,8 @@ class InvokeRuntime(RuntimeInterface):
             for entry in codex_model.entries:
                 is_enabled = await evaluate_data(entry.is_enabled, structural_eval_context, lock)
                 if not is_enabled:
-                    rejected_entries_trace.append({"id": entry.id, "reason": "is_enabled macro returned false"})
+                    if debug_mode:
+                        rejected_entries_trace.append({"id": entry.id, "reason": "is_enabled macro returned false"})
                     continue
 
                 keywords = await evaluate_data(entry.keywords, structural_eval_context, lock)
@@ -2023,7 +1937,8 @@ class InvokeRuntime(RuntimeInterface):
                     is_activated = True
                 elif entry.trigger_mode == TriggerMode.ON_KEYWORD and source_text and keywords:
                     for keyword in keywords:
-                        if re.search(re.escape(str(keyword)), source_text, re.IGNORECASE):
+                        # 确保 keyword 是字符串以进行正则匹配
+                        if re.search(re.escape(str(keyword)), str(source_text), re.IGNORECASE):
                             matched_keywords.append(keyword)
                     if matched_keywords:
                         is_activated = True
@@ -2032,59 +1947,67 @@ class InvokeRuntime(RuntimeInterface):
                     activated = ActivatedEntry(
                         entry_model=entry, codex_name=codex_name, codex_config=codex_model.config,
                         priority_val=int(priority), keywords_val=keywords, is_enabled_val=bool(is_enabled),
-                        source_text=source_text, matched_keywords=matched_keywords
+                        source_text=str(source_text), matched_keywords=matched_keywords
                     )
                     initial_pool.append(activated)
-                    initial_activation_trace.append({
-                        "id": entry.id, "priority": int(priority),
-                        "reason": entry.trigger_mode.value,
-                        "matched_keywords": matched_keywords
-                    })
+                    if debug_mode:
+                        initial_activation_trace.append({
+                            "id": entry.id, "priority": int(priority),
+                            "reason": entry.trigger_mode.value,
+                            "matched_keywords": matched_keywords
+                        })
         
         # --- 2. 阶段二：渲染与注入 (Content Evaluation) ---
         final_text_parts = []
         rendered_entry_ids: Set[str] = set()
         rendering_pool = sorted(initial_pool, key=lambda x: x.priority_val, reverse=True)
+        
+        # Debugging trace lists
         evaluation_log = []
         recursive_activations = []
 
-        recursion_depth_counter = 0
+        # 确定最大递归深度
         max_depth = max((act.codex_config.recursion_depth for act in rendering_pool), default=3) if rendering_pool else 3
 
-        loop_count = 0
-        while rendering_pool and (not recursion_enabled or recursion_depth_counter < max_depth):
-            loop_count += 1
-            rendering_pool.sort(key=lambda x: x.priority_val, reverse=True)
+        recursion_level = 0
+        while rendering_pool and (not recursion_enabled or recursion_level < max_depth):
             
+            rendering_pool.sort(key=lambda x: x.priority_val, reverse=True)
             entry_to_render = rendering_pool.pop(0)
 
             if entry_to_render.entry_model.id in rendered_entry_ids:
                 continue
-
+            
+            # 为内容求值创建上下文，包含特殊的 'trigger' 对象
             content_eval_context = build_evaluation_context(context)
             content_eval_context['trigger'] = DotAccessibleDict({
                 "source_text": entry_to_render.source_text,
                 "matched_keywords": entry_to_render.matched_keywords
             })
 
-            rendered_content = await evaluate_data(entry_to_render.entry_model.content, content_eval_context, lock)
+            rendered_content = str(await evaluate_data(entry_to_render.entry_model.content, content_eval_context, lock))
             
-            final_text_parts.append(str(rendered_content))
+            final_text_parts.append(rendered_content)
             rendered_entry_ids.add(entry_to_render.entry_model.id)
-            evaluation_log.append({"id": entry_to_render.entry_model.id, "status": "rendered"})
+            if debug_mode:
+                evaluation_log.append({"id": entry_to_render.entry_model.id, "status": "rendered", "level": recursion_level})
             
             if recursion_enabled:
-                recursion_depth_counter += 1
-                new_source_text = str(rendered_content)
+                recursion_level += 1
+                new_source_text = rendered_content
                 
+                # 遍历所有法典，寻找可被新内容递归触发的条目
                 for codex_name, codex_model in codex_collection.items():
                     for entry in codex_model.entries:
+                        # 跳过已处理或已在队列中的条目
                         if entry.id in rendered_entry_ids or any(p.entry_model.id == entry.id for p in rendering_pool):
                             continue
                         
+                        # 递归只对关键词模式有效
                         if entry.trigger_mode == TriggerMode.ON_KEYWORD:
                             is_enabled = await evaluate_data(entry.is_enabled, structural_eval_context, lock)
-                            if not is_enabled: continue
+                            if not is_enabled: 
+                                continue
 
                             keywords = await evaluate_data(entry.keywords, structural_eval_context, lock)
                             new_matched_keywords = [kw for kw in keywords if re.search(re.escape(str(kw)), new_source_text, re.IGNORECASE)]
@@ -2097,10 +2020,11 @@ class InvokeRuntime(RuntimeInterface):
                                     source_text=new_source_text, matched_keywords=new_matched_keywords
                                 )
                                 rendering_pool.append(activated)
-                                recursive_activations.append({
-                                    "id": entry.id, "priority": int(priority),
-                                    "reason": "recursive_keyword_match", "triggered_by": entry_to_render.entry_model.id
-                                })
+                                if debug_mode:
+                                    recursive_activations.append({
+                                        "id": entry.id, "priority": int(priority), "level": recursion_level,
+                                        "reason": "recursive_keyword_match", "triggered_by": entry_to_render.entry_model.id
+                                    })
         
         # --- 3. 构造输出 ---
         final_text = "\n\n".join(final_text_parts)
@@ -2112,18 +2036,12 @@ class InvokeRuntime(RuntimeInterface):
                 "evaluation_log": evaluation_log,
                 "rejected_entries": rejected_entries_trace,
             }
-            return {
-                "output": {
-                    "final_text": final_text,
-                    "trace": trace_data
-                }
-            }
+            return { "output": { "final_text": final_text, "trace": trace_data } }
         
         return {"output": final_text}
-
 ```
 
-### plugins/core_codex/models.py
+### core_codex/models.py
 ```
 # plugins/core_codex/models.py
 from enum import Enum
@@ -2185,7 +2103,7 @@ class ActivatedEntry(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 ```
 
-### plugins/core_codex/__init__.py
+### core_codex/__init__.py
 ```
 # plugins/core_codex/__init__.py
 import logging
@@ -2218,7 +2136,7 @@ def register_plugin(container: Container, hook_manager: HookManager):
     logger.info("插件 [core-codex] 注册成功。")
 ```
 
-### plugins/core_codex/manifest.json
+### core_codex/manifest.json
 ```
 {
     "name": "core-codex",
@@ -2230,7 +2148,7 @@ def register_plugin(container: Container, hook_manager: HookManager):
 }
 ```
 
-### plugins/core_engine/interfaces.py
+### core_engine/interfaces.py
 ```
 # plugins/core_engine/interfaces.py
 
@@ -2265,7 +2183,7 @@ class RuntimeInterface(ABC):
         pass
 ```
 
-### plugins/core_engine/models.py
+### core_engine/models.py
 ```
 # plugins/core_engine/models.py
 from pydantic import BaseModel, Field, RootModel, field_validator
@@ -2317,54 +2235,62 @@ class GraphCollection(RootModel[Dict[str, GraphDefinition]]):
         return v
 ```
 
-### plugins/core_engine/registry.py
+### core_engine/registry.py
 ```
 # plugins/core_engine/registry.py
+
 from typing import Dict, Type, Callable
-from backend.core.interfaces import RuntimeInterface
+import logging
+
+# --- 核心修改: 导入路径本地化 ---
+from .interfaces import RuntimeInterface
+
+logger = logging.getLogger(__name__)
 
 class RuntimeRegistry:
     def __init__(self):
         self._registry: Dict[str, Type[RuntimeInterface]] = {}
 
-    def register(self, name: str) -> Callable[[Type[RuntimeInterface]], Type[RuntimeInterface]]:
+    # --- 核心修改: 这是一个常规方法，不再是装饰器工厂 ---
+    def register(self, name: str, runtime_class: Type[RuntimeInterface]):
         """
-        一个可以作为装饰器使用的注册方法。
-        用法:
-        @runtime_registry.register("system.input")
-        class InputRuntime(RuntimeInterface):
-            ...
+        向注册表注册一个运行时类。
         """
-        def decorator(runtime_class: Type[RuntimeInterface]) -> Type[RuntimeInterface]:
-            if name in self._registry:
-                print(f"Warning: Overwriting runtime registration for '{name}'.")
-            self._registry[name] = runtime_class
-            print(f"Runtime '{name}' registered via decorator.")
-            return runtime_class
-        return decorator
+        if name in self._registry:
+            logger.warning(f"Overwriting runtime registration for '{name}'.")
+        self._registry[name] = runtime_class
+        logger.debug(f"Runtime '{name}' registered to the registry.")
 
     def get_runtime(self, name: str) -> RuntimeInterface:
+        """
+        获取一个运行时的【新实例】。
+        """
         runtime_class = self._registry.get(name)
         if runtime_class is None:
-            raise ValueError(f"Runtime '{name}' not found.")
+            raise ValueError(f"Runtime '{name}' not found in registry.")
         return runtime_class()
 
-# 全局单例
-runtime_registry = RuntimeRegistry()
+
 ```
 
-### plugins/core_engine/evaluation.py
+### core_engine/evaluation.py
 ```
 # plugins/core_engine/evaluation.py
+
 import ast
 import asyncio
 import re
 from typing import Any, Dict, List, Optional   
 from functools import partial
-from backend.core.utils import DotAccessibleDict
-from backend.core.state import ExecutionContext # 显式导入
+import random
+import math
+import datetime
+import json
+import re as re_module
 
-# 预编译宏的正则表达式和预置模块保持不变...
+from .utils import DotAccessibleDict
+from backend.core.contracts import ExecutionContext
+
 INLINE_MACRO_REGEX = re.compile(r"{{\s*(.+?)\s*}}", re.DOTALL)
 MACRO_REGEX = re.compile(r"^{{\s*(.+)\s*}}$", re.DOTALL)
 import random
@@ -2491,30 +2417,39 @@ async def evaluate_data(data: Any, eval_context: Dict[str, Any], lock: asyncio.L
     return data
 ```
 
-### plugins/core_engine/__init__.py
+### core_engine/__init__.py
 ```
 # plugins/core_engine/__init__.py
-import logging
-from typing import Dict, Any
 
+import logging
+import asyncio
+from typing import Dict, Type
+
+# 从平台核心导入接口和类型
 from backend.core.contracts import Container, HookManager
 
-# 导入本插件提供的服务和组件
+# 导入本插件内部的组件
 from .engine import ExecutionEngine
 from .registry import RuntimeRegistry
 from .state import SnapshotStore
+from .interfaces import RuntimeInterface # 导入接口定义
+
+# 导入本插件自带的运行时实现
 from .runtimes.base_runtimes import InputRuntime, SetWorldVariableRuntime
 from .runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
 
 logger = logging.getLogger(__name__)
 
-# --- 服务工厂 ---
-def _create_runtime_registry(container: Container, hook_manager: HookManager) -> RuntimeRegistry:
+# --- 服务工厂 (Service Factories) ---
+
+def _create_runtime_registry(container: Container) -> RuntimeRegistry:
     """工厂：创建并填充运行时注册表。"""
+    hook_manager = container.resolve("hook_manager")
     registry = RuntimeRegistry()
-    
-    # 1. 注册本插件内置的运行时
-    base_runtimes = {
+    logger.debug("RuntimeRegistry instance created.")
+
+    # 1. 注册本插件内置的基础运行时
+    base_runtimes: Dict[str, Type[RuntimeInterface]] = {
         "system.input": InputRuntime,
         "system.set_world_var": SetWorldVariableRuntime,
         "system.execute": ExecuteRuntime,
@@ -2522,78 +2457,79 @@ def _create_runtime_registry(container: Container, hook_manager: HookManager) ->
         "system.map": MapRuntime,
     }
     for name, runtime_class in base_runtimes.items():
-        registry.register(name)(runtime_class) # 使用装饰器模式注册
+        registry.register(name, runtime_class)
+    logger.info(f"Registered {len(base_runtimes)} built-in system runtimes.")
 
-    # 2. 【关键】通过钩子，从其他插件收集运行时
-    # 注意：这是一个同步的包装器，用于在异步钩子之上
-    async def collect_runtimes_task():
+    # 2. 通过钩子，从其他插件收集并注册运行时
+    async def collect_and_register_runtimes():
+        logger.debug("Triggering 'collect_runtimes' hook to discover external runtimes...")
         # 初始字典为空，让钩子实现去填充
-        other_runtimes = await hook_manager.filter("collect_runtimes", {})
-        for name, runtime_class in other_runtimes.items():
-             registry.register(name)(runtime_class)
+        external_runtimes: Dict[str, Type[RuntimeInterface]] = await hook_manager.filter("collect_runtimes", {})
+        
+        if not external_runtimes:
+            logger.info("No external runtimes discovered from other plugins.")
+            return
+
+        logger.info(f"Discovered {len(external_runtimes)} external runtime(s): {list(external_runtimes.keys())}")
+        for name, runtime_class in external_runtimes.items():
+            registry.register(name, runtime_class)
     
-    # 在工厂方法中运行这个一次性的异步任务
-    import asyncio
-    asyncio.run(collect_runtimes_task())
+    # 在同步工厂中运行这个一次性的异步任务
+    asyncio.run(collect_and_register_runtimes())
     
     return registry
 
 def _create_execution_engine(container: Container) -> ExecutionEngine:
-    """工厂：创建执行引擎，并注入其依赖。"""
-    # 从容器中解析它需要的服务
+    """工厂：创建执行引擎，并注入其所有依赖。"""
+    logger.debug("Creating ExecutionEngine instance...")
+    
+    # 从容器中解析它需要的所有服务
     runtime_registry = container.resolve("runtime_registry")
-    llm_service = container.resolve("llm_service") # 从 core-llm 插件获取
     hook_manager = container.resolve("hook_manager") # 从平台核心获取
 
-    # 组装 services 字典
-    services = {
-        "llm": llm_service
-    }
-    
+    # 不要传递一个解析好的字典，而是传递整个容器实例。
+    # 引擎的构造函数也需要相应地调整。
     return ExecutionEngine(
         registry=runtime_registry,
-        services=services,
+        container=container,  # 传递容器本身
         hook_manager=hook_manager
     )
 
-# --- 主注册函数 ---
+# --- 主注册函数 (Main Registration Function) ---
 def register_plugin(container: Container, hook_manager: HookManager):
+    """这是 core_engine 插件的注册入口。"""
     logger.info("--> 正在注册 [core-engine] 插件...")
 
-    # 注册核心服务到 DI 容器
-    # 注意它们的依赖关系，容器会自动处理
-    container.register("snapshot_store", lambda: SnapshotStore())
-    container.register("sandbox_store", lambda: {}) # 简单的字典存储
+    # 注册核心服务到 DI 容器。容器会根据依赖关系自动处理实例化顺序。
+    container.register("snapshot_store", lambda: SnapshotStore(), singleton=True)
+    container.register("sandbox_store", lambda: {}, singleton=True) # 简单的内存字典存储
     
-    # 将 hook_manager 也注册到容器，方便工厂函数访问
-    container.register("hook_manager", lambda: hook_manager)
-    
-    container.register("runtime_registry", 
-        lambda c: _create_runtime_registry(c, hook_manager))
-        
-    container.register("execution_engine", _create_execution_engine)
+    container.register("runtime_registry", _create_runtime_registry, singleton=True)
+    container.register("execution_engine", _create_execution_engine, singleton=True)
     
     logger.info("插件 [core-engine] 注册成功。")
 ```
 
-### plugins/core_engine/base_runtimes.py
+### core_engine/base_runtimes.py
 ```
-# plugins/core_engine/base_runtimes.py
-import asyncio 
-from typing import Dict, Any, Optional
-from backend.core.interfaces import RuntimeInterface
-from backend.core.registry import runtime_registry 
-from backend.core.state import ExecutionContext
-from backend.llm.models import LLMResponse, LLMRequestFailedError
+# plugins/core_engine/runtimes/base_runtimes.py
 
-@runtime_registry.register("system.input") 
+import logging
+from typing import Dict, Any
+
+
+from ..interfaces import RuntimeInterface
+from backend.core.contracts import ExecutionContext
+
+logger = logging.getLogger(__name__)
+
+
 class InputRuntime(RuntimeInterface):
     """从 config 中获取 'value'。"""
     async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
         return {"output": config.get("value", "")}
 
 
-@runtime_registry.register("system.set_world_var")
 class SetWorldVariableRuntime(RuntimeInterface):
     """从 config 中获取变量名和值，并设置一个持久化的世界变量。"""
     async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
@@ -2603,34 +2539,26 @@ class SetWorldVariableRuntime(RuntimeInterface):
         if not variable_name:
             raise ValueError("SetWorldVariableRuntime requires 'variable_name' in its config.")
         
-        # === LOGGING START ===
-        print(f"\n--- [RUNTIME set_world_var] Setting '{variable_name}' to: {value_to_set}")
-        print(f"--- [RUNTIME set_world_var] world_state before: {context.shared.world_state}")
-        # === LOGGING END ===
-        
+        logger.debug(f"Setting world_state['{variable_name}'] to: {value_to_set}")
         context.shared.world_state[variable_name] = value_to_set
-        
-        # === LOGGING START ===
-        print(f"--- [RUNTIME set_world_var] world_state after: {context.shared.world_state}\n")
-        # === LOGGING END ===
         
         return {}
 ```
 
-### plugins/core_engine/control_runtimes.py
+### core_engine/control_runtimes.py
 ```
-# plugins/core_engine/control_runtimes.py
-import asyncio
+# plugins/core_engine/runtimes/control_runtimes.py
+
 from typing import Dict, Any, List, Optional
+import asyncio
 
-from backend.core.interfaces import RuntimeInterface, SubGraphRunner # <-- 从新位置导入
-# 导入所有需要的核心组件
-from backend.core.evaluation import evaluate_data, evaluate_expression, build_evaluation_context
-from backend.core.state import ExecutionContext
-from backend.core.utils import DotAccessibleDict
-from backend.core.registry import runtime_registry
 
-@runtime_registry.register("system.execute")
+from ..interfaces import RuntimeInterface, SubGraphRunner
+from ..evaluation import evaluate_data, evaluate_expression, build_evaluation_context
+from ..utils import DotAccessibleDict
+from backend.core.contracts import ExecutionContext
+
+
 class ExecuteRuntime(RuntimeInterface):
     """
     一个特殊的运行时，用于二次执行代码。
@@ -2648,7 +2576,7 @@ class ExecuteRuntime(RuntimeInterface):
         result = await evaluate_expression(code_to_execute, eval_context, lock)
         return {"output": result}
 
-@runtime_registry.register("system.call")
+
 class CallRuntime(RuntimeInterface):
     """执行一个子图。"""
     async def execute(self, config: Dict[str, Any], context: ExecutionContext, subgraph_runner: Optional[SubGraphRunner] = None, **kwargs) -> Dict[str, Any]:
@@ -2672,7 +2600,7 @@ class CallRuntime(RuntimeInterface):
         
         return {"output": subgraph_results}
 
-@runtime_registry.register("system.map")
+
 class MapRuntime(RuntimeInterface):
     """并行迭代。"""
     template_fields = ["using", "collect"]
@@ -2736,37 +2664,36 @@ class MapRuntime(RuntimeInterface):
             return {"output": subgraph_results}
 ```
 
-### plugins/core_engine/engine.py
+### core_engine/engine.py
 ```
-# plugins/core_engine/engine.py
+# plugins/core_engine/engine.py 
 
 import asyncio
+import logging
 from enum import Enum, auto
 from typing import Dict, Any, Set, List, Optional
 from collections import defaultdict
-from fastapi import Request
 import traceback
 
-# --- 核心架构导入 ---
-from backend.core.models import GraphCollection, GraphDefinition, GenericNode
-from backend.core.dependency_parser import build_dependency_graph_async
-from backend.core.registry import RuntimeRegistry
-from backend.core.evaluation import build_evaluation_context, evaluate_data
-# 【核心修改】从新的位置导入
-from backend.core.contracts import ExecutionContext
-from backend.core.state import (
+from backend.core.contracts import (
+    GraphCollection, GraphDefinition, GenericNode, Container,
+    ExecutionContext,
+    EngineStepStartContext, EngineStepEndContext,
+    BeforeConfigEvaluationContext, AfterMacroEvaluationContext,
+    NodeExecutionStartContext, NodeExecutionSuccessContext, NodeExecutionErrorContext,
+    HookManager
+)
+from .dependency_parser import build_dependency_graph_async
+from .registry import RuntimeRegistry
+from .evaluation import build_evaluation_context, evaluate_data
+from .state import (
     create_main_execution_context, 
     create_sub_execution_context, 
     create_next_snapshot
 )
-from backend.core.hooks import HookManager
-# 【核心修改】从 contracts 导入上下文模型
-from backend.core.contracts import (
-    EngineStepStartContext, EngineStepEndContext,
-    BeforeConfigEvaluationContext, AfterMacroEvaluationContext,
-    NodeExecutionStartContext, NodeExecutionSuccessContext, NodeExecutionErrorContext
-)
-from backend.core.interfaces import RuntimeInterface, SubGraphRunner
+from .interfaces import RuntimeInterface, SubGraphRunner
+
+logger = logging.getLogger(__name__)
 
 class NodeState(Enum):
     PENDING = auto()
@@ -2854,12 +2781,12 @@ class ExecutionEngine(SubGraphRunner):
     def __init__(
         self,
         registry: RuntimeRegistry,
-        services: Dict[str, Any],
+        container: Container,
         hook_manager: HookManager,
         num_workers: int = 5
     ):
         self.registry = registry
-        self.services = services
+        self.container = container
         self.hook_manager = hook_manager
         self.num_workers = num_workers
         
@@ -2876,11 +2803,11 @@ class ExecutionEngine(SubGraphRunner):
         
         context = create_main_execution_context(
             snapshot=initial_snapshot,
-            services=self.services,
+            container=self.container,
             run_vars={"triggering_input": triggering_input},
             hook_manager=self.hook_manager
         )
-        
+
         main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
         if not main_graph_def: raise ValueError("'main' graph not found.")
         
@@ -3103,11 +3030,12 @@ def get_engine(request: Request) -> ExecutionEngine:
 
 ```
 
-### plugins/core_engine/utils.py
+### core_engine/utils.py
 ```
 # plugins/core_engine/utils.py
 
 from typing import Any, Dict
+from backend.core.contracts import Container
 
 class DotAccessibleDict:
     """
@@ -3183,9 +3111,63 @@ class DotAccessibleDict:
     
     def __setitem__(self, key, value):
         self._data[key] = value
+
+class ServiceResolverProxy:
+    """
+    一个代理类，它包装一个 DI 容器，使其表现得像一个字典。
+    这使得宏系统可以通过 `services.service_name` 语法懒加载并访问容器中的服务。
+    """
+    def __init__(self, container: Container):
+        """
+        :param container: 要代理的 DI 容器实例。
+        """
+        self._container = container
+        # 创建一个简单的缓存，避免对同一个单例服务重复调用 resolve
+        self._cache: dict = {}
+
+    def __getitem__(self, name: str):
+        """
+        这是核心魔法所在。当代码执行 `proxy['service_name']` 时，此方法被调用。
+        """
+        # 1. 检查缓存中是否已有该服务实例
+        if name in self._cache:
+            return self._cache[name]
+        
+        # 2. 如果不在缓存中，调用容器的 resolve 方法来创建或获取服务
+        #    如果服务不存在，container.resolve 会抛出 ValueError，这是我们期望的行为。
+        service_instance = self._container.resolve(name)
+        
+        # 3. 将解析出的服务实例存入缓存
+        self._cache[name] = service_instance
+        
+        # 4. 返回服务实例
+        return service_instance
+
+    def get(self, key: str, default=None):
+        """
+        实现 .get() 方法，使其行为与标准字典一致。
+        这对于某些工具（包括 DotAccessibleDict 的某些行为）来说很有用。
+        """
+        try:
+            return self.__getitem__(key)
+        except (ValueError, KeyError):
+            # 如果 resolve 失败（服务未注册），则返回默认值
+            return default
+
+    def keys(self):
+        """
+        (可选) 实现 .keys() 方法。
+        这可以让调试时（如 `list(services.keys())`）看到所有可用的服务。
+        """
+        # 直接返回容器中所有已注册工厂的名称
+        return self._container._factories.keys()
+    
+    def __contains__(self, key: str) -> bool:
+        """实现 `in` 操作符，例如 `if 'llm_service' in services:`"""
+        return key in self._container._factories
 ```
 
-### plugins/core_engine/manifest.json
+### core_engine/manifest.json
 ```
 {
     "name": "core-engine",
@@ -3196,7 +3178,7 @@ class DotAccessibleDict:
 }
 ```
 
-### plugins/core_engine/dependency_parser.py
+### core_engine/dependency_parser.py
 ```
 # plugins/core_engine/dependency_parser.py
 import re
@@ -3204,9 +3186,7 @@ from typing import Set, Dict, Any, List
 import asyncio
 
 
-from backend.core.hooks import HookManager
-from backend.core.contracts import ResolveNodeDependenciesContext
-from backend.core.models import GenericNode
+from backend.core.contracts import HookManager, ResolveNodeDependenciesContext, GenericNode
 
 
 NODE_DEP_REGEX = re.compile(r'nodes\.([a-zA-Z0-9_]+)')
@@ -3275,7 +3255,7 @@ async def build_dependency_graph_async(
     return dependency_map
 ```
 
-### plugins/core_engine/state.py
+### core_engine/state.py
 ```
 # plugins/core_engine/state.py
 
@@ -3288,17 +3268,17 @@ from typing import Dict, Any, List, Optional
 from fastapi import Request
 from pydantic import ValidationError
 
-# 【核心】所有数据模型和事件契约都从唯一的真实来源 'contracts.py' 导入
 from backend.core.contracts import (
     Sandbox, 
     StateSnapshot, 
     ExecutionContext, 
     SharedContext,
-    BeforeSnapshotCreateContext
+    BeforeSnapshotCreateContext,
+    GraphCollection,
+    HookManager,
+    Container
 )
-from backend.core.models import GraphCollection
-from backend.core.hooks import HookManager
-from backend.core.utils import DotAccessibleDict
+from .utils import DotAccessibleDict, ServiceResolverProxy 
 
 # --- Section 1: 状态存储类 (包含逻辑) ---
 
@@ -3332,7 +3312,7 @@ class SnapshotStore:
 
 def create_main_execution_context(
     snapshot: StateSnapshot, 
-    services: Dict[str, Any],
+    container: Container,
     hook_manager: HookManager, 
     run_vars: Dict[str, Any] = None
 ) -> ExecutionContext:
@@ -3343,7 +3323,16 @@ def create_main_execution_context(
             "turn_count": 0
         },
         global_write_lock=asyncio.Lock(),
-        services=DotAccessibleDict(services)
+        
+        # 关键步骤：
+        # 1. 创建 ServiceResolverProxy 实例，它包装了我们的容器。
+        # 2. 将这个代理实例传递给 DotAccessibleDict。
+        #
+        # 这样，`services` 字段就是一个 DotAccessibleDict，
+        # 当宏执行 `services.llm_service` 时，
+        # DotAccessibleDict 会调用 `proxy['llm_service']`，
+        # 进而触发 `ServiceResolverProxy` 去调用 `container.resolve('llm_service')`。
+        services=DotAccessibleDict(ServiceResolverProxy(container))
     )
     return ExecutionContext(
         shared=shared_context,
@@ -3411,12 +3400,12 @@ def get_snapshot_store(request: Request) -> SnapshotStore:
 
 ```
 
-### plugins/core_persistence/tests/conftest.py
+### core_persistence/tests/conftest.py
 ```
 
 ```
 
-### plugins/core_persistence/tests/test_service.py
+### core_persistence/tests/test_service.py
 ```
 # plugins/core_persistence/tests/test_service.py
 import pytest
@@ -3518,12 +3507,12 @@ def test_import_package(persistence_service: PersistenceService):
     assert data_files["sb.json"] == '{"name": "test"}'
 ```
 
-### plugins/core_persistence/tests/__init__.py
+### core_persistence/tests/__init__.py
 ```
 
 ```
 
-### plugins/core_persistence/tests/test_api.py
+### core_persistence/tests/test_api.py
 ```
 # plugins/core_persistence/tests/test_api.py
 import pytest
@@ -3606,31 +3595,31 @@ async def test_import_package_api_invalid_file(async_client):
     assert "missing 'manifest.json'" in response.json()['detail']
 ```
 
-### plugins/core_llm/providers/__init__.py
+### core_llm/providers/__init__.py
 ```
 
 ```
 
-### plugins/core_llm/providers/gemini.py
+### core_llm/providers/gemini.py
 ```
 # backend/llm/providers/gemini.py
 
-from typing import Dict, Any
-
+from typing import Any
 import google.generativeai as genai
 from google.api_core import exceptions as google_exceptions
 from google.generativeai import types as generation_types
 
-from backend.llm.providers.base import LLMProvider
-from backend.llm.models import (
+# --- 核心修改: 导入路径修正 ---
+from .base import LLMProvider
+from ..models import (
     LLMResponse,
     LLMError,
     LLMResponseStatus,
     LLMErrorType,
 )
-from backend.llm.registry import provider_registry
+from ..registry import provider_registry
 
-@provider_registry.register("gemini", key_env_var="GEMINI_API_KEYS")
+
 class GeminiProvider(LLMProvider):
     """
     针对 Google Gemini API 的 LLMProvider 实现。
@@ -3764,14 +3753,14 @@ class GeminiProvider(LLMProvider):
         )
 ```
 
-### plugins/core_llm/providers/base.py
+### core_llm/providers/base.py
 ```
 # backend/llm/providers/base.py
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any
 
-from backend.llm.models import LLMResponse, LLMError
+from ..models import LLMResponse, LLMError
 
 
 class LLMProvider(ABC):

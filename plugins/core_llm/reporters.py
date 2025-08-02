@@ -1,7 +1,8 @@
 # plugins/core_llm/reporters.py
-from typing import Any, Dict
-from backend.core.reporting import Reportable
-from plugins.core_llm.registry import provider_registry
+from typing import Any
+from plugins.core_api.auditor import Reportable 
+from .registry import provider_registry
+
 
 class LLMProviderReporter(Reportable):
     

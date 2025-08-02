@@ -96,8 +96,9 @@ def main(directories, output_file="code_collection.md"):
 
 if __name__ == "__main__":
     # Example usage: replace with your directory paths
-    # directory_paths = ["./backend", "./frontend"]  # Adjust these paths as needed
-    directory_paths = ["./"]
+    directory_paths = ["./backend", "./plugins"]  # Adjust these paths as needed
+    # directory_paths = ["./"]
+    # directory_paths = ["./plugins/core_codex"]
     output_path = "code_collection.md"
     result = main(directory_paths, output_path)
     print(result)

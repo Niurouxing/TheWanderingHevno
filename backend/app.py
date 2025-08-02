@@ -15,22 +15,25 @@ async def lifespan(app: FastAPI):
     container = Container()
     hook_manager = HookManager()
 
-    # 将核心服务实例注册到容器中，以便插件可以解析它们
     container.register("container", lambda: container)
     container.register("hook_manager", lambda: hook_manager)
 
     # 阶段一 & 二：发现、排序、注册
-    # 此时日志系统应该由 core-logging 插件配置完毕
     loader = PluginLoader(container, hook_manager)
     loader.load_plugins()
     
-    logger = logging.getLogger(__name__) # 此时日志已由插件配置
+    logger = logging.getLogger(__name__)
     logger.info("--- FastAPI Application Assembly ---")
 
-    # 将核心服务附加到 app.state，以便 API 依赖注入函数可以访问
     app.state.container = container
     app.state.hook_manager = hook_manager
     logger.info("Core services (Container, HookManager) attached to app.state.")
+
+    # 阶段 2.5: 异步服务初始化
+    # 触发一个钩子，允许需要异步操作（如数据库连接、异步收集依赖）的插件完成它们的设置。
+    logger.info("Triggering 'services_post_register' hook for async initializations...")
+    await hook_manager.trigger('services_post_register', container=container)
+    logger.info("Async service initialization complete.")
 
     # 阶段三：装配 API 路由 (通过钩子)
     logger.info("Triggering 'collect_api_routers' filter hook...")
@@ -44,7 +47,6 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("No API routers were collected from plugins.")
     
-    # 可以在此触发其他装配钩子，如 'initialize_services'
     await hook_manager.trigger('app_startup_complete', app=app, container=container)
     
     logger.info("--- Hevno Engine Ready ---")
@@ -62,10 +64,9 @@ def create_app() -> FastAPI:
         lifespan=lifespan
     )
 
-    # CORS 中间件可以保留
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"], # 生产中应使用具体域名
+        allow_origins=["*"], 
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

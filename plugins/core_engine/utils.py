@@ -1,6 +1,7 @@
 # plugins/core_engine/utils.py
 
 from typing import Any, Dict
+from backend.core.contracts import Container
 
 class DotAccessibleDict:
     """
@@ -76,3 +77,57 @@ class DotAccessibleDict:
     
     def __setitem__(self, key, value):
         self._data[key] = value
+
+class ServiceResolverProxy:
+    """
+    一个代理类，它包装一个 DI 容器，使其表现得像一个字典。
+    这使得宏系统可以通过 `services.service_name` 语法懒加载并访问容器中的服务。
+    """
+    def __init__(self, container: Container):
+        """
+        :param container: 要代理的 DI 容器实例。
+        """
+        self._container = container
+        # 创建一个简单的缓存，避免对同一个单例服务重复调用 resolve
+        self._cache: dict = {}
+
+    def __getitem__(self, name: str):
+        """
+        这是核心魔法所在。当代码执行 `proxy['service_name']` 时，此方法被调用。
+        """
+        # 1. 检查缓存中是否已有该服务实例
+        if name in self._cache:
+            return self._cache[name]
+        
+        # 2. 如果不在缓存中，调用容器的 resolve 方法来创建或获取服务
+        #    如果服务不存在，container.resolve 会抛出 ValueError，这是我们期望的行为。
+        service_instance = self._container.resolve(name)
+        
+        # 3. 将解析出的服务实例存入缓存
+        self._cache[name] = service_instance
+        
+        # 4. 返回服务实例
+        return service_instance
+
+    def get(self, key: str, default=None):
+        """
+        实现 .get() 方法，使其行为与标准字典一致。
+        这对于某些工具（包括 DotAccessibleDict 的某些行为）来说很有用。
+        """
+        try:
+            return self.__getitem__(key)
+        except (ValueError, KeyError):
+            # 如果 resolve 失败（服务未注册），则返回默认值
+            return default
+
+    def keys(self):
+        """
+        (可选) 实现 .keys() 方法。
+        这可以让调试时（如 `list(services.keys())`）看到所有可用的服务。
+        """
+        # 直接返回容器中所有已注册工厂的名称
+        return self._container._factories.keys()
+    
+    def __contains__(self, key: str) -> bool:
+        """实现 `in` 操作符，例如 `if 'llm_service' in services:`"""
+        return key in self._container._factories

@@ -1,13 +1,19 @@
 # plugins/core_engine/evaluation.py
+
 import ast
 import asyncio
 import re
 from typing import Any, Dict, List, Optional   
 from functools import partial
-from backend.core.utils import DotAccessibleDict
-from backend.core.state import ExecutionContext # 显式导入
+import random
+import math
+import datetime
+import json
+import re as re_module
 
-# 预编译宏的正则表达式和预置模块保持不变...
+from .utils import DotAccessibleDict
+from backend.core.contracts import ExecutionContext
+
 INLINE_MACRO_REGEX = re.compile(r"{{\s*(.+?)\s*}}", re.DOTALL)
 MACRO_REGEX = re.compile(r"^{{\s*(.+)\s*}}$", re.DOTALL)
 import random
