@@ -1,4 +1,4 @@
-# backend/core/dependency_parser.py
+# plugins/core_engine/dependency_parser.py
 import re
 from typing import Set, Dict, Any, List
 import asyncio

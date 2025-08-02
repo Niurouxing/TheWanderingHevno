@@ -1,16 +1,18 @@
 # backend/container.py
+
 import logging
 from typing import Dict, Any, Callable
 
 logger = logging.getLogger(__name__)
 
 class Container:
-    """一个简单的依赖注入容器。"""
+    """一个简单的、通用的依赖注入容器。"""
     def __init__(self):
         self._factories: Dict[str, Callable] = {}
         self._singletons: Dict[str, bool] = {}
         self._instances: Dict[str, Any] = {}
-        logger.info("DI Container initialized.")
+        # 注意：此处日志可能还未完全配置，但可以安全调用
+        # logger.info("DI Container initialized.")
 
     def register(self, name: str, factory: Callable, singleton: bool = True) -> None:
         """
@@ -18,9 +20,10 @@ class Container:
 
         :param name: 服务的唯一名称。
         :param factory: 一个创建服务实例的函数 (可以无参，或接收 container 实例)。
-        :param singleton: 如果为 True，服务只会被创建一次。
+        :param singleton: 如果为 True，服务只会被创建一次（单例）。
         """
-        logger.debug(f"Registering service '{name}'. Singleton: {singleton}")
+        if name in self._factories:
+            logger.warning(f"Overwriting service registration for '{name}'")
         self._factories[name] = factory
         self._singletons[name] = singleton
 
@@ -39,14 +42,14 @@ class Container:
 
         factory = self._factories[name]
         
-        # 简单的依赖注入：如果工厂需要容器本身，就传递它
-        # 这是一个简化处理，更复杂的可以用 inspect.signature
         try:
+            # 尝试将容器本身作为依赖注入到工厂中
             instance = factory(self)
         except TypeError:
+            # 如果工厂不接受参数，则直接调用
             instance = factory()
 
-        logger.debug(f"Resolved service '{name}'.")
+        logger.debug(f"Resolved service '{name}'. Singleton: {self._singletons.get(name, True)}")
 
         if self._singletons.get(name, True):
             self._instances[name] = instance

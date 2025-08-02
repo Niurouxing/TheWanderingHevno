@@ -1,4 +1,4 @@
-# backend/runtimes/codex/models.py
+# plugins/core_codex/models.py
 from enum import Enum
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field, RootModel, ConfigDict, field_validator

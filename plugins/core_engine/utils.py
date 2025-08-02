@@ -1,4 +1,4 @@
-# backend/core/utils.py
+# plugins/core_engine/utils.py
 
 from typing import Any, Dict
 

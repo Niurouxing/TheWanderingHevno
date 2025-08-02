@@ -1,4 +1,4 @@
-# backend/models.py 
+# plugins/core_engine/models.py
 from pydantic import BaseModel, Field, RootModel, field_validator
 from typing import List, Dict, Any, Optional # <-- 导入 Optional
 

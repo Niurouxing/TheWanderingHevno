@@ -1,4 +1,4 @@
-# backend/core/state.py
+# plugins/core_engine/state.py
 
 from __future__ import annotations
 import asyncio

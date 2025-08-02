@@ -1,4 +1,4 @@
-# backend/core/registry.py (修改后)
+# plugins/core_engine/registry.py
 from typing import Dict, Type, Callable
 from backend.core.interfaces import RuntimeInterface
 

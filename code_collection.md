@@ -371,7 +371,8 @@ class Container:
         self._factories: Dict[str, Callable] = {}
         self._singletons: Dict[str, bool] = {}
         self._instances: Dict[str, Any] = {}
-        logger.info("DI Container initialized.")
+        # 注意: 此时日志系统可能还未配置
+        # logger.info("DI Container initialized.")
 
     def register(self, name: str, factory: Callable, singleton: bool = True) -> None:
         """
@@ -381,7 +382,8 @@ class Container:
         :param factory: 一个创建服务实例的函数 (可以无参，或接收 container 实例)。
         :param singleton: 如果为 True，服务只会被创建一次。
         """
-        logger.debug(f"Registering service '{name}'. Singleton: {singleton}")
+        if name in self._factories:
+            logger.warning(f"Overwriting service registration for '{name}'")
         self._factories[name] = factory
         self._singletons[name] = singleton
 
@@ -400,11 +402,11 @@ class Container:
 
         factory = self._factories[name]
         
-        # 简单的依赖注入：如果工厂需要容器本身，就传递它
-        # 这是一个简化处理，更复杂的可以用 inspect.signature
         try:
+            # 尝试将容器作为依赖注入
             instance = factory(self)
         except TypeError:
+            # 如果工厂不接受参数，则直接调用
             instance = factory()
 
         logger.debug(f"Resolved service '{name}'.")
@@ -423,72 +425,65 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 
-# 导入微核心组件
 from backend.container import Container
 from backend.core.hooks import HookManager
 from backend.core.loader import PluginLoader
 
-# 注意我们不在这里导入任何插件或具体服务
-# 这是一个干净、通用的启动器
-
-# 使用 FastAPI 的新版生命周期管理器 (lifespan)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- 应用启动时执行 ---
-    # 实例化平台核心服务
+    # --- 应用启动 ---
     container = Container()
     hook_manager = HookManager()
 
-    # 阶段一 & 二：发现、排序与注册 (同步过程)
+    # 将核心服务实例注册到容器中，以便插件可以解析它们
+    container.register("container", lambda: container)
+    container.register("hook_manager", lambda: hook_manager)
+
+    # 阶段一 & 二：发现、排序、注册
     loader = PluginLoader(container, hook_manager)
     loader.load_plugins()
     
-    # 日志系统此时应该已经由 core_logging 插件配置好了
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger(__name__) # 此时日志已配置
     logger.info("--- FastAPI Application Assembly ---")
 
-    # 将核心服务附加到 app.state，以便 API 路由可以访问它们
+    # 将核心服务附加到 app.state
     app.state.container = container
     app.state.hook_manager = hook_manager
     logger.info("Core services (Container, HookManager) attached to app.state.")
 
-    # 阶段三：装配 (使用钩子系统)
-    logger.info("Triggering 'collect_api_routers' filter hook to collect API routers from plugins...")
-    # 我们启动一个空的列表，然后让 filter 钩子去填充它
+    # 阶段三：装配 API 路由
+    logger.info("Triggering 'collect_api_routers' filter hook...")
     routers_to_add: list[APIRouter] = await hook_manager.filter("collect_api_routers", [])
     
     if routers_to_add:
         logger.info(f"Collected {len(routers_to_add)} router(s). Adding to application...")
         for router in routers_to_add:
             app.include_router(router)
-            logger.debug(f"Added router with prefix '{router.prefix}' and tags {router.tags}")
+            logger.debug(f"Added router: prefix='{router.prefix}', tags={router.tags}")
     else:
-        logger.info("No API routers were collected from plugins.")
-
-
+        logger.warning("No API routers were collected from plugins.")
+    
+    # 可以在此触发其他装配钩子，如 'initialize_services'
+    await hook_manager.trigger('app_startup_complete', app=app, container=container)
+    
     logger.info("--- Hevno Engine Ready ---")
-
-    yield # 在此暂停，应用开始处理请求
-
-    # --- 应用关闭时执行 ---
+    yield
+    # --- 应用关闭 ---
     logger.info("--- Hevno Engine Shutting Down ---")
-    # 可以在这里添加清理逻辑
+    await hook_manager.trigger('app_shutdown', app=app)
 
 
 def create_app() -> FastAPI:
-    """
-    应用工厂函数：构建、配置并返回 FastAPI 应用实例。
-    """
+    """应用工厂函数"""
     app = FastAPI(
         title="Hevno Engine (Plugin Architecture)",
         version="1.2.0",
-        lifespan=lifespan  # 注册生命周期管理器
+        lifespan=lifespan
     )
 
-    # 中间件的配置移到这里，因为它不依赖于异步启动过程
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=["*"], # 在生产中应配置为更严格的源
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -730,45 +725,124 @@ class PluginLoader:
 # backend/core/contracts.py
 from __future__ import annotations
 import asyncio
-from typing import Any, Callable, Coroutine, Dict, List
-from pydantic import BaseModel, Field
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, List, Optional, Set, Coroutine, TypeVar
+from uuid import UUID, uuid4
+from pydantic import BaseModel, Field, RootModel, ConfigDict, field_validator
 
 # --- 类型别名 ---
-# 为了清晰，我们定义一些将来会用到的类型别名
-
-# 一个插件的注册函数签名
-# 它接收 DI 容器和事件总线作为参数
 PluginRegisterFunc = Callable[['Container', 'HookManager'], None]
+T = TypeVar('T') # 用于泛型
 
-# --- 核心服务接口占位符 (为了类型提示) ---
-# 实际的类在它们自己的模块中定义。这里只是一个“契约”。
-# 注意：我们不在这里导入任何模块，只是使用字符串或前向引用。
+# --- 核心服务接口契约 (用于类型提示) ---
 class Container:
-    """依赖注入容器的抽象契约。"""
-    def register(self, name: str, factory: Callable, singleton: bool = True) -> None:
-        raise NotImplementedError
-    
-    def resolve(self, name: str) -> Any:
-        raise NotImplementedError
+    def register(self, name: str, factory: Callable, singleton: bool = True) -> None: raise NotImplementedError
+    def resolve(self, name: str) -> Any: raise NotImplementedError
 
 class HookManager:
-    """事件总线的抽象契约。"""
-    async def trigger(self, hook_name: str, **kwargs: Any) -> None:
-        raise NotImplementedError
+    async def trigger(self, hook_name: str, **kwargs: Any) -> None: raise NotImplementedError
+    async def filter(self, hook_name: str, data: T, **kwargs: Any) -> T: raise NotImplementedError
+    async def decide(self, hook_name: str, **kwargs: Any) -> Optional[Any]: raise NotImplementedError
 
-# --- 核心数据模型 (示例，未来会扩展) ---
-# 在这里定义如 StateSnapshot, ExecutionContext 等
-# 目前，我们先留空，因为还没有核心引擎插件。
 
-# --- 系统事件契约 ---
-# 定义通过 HookManager 分发的事件的数据结构
-# 这是插件间通信的“语言”
+# --- 核心持久化状态模型 ---
+# (从原 core/contracts.py, core/models.py, persistence/models.py 迁移和合并)
 
-class AddApiRouterContext(BaseModel):
-    """请求添加一个API路由到主应用的事件。"""
-    router: Any # 在这里我们不关心具体类型，可以是 FastAPI.APIRouter
-    prefix: str = ""
-    tags: List[str] = Field(default_factory=list)
+class RuntimeInstruction(BaseModel):
+    runtime: str
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+class GenericNode(BaseModel):
+    id: str
+    run: List[RuntimeInstruction]
+    depends_on: Optional[List[str]] = Field(default=None)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class GraphDefinition(BaseModel):
+    nodes: List[GenericNode]
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class GraphCollection(RootModel[Dict[str, GraphDefinition]]):
+    @field_validator('root')
+    @classmethod
+    def check_main_graph_exists(cls, v: Dict[str, GraphDefinition]) -> Dict[str, GraphDefinition]:
+        if "main" not in v:
+            raise ValueError("A 'main' graph must be defined as the entry point.")
+        return v
+
+class StateSnapshot(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    sandbox_id: UUID
+    graph_collection: GraphCollection
+    world_state: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    parent_snapshot_id: Optional[UUID] = None
+    triggering_input: Dict[str, Any] = Field(default_factory=dict)
+    run_output: Optional[Dict[str, Any]] = None
+    model_config = ConfigDict(frozen=True)
+
+class Sandbox(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    name: str
+    head_snapshot_id: Optional[UUID] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# --- 核心运行时上下文模型 ---
+# (从原 core/contracts.py 迁移)
+
+class SharedContext(BaseModel):
+    world_state: Dict[str, Any]
+    session_info: Dict[str, Any]
+    global_write_lock: asyncio.Lock
+    services: Any
+    model_config = {"arbitrary_types_allowed": True}
+
+class ExecutionContext(BaseModel):
+    node_states: Dict[str, Any] = Field(default_factory=dict)
+    run_vars: Dict[str, Any] = Field(default_factory=dict)
+    shared: SharedContext
+    initial_snapshot: StateSnapshot
+    hook_manager: HookManager
+    model_config = {"arbitrary_types_allowed": True}
+
+
+# --- 系统事件契约 (用于钩子) ---
+# (从原 core/contracts.py 迁移)
+
+class NodeContext(BaseModel):
+    node: GenericNode
+    execution_context: ExecutionContext
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+class EngineStepStartContext(BaseModel):
+    initial_snapshot: StateSnapshot
+    triggering_input: Dict[str, Any]
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+class EngineStepEndContext(BaseModel):
+    final_snapshot: StateSnapshot
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+class NodeExecutionStartContext(NodeContext): pass
+class NodeExecutionSuccessContext(NodeContext):
+    result: Dict[str, Any]
+class NodeExecutionErrorContext(NodeContext):
+    exception: Exception
+
+class BeforeConfigEvaluationContext(NodeContext):
+    instruction_config: Dict[str, Any]
+class AfterMacroEvaluationContext(NodeContext):
+    evaluated_config: Dict[str, Any]
+
+class BeforeSnapshotCreateContext(BaseModel):
+    snapshot_data: Dict[str, Any]
+    execution_context: ExecutionContext
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+class ResolveNodeDependenciesContext(BaseModel):
+    node: GenericNode
+    auto_inferred_deps: Set[str]
 ```
 
 ### plugins/core_llm/service.py
@@ -1875,7 +1949,7 @@ async def import_package(
 
 ### plugins/core_codex/invoke_runtime.py
 ```
-# backend/runtimes/codex/invoke_runtime.py
+# plugins/core_codex/invoke_runtime.py
 import asyncio
 import re
 from typing import Dict, Any, List, Optional, Set
@@ -2051,7 +2125,7 @@ class InvokeRuntime(RuntimeInterface):
 
 ### plugins/core_codex/models.py
 ```
-# backend/runtimes/codex/models.py
+# plugins/core_codex/models.py
 from enum import Enum
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field, RootModel, ConfigDict, field_validator
@@ -2156,9 +2230,44 @@ def register_plugin(container: Container, hook_manager: HookManager):
 }
 ```
 
+### plugins/core_engine/interfaces.py
+```
+# plugins/core_engine/interfaces.py
+
+from __future__ import annotations
+from abc import ABC, abstractmethod
+from typing import Dict, Any, Optional
+
+# 从平台核心导入共享的数据契约
+from backend.core.contracts import ExecutionContext
+
+class SubGraphRunner(ABC):
+    """定义执行子图能力的抽象接口。"""
+    @abstractmethod
+    async def execute_graph(
+        self,
+        graph_name: str,
+        parent_context: ExecutionContext,
+        inherited_inputs: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        pass
+
+class RuntimeInterface(ABC):
+    """定义所有运行时必须实现的接口。"""
+    @abstractmethod
+    async def execute(
+        self,
+        config: Dict[str, Any],
+        context: ExecutionContext,
+        subgraph_runner: Optional[SubGraphRunner] = None,
+        pipeline_state: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        pass
+```
+
 ### plugins/core_engine/models.py
 ```
-# backend/models.py 
+# plugins/core_engine/models.py
 from pydantic import BaseModel, Field, RootModel, field_validator
 from typing import List, Dict, Any, Optional # <-- 导入 Optional
 
@@ -2210,7 +2319,7 @@ class GraphCollection(RootModel[Dict[str, GraphDefinition]]):
 
 ### plugins/core_engine/registry.py
 ```
-# backend/core/registry.py (修改后)
+# plugins/core_engine/registry.py
 from typing import Dict, Type, Callable
 from backend.core.interfaces import RuntimeInterface
 
@@ -2246,7 +2355,7 @@ runtime_registry = RuntimeRegistry()
 
 ### plugins/core_engine/evaluation.py
 ```
-# backend/core/evaluation.py
+# plugins/core_engine/evaluation.py
 import ast
 import asyncio
 import re
@@ -2469,7 +2578,7 @@ def register_plugin(container: Container, hook_manager: HookManager):
 
 ### plugins/core_engine/base_runtimes.py
 ```
-# backend/runtimes/base_runtimes.py
+# plugins/core_engine/base_runtimes.py
 import asyncio 
 from typing import Dict, Any, Optional
 from backend.core.interfaces import RuntimeInterface
@@ -2510,7 +2619,7 @@ class SetWorldVariableRuntime(RuntimeInterface):
 
 ### plugins/core_engine/control_runtimes.py
 ```
-# backend/runtimes/control_runtimes.py
+# plugins/core_engine/control_runtimes.py
 import asyncio
 from typing import Dict, Any, List, Optional
 
@@ -2629,7 +2738,7 @@ class MapRuntime(RuntimeInterface):
 
 ### plugins/core_engine/engine.py
 ```
-# backend/core/engine.py
+# plugins/core_engine/engine.py
 
 import asyncio
 from enum import Enum, auto
@@ -2996,7 +3105,7 @@ def get_engine(request: Request) -> ExecutionEngine:
 
 ### plugins/core_engine/utils.py
 ```
-# backend/core/utils.py
+# plugins/core_engine/utils.py
 
 from typing import Any, Dict
 
@@ -3089,7 +3198,7 @@ class DotAccessibleDict:
 
 ### plugins/core_engine/dependency_parser.py
 ```
-# backend/core/dependency_parser.py
+# plugins/core_engine/dependency_parser.py
 import re
 from typing import Set, Dict, Any, List
 import asyncio
@@ -3168,7 +3277,7 @@ async def build_dependency_graph_async(
 
 ### plugins/core_engine/state.py
 ```
-# backend/core/state.py
+# plugins/core_engine/state.py
 
 from __future__ import annotations
 import asyncio

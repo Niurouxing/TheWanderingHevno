@@ -1,4 +1,4 @@
-# backend/core/engine.py
+# plugins/core_engine/engine.py
 
 import asyncio
 from enum import Enum, auto
