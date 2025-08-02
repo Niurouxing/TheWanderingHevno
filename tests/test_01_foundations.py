@@ -3,9 +3,10 @@ import pytest
 from pydantic import ValidationError
 from uuid import uuid4
 
+from backend.core.hooks import HookManager
 from backend.core.models import GraphCollection, GenericNode, GraphDefinition, RuntimeInstruction
 from backend.core.state import StateSnapshot, Sandbox, SnapshotStore
-from backend.core.dependency_parser import build_dependency_graph
+from backend.core.dependency_parser import build_dependency_graph_async
 
 
 class TestCoreModels:
@@ -73,33 +74,28 @@ class TestSandboxModels:
             snapshot.world_state = {"new_key": "new_value"}
 
 
+@pytest.mark.asyncio # <-- 【新增】为整个测试类标记为异步
 class TestDependencyParser:
     """测试依赖解析器，使用新的节点结构。"""
 
-    def test_simple_dependency(self):
-        nodes = [{"id": "A", "run": []}, {"id": "B", "run": [{"config": {"value": "{{ nodes.A.output }}"}}]}]
-        deps = build_dependency_graph(nodes)
+    # 【修改】所有测试方法现在都是 async
+    async def test_simple_dependency(self, hook_manager: HookManager):
+        nodes = [{"id": "A", "run": []}, {"id": "B", "run": [{"runtime": "test", "config": {"value": "{{ nodes.A.output }}"}}]}]
+        # 【修改】使用 await
+        deps = await build_dependency_graph_async(nodes, hook_manager)
         assert deps["B"] == {"A"}
 
-    def test_dependency_in_nested_structure(self):
-        nodes = [
-            {"id": "source", "run": []},
-            {"id": "consumer", "run": [{"config": {"nested": ["{{ nodes.source.val }}"]}}]}
-        ]
-        deps = build_dependency_graph(nodes)
+    async def test_dependency_in_nested_structure(self, hook_manager: HookManager):
+        nodes = [{"id": "source", "run": []}, {"id": "consumer", "run": [{"runtime": "test", "config": {"nested": ["{{ nodes.source.val }}"]}}]}]
+        deps = await build_dependency_graph_async(nodes, hook_manager)
         assert deps["consumer"] == {"source"}
 
-    def test_ignores_non_node_macros(self):
-        nodes = [{"id": "A", "run": [{"config": {"value": "{{ world.x }}"}}]}]
-        deps = build_dependency_graph(nodes)
+    async def test_ignores_non_node_macros(self, hook_manager: HookManager):
+        nodes = [{"id": "A", "run": [{"runtime": "test", "config": {"value": "{{ world.x }}"}}]}]
+        deps = await build_dependency_graph_async(nodes, hook_manager)
         assert deps["A"] == set()
 
-    def test_dependency_on_placeholder_node_is_preserved(self):
-        """
-        验证对图中不存在的节点（即子图的输入占位符）的依赖会被保留。
-        这对于 system.call 功能至关重要。
-        """
-        nodes = [{"id": "A", "run": [{"config": {"value": "{{ nodes.placeholder_input.val }}"}}]}]
-        deps = build_dependency_graph(nodes)
-        # 之前这里断言 deps["A"] == set()，现在它必须保留依赖
+    async def test_dependency_on_placeholder_node_is_preserved(self, hook_manager: HookManager):
+        nodes = [{"id": "A", "run": [{"runtime": "test", "config": {"value": "{{ nodes.placeholder_input.val }}"}}]}]
+        deps = await build_dependency_graph_async(nodes, hook_manager)
         assert deps["A"] == {"placeholder_input"}

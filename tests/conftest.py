@@ -7,7 +7,8 @@ from typing import Generator
 @pytest.fixture(scope="session", autouse=True)
 def load_test_env_and_modules():
     from dotenv import load_dotenv
-    from backend.core.loader import load_modules
+    from backend.core.loader import load_modules, load_plugins
+    from backend.container import container
     
     # 确保测试环境和模块在所有测试运行前被加载
     load_dotenv(dotenv_path=".env.test", override=True)
@@ -15,48 +16,60 @@ def load_test_env_and_modules():
     PLUGGABLE_MODULES = [
         "backend.runtimes",
         "backend.llm.providers",
-        "backend.services"
+        # "backend.services" 目录不存在，应移除
     ]
     load_modules(PLUGGABLE_MODULES)
+    
+    # 【核心修改】在测试会话开始时就加载插件
+    # 这确保了所有测试（无论是 API 测试还是单元测试）都能在一个
+    # 包含了插件钩子的环境中运行。
+    load_plugins(container.hook_manager)
+
 
 # --- 导入核心组件 ---
 from backend.core.models import GraphCollection
 from backend.core.engine import ExecutionEngine
-from backend.container import container  # <-- 【核心修改】直接从容器导入
+from backend.container import container
 from backend.app import create_app
+from backend.core.hooks import HookManager # <-- 新增导入
 
 # --- Fixtures for Core Components ---
 
 @pytest.fixture
 def test_engine() -> ExecutionEngine:
     """
-    【重构后】直接从容器获取引擎实例。
-    这使得引擎的集成测试完全脱离了 FastAPI 应用。
+    【保持不变，但其行为已改变】
+    直接从容器获取引擎实例。由于上面的 session fixture，
+    这个引擎实例现在已经包含了插件钩子。
     """
     return container.execution_engine
 
 @pytest.fixture
+def hook_manager() -> HookManager:
+    """【新增】提供一个干净的、独立的 HookManager 实例，用于单元测试。"""
+    return HookManager()
+
+@pytest.fixture
 def test_client() -> Generator[TestClient, None, None]:
     """
-    【重构后】这个 fixture 现在只为 API E2E 测试服务。
+    【保持不变】这个 fixture 现在只为 API E2E 测试服务。
+    它会创建一个完整的 FastAPI 应用，包括所有插件。
     """
-    # 每次测试都创建一个新的 app 实例
     app = create_app()
 
-    # 从容器中获取存储实例，用于清理
     sandbox_store = container.sandbox_store
     snapshot_store = container.snapshot_store
     
-    # 在每次测试前清理
+    # 清理操作保持不变
     sandbox_store.clear()
     snapshot_store.clear()
     
     with TestClient(app) as client:
         yield client
     
-    # 在每次测试后再次清理
     sandbox_store.clear()
     snapshot_store.clear()
+
     
 # ---------------------------------------------------------------------------
 # Fixtures for Graph Collections (更新 llm.default 配置)

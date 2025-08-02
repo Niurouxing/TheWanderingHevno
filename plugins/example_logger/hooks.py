@@ -1,7 +1,7 @@
 # plugins/example_logger/hooks.py
 import logging
 from datetime import datetime, timezone
-from backend.core.plugin_types import EngineStepStartContext, BeforeSnapshotCreateContext
+from backend.core.contracts import EngineStepStartContext, BeforeSnapshotCreateContext
 
 logger = logging.getLogger(__name__)
 
@@ -20,17 +20,17 @@ async def on_before_snapshot_create(
     context: BeforeSnapshotCreateContext
 ) -> dict:
     """
-    一个过滤型钩子实现，用于向每个创建的快照中添加自定义元数据。
+    一个过滤型钩子实现，用于向每个创建的快照的 world_state 中添加自定义元数据。
     """
-    logger.info(f"PLUGIN-HOOK: Filtering snapshot data for sandbox {context.snapshot_data['sandbox_id']}")
-    
-    if "plugin_metadata" not in snapshot_data:
-        snapshot_data["plugin_metadata"] = {}
+    world_state = snapshot_data.get("world_state", {})
+    if "plugin_metadata" not in world_state:
+        world_state["plugin_metadata"] = {}
         
-    snapshot_data["plugin_metadata"]["example_logger"] = {
+    world_state["plugin_metadata"]["example_logger"] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "message": "This snapshot was processed by the example_logger plugin."
     }
     
-    # 必须返回修改后的数据
+    snapshot_data["world_state"] = world_state
+    
     return snapshot_data

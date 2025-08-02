@@ -5,20 +5,28 @@ from enum import Enum, auto
 from typing import Dict, Any, Set, List, Optional
 from collections import defaultdict
 from fastapi import Request
+import traceback
 
+# --- 核心架构导入 ---
+from backend.core.models import GraphCollection, GraphDefinition, GenericNode
+from backend.core.dependency_parser import build_dependency_graph_async
+from backend.core.registry import RuntimeRegistry
+from backend.core.evaluation import build_evaluation_context, evaluate_data
+# 【核心修改】从新的位置导入
+from backend.core.contracts import ExecutionContext
+from backend.core.state import (
+    create_main_execution_context, 
+    create_sub_execution_context, 
+    create_next_snapshot
+)
 from backend.core.hooks import HookManager
-from backend.core.plugin_types import (
+# 【核心修改】从 contracts 导入上下文模型
+from backend.core.contracts import (
     EngineStepStartContext, EngineStepEndContext,
     BeforeConfigEvaluationContext, AfterMacroEvaluationContext,
     NodeExecutionStartContext, NodeExecutionSuccessContext, NodeExecutionErrorContext
 )
-from backend.core.models import GraphCollection, GraphDefinition, GenericNode
-from backend.core.dependency_parser import build_dependency_graph
-from backend.core.registry import RuntimeRegistry
-from backend.core.evaluation import build_evaluation_context, evaluate_data
-from backend.core.state import ExecutionContext
 from backend.core.interfaces import RuntimeInterface, SubGraphRunner
-
 
 class NodeState(Enum):
     PENDING = auto()
@@ -36,13 +44,20 @@ class GraphRun:
             raise ValueError("GraphRun must be initialized with a valid GraphDefinition.")
         self.node_map: Dict[str, GenericNode] = {n.id: n for n in self.graph_def.nodes}
         self.node_states: Dict[str, NodeState] = {}
-        self.dependencies: Dict[str, Set[str]] = build_dependency_graph(
-            [node.model_dump() for node in self.graph_def.nodes],
-            self.context.hook_manager 
+        self.dependencies: Dict[str, Set[str]] = {}
+        self.subscribers: Dict[str, Set[str]] = {}
+
+    @classmethod
+    async def create(cls, context: ExecutionContext, graph_def: GraphDefinition) -> "GraphRun":
+        run = cls(context, graph_def)
+        run.dependencies = await build_dependency_graph_async(
+            [node.model_dump() for node in run.graph_def.nodes],
+            context.hook_manager
         )
-        self.subscribers: Dict[str, Set[str]] = self._build_subscribers()
-        self._detect_cycles()
-        self._initialize_node_states()
+        run.subscribers = run._build_subscribers()
+        run._detect_cycles()
+        run._initialize_node_states()
+        return run
 
     def _build_subscribers(self) -> Dict[str, Set[str]]:
         subscribers = defaultdict(set)
@@ -95,19 +110,22 @@ class GraphRun:
     def get_final_node_states(self) -> Dict[str, Any]:
         return self.context.node_states
 
-# ExecutionEngine 现在实现了 SubGraphRunner 接口
 class ExecutionEngine(SubGraphRunner):
-    # 【已修改】更新了 __init__ 的类型提示，使其更准确
-    def __init__(self, registry: RuntimeRegistry, services: Dict[str, Any], num_workers: int = 5):
+    def __init__(
+        self,
+        registry: RuntimeRegistry,
+        services: Dict[str, Any],
+        hook_manager: HookManager,
+        num_workers: int = 5
+    ):
         self.registry = registry
-        # 在构造时接收并存储服务字典
         self.services = services
+        self.hook_manager = hook_manager
         self.num_workers = num_workers
-
+        
     async def step(self, initial_snapshot, triggering_input: Dict[str, Any] = None):
         if triggering_input is None: triggering_input = {}
-
-
+        
         await self.hook_manager.trigger(
             "engine_step_start",
             context=EngineStepStartContext(
@@ -116,56 +134,52 @@ class ExecutionEngine(SubGraphRunner):
             )
         )
         
-        # 从 self.services 字典注入服务
-        context = ExecutionContext.create_for_main_run(
+        context = create_main_execution_context(
             snapshot=initial_snapshot,
-            services=self.services,  # <-- 从实例属性注入
-            run_vars={"trigger_input": triggering_input}
+            services=self.services,
+            run_vars={"triggering_input": triggering_input},
+            hook_manager=self.hook_manager
         )
         
         main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
         if not main_graph_def: raise ValueError("'main' graph not found.")
         
         final_node_states = await self._internal_execute_graph(main_graph_def, context)
-        next_snapshot = context.to_next_snapshot(final_node_states, triggering_input)
+        
+        next_snapshot = await create_next_snapshot(
+            context=context, 
+            final_node_states=final_node_states, 
+            triggering_input=triggering_input
+        )
 
         await self.hook_manager.trigger(
             "engine_step_end",
             context=EngineStepEndContext(final_snapshot=next_snapshot)
         )
 
-
         return next_snapshot
 
-    # --- 实现 SubGraphRunner 接口 ---
     async def execute_graph(
         self,
         graph_name: str,
-        # 注意：这里接收的是一个 ExecutionContext，但我们将用它来创建子上下文
         parent_context: ExecutionContext,
         inherited_inputs: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """这是暴露给运行时的公共接口。"""
         graph_collection = parent_context.initial_snapshot.graph_collection.root
         graph_def = graph_collection.get(graph_name)
         if not graph_def:
             raise ValueError(f"Graph '{graph_name}' not found.")
         
-        # --- 【关键】为子图运行创建自己的上下文 ---
-        # 它会共享 world_state 和锁，但有自己的 node_states
-        sub_run_context = ExecutionContext.create_for_sub_run(parent_context)
+        sub_run_context = create_sub_execution_context(parent_context)
 
         return await self._internal_execute_graph(
             graph_def=graph_def,
-            context=sub_run_context, # <-- 使用新的子上下文
+            context=sub_run_context,
             inherited_inputs=inherited_inputs
         )
 
     async def _internal_execute_graph(self, graph_def: GraphDefinition, context: ExecutionContext, inherited_inputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        内部核心调度器，用于执行一个图。
-        """
-        run = GraphRun(context=context, graph_def=graph_def)
+        run = await GraphRun.create(context=context, graph_def=graph_def)
         task_queue = asyncio.Queue()
         
         if inherited_inputs:
@@ -182,7 +196,6 @@ class ExecutionEngine(SubGraphRunner):
             task_queue.put_nowait(node_id)
 
         if task_queue.empty() and not any(s == NodeState.SUCCEEDED for s in run.node_states.values()):
-            print(f"Warning: Graph '{graph_def.nodes[0].id if graph_def.nodes else 'empty'}' has no runnable starting nodes.")
             return {}
 
         workers = [
@@ -229,7 +242,7 @@ class ExecutionEngine(SubGraphRunner):
                         context=NodeExecutionErrorContext(
                             node=node,
                             execution_context=context,
-                            exception=ValueError(output["error"]) # 包装为异常
+                            exception=ValueError(output["error"])
                         )
                     )
                 else:
@@ -296,7 +309,7 @@ class ExecutionEngine(SubGraphRunner):
 
                 config_to_process = await self.hook_manager.filter(
                     "before_config_evaluation",
-                    config_to_process, # 这是被过滤的数据
+                    config_to_process,
                     context=BeforeConfigEvaluationContext(
                         node=node,
                         execution_context=context,
@@ -314,10 +327,9 @@ class ExecutionEngine(SubGraphRunner):
 
                 processed_config = await evaluate_data(config_to_process, eval_context, lock)
 
-
                 processed_config = await self.hook_manager.filter(
                     "after_macro_evaluation",
-                    processed_config, # 这是被过滤的数据
+                    processed_config,
                     context=AfterMacroEvaluationContext(
                         node=node,
                         execution_context=context,
@@ -341,12 +353,10 @@ class ExecutionEngine(SubGraphRunner):
                 pipeline_state.update(output)
             except Exception as e:
                 import traceback
-                print(f"Error in node {node.id}, step {i} ({runtime_name}): {type(e).__name__}: {e}")
                 traceback.print_exc()
                 error_message = f"Failed at step {i+1} ('{runtime_name}'): {type(e).__name__}: {e}"
                 return {"error": error_message, "failed_step": i, "runtime": runtime_name}
         return pipeline_state
 
 def get_engine(request: Request) -> ExecutionEngine:
-    """依赖注入函数，用于获取执行引擎实例。"""
     return request.app.state.engine

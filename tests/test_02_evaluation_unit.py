@@ -3,18 +3,20 @@ import pytest
 from uuid import uuid4
 import asyncio
 
+from backend.core.hooks import HookManager
 from backend.core.evaluation import (
     evaluate_expression, evaluate_data, build_evaluation_context
 )
-from backend.core.state import ExecutionContext
-from backend.core.state import StateSnapshot
+from backend.core.contracts import ExecutionContext, StateSnapshot
+from backend.core.state import create_main_execution_context # <-- 导入工厂函数
 from backend.core.models import GraphCollection
 from backend.runtimes.base_runtimes import SetWorldVariableRuntime
 from backend.runtimes.control_runtimes import ExecuteRuntime
 from backend.llm.service import MockLLMService
+from backend.core.hooks import HookManager
 
 @pytest.fixture
-def mock_exec_context() -> ExecutionContext:
+def mock_exec_context(hook_manager: HookManager) -> ExecutionContext:
     """提供一个可复用的、模拟的 ExecutionContext。"""
     graph_coll = GraphCollection.model_validate({"main": {"nodes": []}})
     initial_world = {"user_name": "Alice", "hp": 100}
@@ -23,12 +25,15 @@ def mock_exec_context() -> ExecutionContext:
         graph_collection=graph_coll,
         world_state=initial_world
     )
-    # 使用正确的工厂方法创建上下文
-    context = ExecutionContext.create_for_main_run(
-        snapshot, 
-        services={"llm": MockLLMService()}
+    
+    # 【核心修复】直接调用从 state.py 导入的工厂函数
+    context = create_main_execution_context(
+        snapshot=snapshot, 
+        services={"llm": MockLLMService()},
+        hook_manager=hook_manager
     )
     
+    # 后续的上下文设置保持不变
     context.node_states = {"node_A": {"output": "Success"}}
     context.run_vars = {"trigger_input": {"message": "Do it!"}}
 
@@ -119,6 +124,8 @@ class TestRuntimesWithMacros:
         runtime = ExecuteRuntime()
         assert mock_exec_context.shared.world_state["hp"] == 100
         code_str = "world.hp -= 25"
+        
+
         await runtime.execute(
             config={"code": code_str}, 
             context=mock_exec_context

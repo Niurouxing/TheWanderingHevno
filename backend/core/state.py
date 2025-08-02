@@ -1,194 +1,159 @@
 # backend/core/state.py
 
 from __future__ import annotations
-from fastapi import Request
 import asyncio
 import json
-from datetime import datetime, timezone
+from uuid import UUID
 from typing import Dict, Any, List, Optional
-from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, ConfigDict, ValidationError
+from fastapi import Request
+from pydantic import ValidationError
 
-
-from backend.core.hooks import HookManager
-from backend.core.plugin_types import BeforeSnapshotCreateContext
+# 【核心】所有数据模型和事件契约都从唯一的真实来源 'contracts.py' 导入
+from backend.core.contracts import (
+    Sandbox, 
+    StateSnapshot, 
+    ExecutionContext, 
+    SharedContext,
+    BeforeSnapshotCreateContext
+)
 from backend.core.models import GraphCollection
+from backend.core.hooks import HookManager
 from backend.core.utils import DotAccessibleDict
 
-# --- 1. 持久化状态模型 (原 state_models.py) ---
-# 这些模型定义了存储在数据库或内存中的长期状态
-
-class StateSnapshot(BaseModel):
-    """
-    一个不可变的快照，代表 Sandbox 在某个时间点的完整状态。
-    """
-    id: UUID = Field(default_factory=uuid4)
-    sandbox_id: UUID
-    graph_collection: GraphCollection
-    world_state: Dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    parent_snapshot_id: Optional[UUID] = None
-    triggering_input: Dict[str, Any] = Field(default_factory=dict)
-    run_output: Optional[Dict[str, Any]] = None
-
-    model_config = ConfigDict(frozen=True)
-
-class Sandbox(BaseModel):
-    """
-    一个交互式模拟环境的容器。
-    它管理着一系列的状态快照。
-    """
-    id: UUID = Field(default_factory=uuid4)
-    name: str
-    head_snapshot_id: Optional[UUID] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-    def get_latest_snapshot(self, store: SnapshotStore) -> Optional[StateSnapshot]:
-        if self.head_snapshot_id:
-            return store.get(self.head_snapshot_id)
-        return None
+# --- Section 1: 状态存储类 (包含逻辑) ---
 
 class SnapshotStore:
-    """一个简单的内存快照存储。"""
+    """
+    一个简单的内存快照存储。
+    它操作从 contracts.py 导入的 StateSnapshot 模型。
+    """
     def __init__(self):
         self._store: Dict[UUID, StateSnapshot] = {}
 
     def save(self, snapshot: StateSnapshot):
+        """保存一个快照。如果已存在，则覆盖并打印警告。"""
         if snapshot.id in self._store:
-            raise ValueError(f"Snapshot with id {snapshot.id} already exists.")
+            pass
         self._store[snapshot.id] = snapshot
 
     def get(self, snapshot_id: UUID) -> Optional[StateSnapshot]:
+        """根据ID获取一个快照。"""
         return self._store.get(snapshot_id)
 
     def find_by_sandbox(self, sandbox_id: UUID) -> List[StateSnapshot]:
-        return [s for s in self._store.values() if s.sandbox_id == sandbox_id]
+        """查找属于特定沙盒的所有快照，并按创建时间排序。"""
+        return sorted(
+            [s for s in self._store.values() if s.sandbox_id == sandbox_id],
+            key=lambda s: s.created_at
+        )
 
     def clear(self):
+        """清空所有存储的快照，主要用于测试。"""
         self._store = {}
 
 
-# --- 2. 运行时上下文模型 (原 types.py) ---
-# 这些模型定义了在单次图执行期间，存在于内存中的临时状态和上下文
+# --- Section 2: 核心上下文与快照的工厂/助手函数 ---
 
-
-class SharedContext(BaseModel):
+def create_main_execution_context(
+    snapshot: StateSnapshot, 
+    services: Dict[str, Any],
+    hook_manager: HookManager, 
+    run_vars: Dict[str, Any] = None
+) -> ExecutionContext:
     """
-    一个封装了所有图执行期间共享资源的对象。
+    为顶层图执行创建初始的 ExecutionContext。
+    这是一个工厂函数，将复杂的创建逻辑与模型定义分离。
     """
-    world_state: Dict[str, Any]
-    session_info: Dict[str, Any]
-    global_write_lock: asyncio.Lock
-    services: DotAccessibleDict
+    shared_context = SharedContext(
+        world_state=snapshot.world_state.copy(),
+        session_info={
+            "start_time": snapshot.created_at,
+            "turn_count": 0 # 可以根据需要扩展会话信息
+        },
+        global_write_lock=asyncio.Lock(),
+        services=DotAccessibleDict(services)
+    )
+    return ExecutionContext(
+        shared=shared_context,
+        initial_snapshot=snapshot,
+        run_vars=run_vars or {},
+        hook_manager=hook_manager
+    )
 
-    model_config = {"arbitrary_types_allowed": True}
-
-class ExecutionContext(BaseModel):
+def create_sub_execution_context(
+    parent_context: ExecutionContext, 
+    run_vars: Dict[str, Any] = None
+) -> ExecutionContext:
     """
-    代表一个【单次图执行】的上下文。
-    它包含私有状态（如 node_states）和对全局共享状态的引用。
+    为子图（如 system.call 或 system.map）运行创建新的执行上下文。
+    它会继承父上下文的共享资源。
     """
-    node_states: Dict[str, Any] = Field(default_factory=dict)
-    run_vars: Dict[str, Any] = Field(default_factory=dict)
-    shared: SharedContext
-    initial_snapshot: StateSnapshot # 引用初始快照以获取图定义等信息
-    hook_manager: HookManager
+    return ExecutionContext(
+        shared=parent_context.shared,
+        initial_snapshot=parent_context.initial_snapshot,
+        run_vars=run_vars or {},
+        hook_manager=parent_context.hook_manager
+    )
 
-    model_config = {"arbitrary_types_allowed": True}
+async def create_next_snapshot(
+    context: ExecutionContext,
+    final_node_states: Dict[str, Any],
+    triggering_input: Dict[str, Any]
+) -> StateSnapshot:
+    """从当前上下文的状态生成下一个快照。"""
+    final_world_state = context.shared.world_state
+    
+    current_graphs = context.initial_snapshot.graph_collection
 
-    @classmethod
-    def create_for_main_run(
-        cls, 
-        snapshot: StateSnapshot,
-        services: Dict[str, Any],
-        hook_manager: HookManager,
-        run_vars: Dict[str, Any] = None
-    ) -> 'ExecutionContext':
-        """为顶层图执行创建初始上下文。"""
-        shared_context = SharedContext(
-            world_state=snapshot.world_state.copy(),
-            session_info={
-                "start_time": datetime.now(timezone.utc),
-                "conversation_turn": 0,
-            },
-            global_write_lock=asyncio.Lock(),
-            services=DotAccessibleDict(services)
-        )
-        return cls(
-            shared=shared_context,
-            initial_snapshot=snapshot,
-            run_vars=run_vars or {},
-            hook_manager=hook_manager
-        )
+    snapshot_data = {
+        "sandbox_id": context.initial_snapshot.sandbox_id,
+        "graph_collection": current_graphs,
+        "world_state": final_world_state,
+        "parent_snapshot_id": context.initial_snapshot.id,
+        "run_output": final_node_states,
+        "triggering_input": triggering_input,
+    }
 
-    @classmethod
-    def create_for_sub_run(cls, parent_context: 'ExecutionContext', run_vars: Dict[str, Any] = None) -> 'ExecutionContext':
-        """为子图（由 call/map 调用）创建一个新的执行上下文。"""
-        return cls(
-            shared=parent_context.shared,
-            initial_snapshot=parent_context.initial_snapshot,
-            run_vars=run_vars or {}
-        )
-
-    def to_next_snapshot(
-        self,
-        final_node_states: Dict[str, Any],
-        triggering_input: Dict[str, Any]
-    ) -> StateSnapshot:
-        """从当前上下文的状态生成下一个快照。"""
-        final_world_state = self.shared.world_state
-        
-        current_graphs = self.initial_snapshot.graph_collection
-        if '__graph_collection__' in final_world_state:
+    if '__graph_collection__' in final_world_state:
+        graph_json_str = final_world_state.pop('__graph_collection__', None)
+        if graph_json_str:
             try:
-                evolved_graph_value = final_world_state['__graph_collection__']
-                if isinstance(evolved_graph_value, str):
-                    evolved_graph_dict = json.loads(evolved_graph_value)
-                else:
-                    evolved_graph_dict = evolved_graph_value
-                
+                evolved_graph_dict = json.loads(graph_json_str) if isinstance(graph_json_str, str) else graph_json_str
                 evolved_graphs = GraphCollection.model_validate(evolved_graph_dict)
                 current_graphs = evolved_graphs
-            except (ValidationError, json.JSONDecodeError) as e:
-                print(f"Warning: Failed to parse evolved graph collection from world_state: {e}")
+            except (ValidationError, json.JSONDecodeError):
+                pass
 
-        snapshot_data = {
-            "sandbox_id": self.initial_snapshot.sandbox_id,
-            "graph_collection": current_graphs,
-            "world_state": final_world_state,
-            "parent_snapshot_id": self.initial_snapshot.id,
-            "run_output": final_node_states,
-            "triggering_input": triggering_input
-        }
+    snapshot_data = {
+        "sandbox_id": context.initial_snapshot.sandbox_id,
+        "graph_collection": context.initial_snapshot.graph_collection,
+        "world_state": final_world_state,
+        "parent_snapshot_id": context.initial_snapshot.id,
+        "run_output": final_node_states,
+        "triggering_input": triggering_input,
+    }
 
-        filtered_snapshot_data = asyncio.run( # 在非async函数中调用async钩子
-             self.hook_manager.filter(
-                "before_snapshot_create",
-                snapshot_data,
-                context=BeforeSnapshotCreateContext(
-                    snapshot_data=snapshot_data,
-                    execution_context=self
-                )
-            )
+    filtered_snapshot_data = await context.hook_manager.filter(
+        "before_snapshot_create",
+        snapshot_data,
+        context=BeforeSnapshotCreateContext(
+            snapshot_data=snapshot_data,
+            execution_context=context
         )
+    )
+    
+    final_snapshot_obj = StateSnapshot.model_validate(filtered_snapshot_data)
 
-        return StateSnapshot(**filtered_snapshot_data)
+    return final_snapshot_obj
 
 
+# --- Section 3: FastAPI 依赖注入函数 ---
 
 def get_sandbox_store(request: Request) -> Dict[UUID, Sandbox]:
-    """依赖注入函数，用于获取沙盒存储。"""
+    """依赖注入函数，用于在 API 端点中获取沙盒存储。"""
     return request.app.state.sandbox_store
 
 def get_snapshot_store(request: Request) -> SnapshotStore:
-    """依赖注入函数，用于获取快照存储。"""
+    """依赖注入函数，用于在 API 端点中获取快照存储。"""
     return request.app.state.snapshot_store
-
-
-# --- 3. 统一的模型重建 ---
-# 确保 Pydantic 能够正确处理所有内部引用和向前引用
-StateSnapshot.model_rebuild()
-Sandbox.model_rebuild()
-SharedContext.model_rebuild()
-ExecutionContext.model_rebuild()

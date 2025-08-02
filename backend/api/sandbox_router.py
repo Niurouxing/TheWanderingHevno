@@ -1,13 +1,14 @@
-# backend/api/sandbox_router.py (新文件)
+# backend/api/sandbox_router.py
 
 from typing import Dict, Any, List, Optional
 from uuid import UUID
 from pydantic import BaseModel
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from backend.core.models import GraphCollection
+# 【核心修改】从 contracts 和 state 导入
+from backend.core.contracts import Sandbox, StateSnapshot, GraphCollection
+from backend.core.state import SnapshotStore, get_sandbox_store, get_snapshot_store
 from backend.core.engine import ExecutionEngine, get_engine
-from backend.core.state import Sandbox, StateSnapshot, SnapshotStore, get_sandbox_store, get_snapshot_store
 
 router = APIRouter(prefix="/api/sandboxes", tags=["Sandboxes"])
 
@@ -45,9 +46,17 @@ async def execute_sandbox_step(
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found.")
     
-    latest_snapshot = sandbox.get_latest_snapshot(snapshot_store)
-    if not latest_snapshot:
+    # 【核心修复】直接使用 snapshot_store 来获取最新的快照
+    if not sandbox.head_snapshot_id:
         raise HTTPException(status_code=409, detail="Sandbox has no initial state.")
+        
+    latest_snapshot = snapshot_store.get(sandbox.head_snapshot_id)
+    if not latest_snapshot:
+        # 这种情况通常是数据不一致的错误，意味着 head_snapshot_id 指向了一个不存在的快照
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Data inconsistency: head snapshot with ID '{sandbox.head_snapshot_id}' not found."
+        )
     
     new_snapshot = await engine.step(latest_snapshot, user_input)
     
@@ -61,9 +70,10 @@ async def get_sandbox_history(
     sandbox_store: Dict = Depends(get_sandbox_store),
     snapshot_store: SnapshotStore = Depends(get_snapshot_store)
 ):
-    snapshots = snapshot_store.find_by_sandbox(sandbox_id)
-    if not snapshots and not sandbox_store.get(sandbox_id):
+    if sandbox_id not in sandbox_store:
         raise HTTPException(status_code=404, detail="Sandbox not found.")
+    
+    snapshots = snapshot_store.find_by_sandbox(sandbox_id)
     return snapshots
 
 @router.put("/{sandbox_id}/revert")
@@ -74,12 +84,12 @@ async def revert_sandbox_to_snapshot(
     snapshot_store: SnapshotStore = Depends(get_snapshot_store)
 ):
     sandbox = sandbox_store.get(sandbox_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Sandbox not found.")
+
     target_snapshot = snapshot_store.get(snapshot_id)
-    if not sandbox or not target_snapshot or target_snapshot.sandbox_id != sandbox.id:
-        raise HTTPException(status_code=404, detail="Sandbox or Snapshot not found.")
+    if not target_snapshot or target_snapshot.sandbox_id != sandbox.id:
+        raise HTTPException(status_code=404, detail="Target snapshot not found or does not belong to this sandbox.")
     
     sandbox.head_snapshot_id = snapshot_id
-    # 注意: 对字典的修改是原地生效的，但如果 sandbox_store 是其他类型的对象，
-    # 重新赋值（sandbox_store[sandbox.id] = sandbox）会更安全。
     return {"message": f"Sandbox reverted to snapshot {snapshot_id}"}
-        

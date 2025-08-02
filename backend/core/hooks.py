@@ -101,9 +101,6 @@ class HookManager:
     async def filter(self, hook_name: str, data: T, **kwargs: Any) -> T:
         """
         触发一个“过滤型”钩子，形成处理链。
-
-        实现将按优先级顺序串行执行。前一个的输出是后一个的输入。
-        如果任何实现失败，它将被跳过，其输入数据将原样传递给下一个。
         """
         if hook_name not in self._hooks:
             return data
@@ -117,6 +114,7 @@ class HookManager:
                     f"Error in FILTER hook '{hook_name}' from plugin '{impl.plugin_name}'. Skipping. Error: {e}",
                     exc_info=e
                 )
+        
         return current_data
 
     async def decide(self, hook_name: str, **kwargs: Any) -> Optional[Any]:

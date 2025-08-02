@@ -80,6 +80,15 @@ class SetWorldVariableRuntime(RuntimeInterface):
         if not variable_name:
             raise ValueError("SetWorldVariableRuntime requires 'variable_name' in its config.")
         
+        # === LOGGING START ===
+        print(f"\n--- [RUNTIME set_world_var] Setting '{variable_name}' to: {value_to_set}")
+        print(f"--- [RUNTIME set_world_var] world_state before: {context.shared.world_state}")
+        # === LOGGING END ===
+        
         context.shared.world_state[variable_name] = value_to_set
+        
+        # === LOGGING START ===
+        print(f"--- [RUNTIME set_world_var] world_state after: {context.shared.world_state}\n")
+        # === LOGGING END ===
         
         return {}

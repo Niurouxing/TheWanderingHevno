@@ -49,11 +49,13 @@ class TestEngineCoreFlows:
 class TestEngineStateAndMacros:
     
     async def test_world_state_persists_and_macros_read_it(self, test_engine, world_vars_collection: GraphCollection):
-        # --- 测试逻辑保持不变 ---
         initial_snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=world_vars_collection)
         final_snapshot = await test_engine.step(initial_snapshot, {})
         
-        assert final_snapshot.world_state == {"theme": "cyberpunk"}
+        # 【修复】不再做精确匹配，而是检查键的存在和值
+        # 这使得测试对插件注入的元数据具有鲁棒性
+        assert "theme" in final_snapshot.world_state
+        assert final_snapshot.world_state["theme"] == "cyberpunk"
 
         expected_reader_output_start = "The theme is: cyberpunk and some data from setter"
         reader_output = final_snapshot.run_output["reader"]["output"]

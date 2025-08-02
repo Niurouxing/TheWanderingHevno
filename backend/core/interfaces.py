@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 
-from backend.core.state import ExecutionContext
+from backend.core.contracts import ExecutionContext
 
 
 class SubGraphRunner(ABC):
@@ -15,7 +15,8 @@ class SubGraphRunner(ABC):
     async def execute_graph(
         self,
         graph_name: str,
-        context: ExecutionContext,
+        # 【修改】使用从 contracts 导入的 ExecutionContext
+        parent_context: ExecutionContext,
         inherited_inputs: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         pass
@@ -30,9 +31,9 @@ class RuntimeInterface(ABC):
     async def execute(
         self,
         config: Dict[str, Any],
+        # 【修改】使用从 contracts 导入的 ExecutionContext
         context: ExecutionContext,
         subgraph_runner: Optional[SubGraphRunner] = None,
-        # 我们可以保留 pipeline_state 以支持节点内管道
         pipeline_state: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """

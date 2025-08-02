@@ -1,3815 +1,2445 @@
-### container.py
+### test_06_map_runtime.py
 ```
-# backend/container.py
+# tests/test_06_map_runtime.py
 
-import os
-from dotenv import load_dotenv
+import pytest
+from uuid import uuid4
 
-from backend.core.engine import ExecutionEngine
-from backend.core.registry import runtime_registry
-from backend.core.state import SnapshotStore
-from backend.persistence.service import PersistenceService
-from backend.llm.manager import KeyPoolManager, CredentialManager
-from backend.llm.registry import provider_registry
-from backend.core.services import service_registry
-from backend.core.reporting import auditor_registry, Auditor, Reportable
-from backend.runtimes.reporters import RuntimeReporter
-from backend.llm.reporters import LLMProviderReporter
-from backend.api.reporters import SandboxStatsReporter
 
-# 这是一个简单的依赖注入容器类
-# 我们可以使用现成的库如 `dependency-injector`，但为了清晰，我们手动实现一个
-class Container:
-    def __init__(self):
-        # 延迟加载，只有在被访问时才创建实例
-        self._execution_engine = None
-        self._persistence_service = None
-        self._snapshot_store = None
-        self._sandbox_store = None
-        self._auditor = None
+from backend.core.state import StateSnapshot
+from backend.core.models import GraphCollection
 
-    @property
-    def snapshot_store(self) -> SnapshotStore:
-        if self._snapshot_store is None:
-            self._snapshot_store = SnapshotStore()
-        return self._snapshot_store
+# 使用 pytest.mark.asyncio 来标记所有异步测试
+@pytest.mark.asyncio
+class TestEngineMapExecution:
+    """
+    对 system.map 运行时的集成测试。
+    所有测试现在都从 conftest.py 中自动获取一个配置好的、
+    使用 MockLLMService 的 test_engine 实例。
+    """
 
-    @property
-    def sandbox_store(self) -> dict:
-        if self._sandbox_store is None:
-            self._sandbox_store = {}
-        return self._sandbox_store
-
-    @property
-    def persistence_service(self) -> PersistenceService:
-        if self._persistence_service is None:
-            assets_dir = os.getenv("HEVNO_ASSETS_DIR", "hevno_project/assets")
-            self._persistence_service = PersistenceService(assets_base_dir=assets_dir)
-        return self._persistence_service
-    
-    def _create_llm_service(self):
+    async def test_basic_map_execution(
+        self,
+        test_engine,  # <-- 直接请求由 conftest 提供的 fixture
+        map_collection_basic: GraphCollection
+    ):
         """
-        这个函数现在是容器的私有方法，与 app.py 完全解耦。
+        测试基本的 scatter-gather 功能，不使用 collect。
+        期望输出是每个子图执行结果的完整字典的列表。
         """
-        is_debug_mode = os.getenv("HEVNO_LLM_DEBUG_MODE", "false").lower() == "true"
+        # --- Arrange ---
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=map_collection_basic
+        )
         
-        if is_debug_mode:
-            MockLLMServiceClass = service_registry.get_class("mock_llm")
-            if not MockLLMServiceClass: raise RuntimeError("MockLLMService not registered!")
-            return MockLLMServiceClass()
+        # --- Act ---
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        # --- Assert ---
+        output = final_snapshot.run_output
+        map_result = output["character_processor_map"]["output"]
 
-        LLMServiceClass = service_registry.get_class("llm")
-        if not LLMServiceClass: raise RuntimeError("LLMService not registered!")
-        
-        provider_registry.instantiate_all()
-        cred_manager = CredentialManager()
-        key_manager = KeyPoolManager(credential_manager=cred_manager)
-        
-        for name, info in provider_registry.get_all_provider_info().items():
-            key_manager.register_provider(name, info.key_env_var)
+        # 1. 验证输出是一个包含3个元素的列表
+        assert isinstance(map_result, list)
+        assert len(map_result) == 3
 
-        return LLMServiceClass(
-            key_manager=key_manager,
-            provider_registry=provider_registry,
-            max_retries=3
+        # 2. 验证每个元素都是一个子图的完整结果字典
+        assert "generate_bio" in map_result[0]
+        assert "generate_bio" in map_result[1]
+        assert "generate_bio" in map_result[2]
+
+        # 3. 详细验证第一个子图的输出，确保 source.item, source.index 和外部节点引用都正确
+        first_bio_output = map_result[0]["generate_bio"]["llm_output"]
+        expected_prompt_text_first = "Create a bio for Aragorn in the context of The Fellowship of the Ring. Index: 0"
+        # 断言匹配 MockLLMService 的输出格式
+        assert first_bio_output == f"[MOCK RESPONSE for mock/model] - Prompt received: '{expected_prompt_text_first[:50]}...'"
+        
+        # 4. 验证最后一个子图的输出
+        last_bio_output = map_result[2]["generate_bio"]["llm_output"]
+        expected_prompt_text_last = "Create a bio for Legolas in the context of The Fellowship of the Ring. Index: 2"
+        # 断言匹配 MockLLMService 的输出格式
+        assert last_bio_output == f"[MOCK RESPONSE for mock/model] - Prompt received: '{expected_prompt_text_last[:50]}...'"
+
+    async def test_map_with_collect(
+        self,
+        test_engine,  # <-- 直接请求由 conftest 提供的 fixture
+        map_collection_with_collect: GraphCollection
+    ):
+        """
+        测试 `collect` 功能，期望输出是一个扁平化的值列表。
+        """
+        # --- Arrange ---
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=map_collection_with_collect
+        )
+        
+        # --- Act ---
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+
+        # --- Assert ---
+        output = final_snapshot.run_output
+        map_result = output["character_processor_map"]["output"]
+
+        # 1. 验证输出是一个扁平列表
+        assert isinstance(map_result, list)
+        assert len(map_result) == 3
+
+        # 2. 验证列表中的每个元素都是从子图提取的 `llm_output` 字符串
+        prompt0 = "Create a bio for Aragorn in the context of The Fellowship of the Ring. Index: 0"
+        prompt1 = "Create a bio for Gandalf in the context of The Fellowship of the Ring. Index: 1"
+        prompt2 = "Create a bio for Legolas in the context of The Fellowship of the Ring. Index: 2"
+        
+        assert map_result[0] == f"[MOCK RESPONSE for mock/model] - Prompt received: '{prompt0[:50]}...'"
+        assert map_result[1] == f"[MOCK RESPONSE for mock/model] - Prompt received: '{prompt1[:50]}...'"
+        assert map_result[2] == f"[MOCK RESPONSE for mock/model] - Prompt received: '{prompt2[:50]}...'"
+
+    async def test_map_handles_concurrent_world_writes(
+        self,
+        test_engine,  # <-- 直接请求由 conftest 提供的 fixture
+        map_collection_concurrent_write: GraphCollection
+    ):
+        """
+        验证在 map 中并发写入 world_state 是原子和安全的。
+        """
+        # --- Arrange ---
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=map_collection_concurrent_write,
+            world_state={"gold": 0} # 初始金币为0
+        )
+        
+        # --- Act ---
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        # --- Assert ---
+        # 10个并行任务，每个增加10金币
+        expected_gold = 100
+
+        # 1. 验证最终的 world_state
+        assert final_snapshot.world_state.get("gold") == expected_gold
+        
+        # 2. 验证 reader 节点读取到的值
+        output = final_snapshot.run_output
+        reader_output = output["reader"]["output"]
+        assert reader_output == expected_gold
+
+    async def test_map_handles_partial_failures_gracefully(
+        self,
+        test_engine,  # <-- 直接请求由 conftest 提供的 fixture
+        map_collection_with_failure: GraphCollection
+    ):
+        """
+        测试当 map 迭代中的某些子图失败时，整体操作不会崩溃，
+        并且返回的结果中能清晰地标识出成功和失败的项。
+        """
+        # --- Arrange ---
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=map_collection_with_failure
+        )
+        
+        # --- Act ---
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+
+        # --- Assert ---
+        output = final_snapshot.run_output
+        map_result = output["mapper"]["output"]
+
+        # 1. 验证结果列表长度仍然是3
+        assert len(map_result) == 3
+
+        # 2. 验证成功的项
+        # 第一个子图 (Alice)
+        assert "error" not in map_result[0].get("get_name", {})
+        assert map_result[0]["get_name"]["output"] == "Alice"
+        # 第三个子图 (Charlie)
+        assert "error" not in map_result[2].get("get_name", {})
+        assert map_result[2]["get_name"]["output"] == "Charlie"
+
+        # 3. 验证失败的项
+        # 第二个子图 (Bob)
+        failed_item_result = map_result[1]
+        assert "get_name" in failed_item_result
+        assert "error" in failed_item_result["get_name"]
+        # 错误应该是因为对 str 对象调用 .name
+        assert "AttributeError" in failed_item_result["get_name"]["error"]
+```
+
+### test_08_llm_gateway.py
+```
+# tests/test_08_llm_gateway.py
+
+import asyncio
+import pytest
+from unittest.mock import AsyncMock, patch, MagicMock
+
+# --- 从 LLM 模块中导入所有需要测试的类和模型 ---
+from backend.llm.models import (
+    LLMResponse, LLMError, LLMResponseStatus, LLMErrorType, LLMRequestFailedError
+)
+from backend.llm.providers.gemini import GeminiProvider, google_exceptions
+from backend.llm.manager import (
+    CredentialManager, KeyPoolManager, KeyInfo, KeyStatus
+)
+from backend.llm.service import LLMService
+from backend.llm.registry import ProviderRegistry
+
+# ---------------------------------------------------------------------------
+# Fixtures: 测试组件的“原材料”
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def credential_manager() -> CredentialManager:
+    return CredentialManager()
+
+@pytest.fixture
+def key_pool_manager(credential_manager: CredentialManager) -> KeyPoolManager:
+    manager = KeyPoolManager(credential_manager)
+    manager.register_provider("gemini", "GEMINI_API_KEYS")
+    return manager
+
+@pytest.fixture
+def gemini_provider() -> GeminiProvider:
+    return GeminiProvider()
+
+@pytest.fixture
+def provider_registry(gemini_provider: GeminiProvider) -> ProviderRegistry:
+    registry = ProviderRegistry()
+    registry.register("gemini", gemini_provider)
+    return registry
+
+@pytest.fixture
+def llm_service(key_pool_manager: KeyPoolManager, provider_registry: ProviderRegistry) -> LLMService:
+    return LLMService(key_manager=key_pool_manager, provider_registry=provider_registry, max_retries=2)
+
+# ---------------------------------------------------------------------------
+# Section 1: 密钥管理器单元测试 (manager.py)
+# (这部分保持不变，但修复了 mark_as_banned 的 await 调用)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.llm_gateway
+class TestKeyPoolManager:
+    def test_credential_manager_loads_keys(self, credential_manager: CredentialManager):
+        gemini_keys = credential_manager.load_keys_from_env("GEMINI_API_KEYS")
+        assert gemini_keys == ["test_key_1", "test_key_2", "test_key_3"]
+
+    async def test_acquire_and_release_key(self, key_pool_manager: KeyPoolManager):
+        async with key_pool_manager.acquire_key("gemini") as key_info:
+            assert isinstance(key_info, KeyInfo)
+
+    async def test_key_banning_reduces_concurrency(self, key_pool_manager: KeyPoolManager):
+        pool = key_pool_manager.get_pool("gemini")
+        initial_concurrency = pool._semaphore._value
+        await key_pool_manager.mark_as_banned("gemini", "test_key_1")
+        assert pool._semaphore._value == initial_concurrency - 1
+        banned_key_info = next(k for k in pool._keys if k.key_string == "test_key_1")
+        assert not banned_key_info.is_available()
+
+    async def test_rate_limiting_and_recovery(self, key_pool_manager: KeyPoolManager):
+        pool = key_pool_manager.get_pool("gemini")
+        pool.mark_as_rate_limited("test_key_2", duration_seconds=0.1)
+        limited_key_info = next(k for k in pool._keys if k.key_string == "test_key_2")
+        assert not limited_key_info.is_available()
+        await asyncio.sleep(0.2)
+        assert limited_key_info.is_available()
+
+
+# ---------------------------------------------------------------------------
+# Section 2: 提供商适配器单元测试 (providers/gemini.py)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.llm_gateway
+@patch('backend.llm.providers.gemini.genai.GenerativeModel')
+class TestGeminiProvider:
+    """
+    对 GeminiProvider 的单元测试，完全模拟外部 API 调用。
+    """
+
+    async def test_generate_success(self, mock_genai_model: MagicMock, gemini_provider: GeminiProvider):
+        """测试场景：API 调用成功。"""
+        # --- Arrange ---
+        # 1. 构造一个模拟的成功响应数据对象
+        mock_response_data = MagicMock()
+        mock_response_data.text = "Mocked successful response"
+        usage_mock = MagicMock()
+        usage_mock.prompt_token_count, usage_mock.candidates_token_count, usage_mock.total_token_count = 10, 20, 30
+        mock_response_data.usage_metadata = usage_mock
+        mock_response_data.parts = [MagicMock()] # 表示内容未被过滤
+        
+        # 2. 【关键】将 mock 模型的异步方法设置为一个返回上述数据的 AsyncMock
+        mock_model_instance = mock_genai_model.return_value
+        mock_model_instance.generate_content_async = AsyncMock(return_value=mock_response_data)
+
+        # --- Act ---
+        response = await gemini_provider.generate(
+            prompt="A test prompt", model_name="gemini-1.5-pro", api_key="fake_key"
         )
 
-    @property
-    def execution_engine(self) -> ExecutionEngine:
-        if self._execution_engine is None:
-            services = {"llm": self._create_llm_service()}
-            self._execution_engine = ExecutionEngine(
-                registry=runtime_registry,
-                services=services
-            )
-        return self._execution_engine
-
-    @property
-    def auditor(self) -> Auditor:
-        if self._auditor is None:
-            # 确保报告者只被注册一次
-            if not auditor_registry.get_all():
-                auditor_registry.register(RuntimeReporter())
-                auditor_registry.register(LLMProviderReporter())
-                # 注意：这里我们传递了对容器属性的引用
-                auditor_registry.register(SandboxStatsReporter(self.sandbox_store, self.snapshot_store))
-            self._auditor = Auditor(auditor_registry)
-        return self._auditor
-
-# 加载环境变量，以便容器可以访问它们
-load_dotenv()
-
-# 创建一个全局的容器实例，供应用和测试使用
-container = Container()
-```
-
-### README.md
-```
-
-# Hevno Engine
-
-**一个为构建复杂、持久、可交互的 AI 世界而生的状态图执行引擎。**
-
----
-
-## 1. 我们的愿景：从“聊天机器人”到“世界模拟器”
-
-当前的语言模型（LLM）应用，大多停留在“一问一答”的聊天机器人模式，这极大地限制了 LLM 的潜能。我们相信，LLM 的未来在于构建**复杂、持久、可交互的动态世界**。
-
-想象一下：
-
-*   一个能与你玩《是，大臣》策略游戏的 AI，其中每个角色（哈克、汉弗莱、伯纳）都是一个独立的、有自己动机和知识库的 LLM 实例。
-*   一个能让你沉浸式体验的互动小说，你的每一个决定都会被记录，并动态地解锁、修改甚至创造新的故事线和世界规则。
-
-这些不再是简单的“提示工程”，而是**状态管理**、**并发控制**和**动态逻辑编排**的复杂工程问题。
-
-**Hevno Engine 的诞生，正是为了解决这个问题。** 它的核心使命是提供一个强大的后端框架，让开发者能够轻松地将离散的 LLM 调用，编织成有记忆、能演化、可回溯的智能代理和交互式世界。我们不是在构建另一个聊天应用，我们是在构建一个**创造世界的引擎**。
-
-## 2. 核心设计哲学
-
-我们的架构选择基于四大核心哲学：
-
-### 2.1 哲学一：以运行时为中心，指令式地构建行为
-
-> **"Behavior is a sequence of instructions."**
-
-我们摒弃了将所有配置混杂在一起的模式，转而采用一种更清晰、更强大的**指令式**设计。在 Hevno 中：
-
-*   **极简的节点 (`GenericNode`)**: 节点本身只是一个容器。
-*   **行为由指令驱动**: 节点的具体行为由其 `run` 字段中一个**有序的指令列表**所定义。
-*   **原子指令 (`RuntimeInstruction`)**: 每个指令都包含一个 `runtime`（一个可执行的功能单元）和它自己独立的 `config`（配置）。这确保了逻辑的清晰和数据的隔离。
-*   **强大的节点内管道**: 引擎会严格按照指令列表的顺序执行。后一个指令的宏，可以访问到前一个指令执行后产生的最新状态。
-
-**Hevno 的指令式设计:**
-```json
-// 一个先设置世界状态，再调用 LLM 的复杂节点
-{
-  "id": "advanced_llm",
-  "run": [
-    {
-      "runtime": "system.set_world_var",
-      "config": {
-        "variable_name": "character_mood",
-        "value": "happy"
-      }
-    },
-    {
-      "runtime": "llm.default",
-      "config": {
-        "prompt": "{{ f'根据角色愉悦的心情 `({world.character_mood})`，生成一句问候。' }}"
-      }
-    }
-  ]
-}
-```
-这种设计将节点的行为分解为一系列原子的、可预测的步骤，提供了无与伦比的控制力和可读性。
-
-### 2.2 哲学二：状态先行，计算短暂
-
-> **"State is permanent, execution is ephemeral."**
-
-一个交互式模拟世界的核心恰恰是“状态”。我们构建了一个以状态为核心的架构：
-
-*   **沙盒 (`Sandbox`)**: 代表一个完整的、隔离的交互环境（例如，一局游戏、一个项目）。
-*   **不可变快照 (`StateSnapshot`)**: 我们不直接修改状态。每一次交互（如图执行）都会产生一个全新的、完整的状态快照。这包含了当时所有的持久化变量 (`world_state`) 和驱动逻辑的图 (`graph_collection`)。
-*   **引擎的角色**: `ExecutionEngine` 本身是无状态的。它的工作是接收一个旧的 `StateSnapshot`，执行计算，然后生成一个新的 `StateSnapshot`。它是一个纯粹的**状态转换函数**。
-
-**执行流程示意：**
-```
-+---------------------------------------+
-|          (Old StateSnapshot)          |
-|  - world_state                        |
-|  - graph_collection                   |
-+---------------------------------------+
-                   |
-                   |
-                   v
-+---------------------------------------+
-|           Execution Engine            |
-|          (State Transition)           |
-|              run_graph()              |
-+---------------------------------------+
-                   |
-                   |
-                   v
-+---------------------------------------+
-|          (New StateSnapshot)          |
-|  - world_state (updated)              |
-|  - graph_collection (possibly evolved)|
-+---------------------------------------+
-```
-
-这种架构天然地带来了巨大的好处：
-1.  **完美的回溯能力**: “读档”操作变成了简单地将沙盒的指针指向一个历史快照。
-2.  **健壮的并发与调试**: 不可变性消除了大量的并发问题，并使得追踪状态变化变得异常简单。
-3.  **动态的逻辑演化**: 因为图的定义本身也是状态的一部分，所以图可以被它自己执行的逻辑所修改（例如，一个指令可以更新 `world_state` 中存储的图定义），实现世界的“自我进化”。
-
-### 2.3 哲学三：约定与配置相结合，智能推断与明确声明并存
-
-> **"Be smart, but provide an escape hatch."**
-
-我们力求为图的创建者提供最流畅的体验，在大多数情况下，你无需关心节点间的连接。但我们也承认，在复杂场景下，明确性优于魔法。
-
-*   **智能的依赖推断 (约定)**: 在我们的图定义中，你通常找不到 `edges` 字段。当一个节点的指令在其 `config` 中通过宏 `{{ nodes.A.output }}` 引用了另一个节点 `A` 时，引擎会自动建立一条从 `A` 到当前节点的执行依赖。这是我们的主要约定，能处理 90% 的场景。
-
-*   **明确的依赖声明 (配置)**: 对于那些无法通过宏自动推断的**隐式依赖**（例如，一个节点通过副作用修改了 `world` 状态，而另一个节点依赖这个状态），我们提供了一个明确的 `depends_on` 字段。这让你可以在需要时精确控制执行顺序，消除竞态条件。
-
-**依赖推断示例:**
-```json
-// 节点 B 自动依赖节点 A，因为它的宏引用了 nodes.A
-{
-  "id": "B",
-  "run": [{
-    "runtime": "llm.default",
-    "config": { "prompt": "{{ f'基于A的结果: {nodes.A.output}' }}" }
-  }]
-}
-```
-
-**明确声明依赖示例:**
-```json
-// B 节点读取由 A 节点设置的世界变量，这是一种隐式依赖。
-// 我们使用 depends_on 来确保 A 在 B 之前执行。
-{
-  "id": "A_set_state",
-  "run": [{ "runtime": "system.set_world_var", "config": { "variable_name": "theme", "value": "fantasy" }}]
-},
-{
-  "id": "B_read_state",
-  "depends_on": ["A_set_state"],
-  "run": [{
-    "runtime": "llm.default",
-    "config": { "prompt": "{{ f'生成一个关于 {world.theme} 世界的故事。' }}" }
-  }]
-}
-```
-这种“约定为主，配置为辅”的设计，将开发者的精力从繁琐的工程细节中解放出来，同时在关键时刻给予他们完全的控制权。
-
-### 2.4 哲学四：默认安全，并发无忧 (Safe by Default, Concurrently Sound)
-
-> **"Write natural code, get parallel safety for free."**
-
-在 Hevno 中，图的节点可以并行执行，这极大地提升了效率。但并发也带来了风险：如果两个并行节点同时修改同一个世界状态（如 `world.counter`），就会产生不可预测的结果（竞态条件）。
-
-我们坚信，开发者不应该为了利用并发而成为并发控制专家。因此，Hevno Engine 内置了**宏级原子锁**机制：
-
-*   **默认开启，完全透明**: 您无需编写任何特殊代码。引擎会自动确保每一个宏脚本的执行都是一个**原子操作**。
-*   **无竞态条件之忧**: 当您在宏中编写 `world.counter += 1` 时，即使有十个节点同时执行这段代码，引擎也能保证其过程不会被打断，最终结果绝对正确。
-*   **专注业务逻辑**: 您可以像在单线程环境中一样自然地编写代码，将全部精力投入到构建世界逻辑中，而引擎在幕后处理了所有复杂的并发安全问题。
-
-**并发写入示例:**
-```json
-// 节点 A 和 B 会被并行执行
-// 但由于宏级原子锁，对 world.gold 的修改是安全的
-{
-  "id": "A_earn_gold",
-  "run": [{ "runtime": "system.execute", "config": { "code": "world.gold += 10" } }]
-},
-{
-  "id": "B_spend_gold",
-  "run": [{ "runtime": "system.execute", "config": { "code": "world.gold -= 5" } }]
-}
-```
-这种设计让您能够无缝地从简单的线性逻辑扩展到复杂的高性能并行图，而无需修改一行状态操作代码。
-
----
-
-## 3. 图定义格式与核心概念
-
-### 3.1 顶层结构：图集合 (Graph Collection)
-
-一个完整的工作流定义是一个 JSON 对象，其 `key` 为图的名称，`value` 为图的定义。
-
--   **约定入口图的名称必须为 `"main"`**。
--   这允许多个可复用的图存在于同一个配置文件中。
-
-**示例:**
-```json
-{
-  "main": {
-    "nodes": [ /* ... 主图的节点 ... */ ]
-  },
-  "process_character_arc": {
-    "nodes": [ /* ... 一个可复用子图的节点 ... */ ]
-  }
-}
-```
-
-### 3.2 节点 (Node) 与指令 (Instruction)
-
-节点是图的基本执行单元，其行为由一个或多个有序的指令定义。
-
-```json
-{
-  "id": "unique_node_id_within_graph",
-  "depends_on": ["another_node_id"],
-  "run": [
-    {
-      "runtime": "runtime_name_A",
-      "config": {
-        "param1": "value1",
-        "param2": "{{ nodes.data_provider.output }}" 
-      }
-    },
-    {
-      "runtime": "runtime_name_B",
-      "config": {
-        // 这个指令的配置
-      }
-    }
-  ]
-}
-```
-*   `id`: 节点在图内的唯一标识符。
-*   `run`: 一个**有序的**指令列表，定义节点的行为。
-*   `depends_on` (可选): 一个节点 ID 的列表。用于明确声明当前节点必须在列表中的所有节点成功执行后才能开始，解决了无法自动推断的隐式依赖问题。
-
-### 3.3 Hevno 宏系统
-
-`{{ ... }}` 语法允许您在 `config` 的字符串值中嵌入可执行的 Python 代码。引擎会在执行**每一个**指令**之前**，先对该指令的 `config` 进行宏求值。
-
-这使得后一个指令可以访问前一个指令产生的状态。详情参见专门的宏系统文档。
-
----
-
-## 4. 核心运行时详解
-
-### 4.1 `system.call`: 子图调用
-
-`call` 运行时用于实现非迭代式的、单一的子图调用，是代码复用的基础。
-
-#### **调用格式**
-```json
-{
-  "runtime": "system.call",
-  "config": {
-    "graph": "process_character_arc",
-    "using": {
-      "character_input": "{{ nodes.main_character_provider.output }}",
-      "global_context": "{{ world.story_setting }}"
-    }
-  }
-}
-```
--   `graph`: 要调用的子图的名称。
--   `using`: 一个字典，用于将当前图的数据**映射**到子图的**输入占位符**。
-    -   在被调用的子图 (`process_character_arc`) 中，任何对未定义节点（如 `character_input`）的引用，都会被视作一个输入占位符。
--   **输出**: `call` 指令的输出就是被调用子图的**完整的最终状态字典**。后续指令可以通过 `{{ pipe.output.internal_summary_node.summary }}` 访问其内部结果（`pipe` 对象代表了上一步的输出）。
-
-### 4.2 `system.map`: 并行迭代 (Fan-out / Scatter-Gather)
-
-`map` 运行时是实现并行迭代的核心。它将一个子图并发地应用到输入列表的每个元素上。
-
-#### **调用格式**
-```json
-{
-  "runtime": "system.map",
-  "config": {
-    "list": "{{ nodes.data_provider.characters_list }}",
-    "graph": "process_character_arc",
-    "using": {
-      "character_input": "{{ source.item }}",
-      "iteration_index": "{{ source.index }}",
-      "main_plot_point": "{{ nodes.main_plot_provider.output }}"
-    },
-    "collect": "{{ nodes.final_summary.output }}"
-  }
-}
-```
--   `list`: 要迭代的列表。
--   `graph` 和 `using`: 与 `call` 类似，但 `using` 内部可以使用一个特殊的 `source` 对象。
--   **`source` 对象**: 这是一个特殊的、**只在 `using` 字段的宏表达式中有效**的对象：
-    -   `source.item`: 当前正在迭代的列表元素。
-    -   `source.index`: 当前迭代的从0开始的索引。
--   **输出聚合 (`collect`)**:
-    -   **如果 `collect` 未提供 (默认)**: `map` 指令的输出是一个**列表**，每个元素是对应子图执行的**完整最终状态**。
-    -   **如果 `collect` 已提供**: `map` 指令的输出是一个**扁平列表**，其元素是根据 `collect` 表达式从每个子图实例中提取的值。`collect` 表达式中的 `nodes` 指向其所在子图的内部节点。
-
----
-
-## 5. API 端点速查
-
--   `POST /api/sandboxes`
-    -   **功能**: 创建一个新沙盒。
-    -   **Body**: `{ "graph_collection": { ... }, "initial_state": { ... } }`
--   `POST /api/sandboxes/{sandbox_id}/step`
-    -   **功能**: 在沙盒的最新状态上执行一步。
-    -   **Body**: `{ ... }` (内容会注入到 `run.trigger_input`)
--   `GET /api/sandboxes/{sandbox_id}/history`
-    -   **功能**: 获取一个沙盒的所有历史快照。
--   `PUT /api/sandboxes/{sandbox_id}/revert`
-    -   **功能**: 将沙盒回滚到指定的历史快照。
-    -   **Query Param**: `snapshot_id=<uuid>`
-
-
-
-
-# Hevno 宏系统：可编程的配置
-
-欢迎来到 Hevno 宏系统，这是让您的静态图定义变得鲜活、动态和智能的核心引擎。我们摒弃了复杂的模板语言，转而拥抱一种更强大、更直观的理念：
-
-> **在配置中，像写 Python 一样思考。**
-
-宏系统允许您在图定义（JSON 文件）的字符串值中直接嵌入可执行的 Python 代码。它不仅能用于简单的变量替换，更是实现动态逻辑、状态操作和世界演化的瑞士军刀。
-
-## 1. 核心理念：逐步求值，精确控制
-
-Hevno 宏系统的设计哲学，旨在为您提供最流畅的开发体验，同时保留在关键时刻的完全控制权。
-
-### 1.1 唯一的语法：`{{ ... }}`
-
-您只需要记住一种语法。任何被双大括号 `{{ ... }}` 包裹起来的内容，都会被 Hevno 引擎视为一段可执行的 Python 代码。
-
-```json
-// 简单求值
-{ "config": { "value": "{{ 1 + 1 }}" } }
-
-// 访问世界状态
-{ "config": { "prompt": "{{ f'你好，{world.player_name}！' }}" } }
-
-// 执行复杂逻辑并修改状态
-{
-  "config": {
-    "script": "{{
-      if world.player.is_tired:
-          world.player.energy -= 10
-      else:
-          world.player.energy += 5
-    }}"
-  }
-}
-```
-
-### 1.2 智能的执行模型：指令前的即时求值 (Just-in-Time Evaluation)
-
-这是理解宏系统强大能力的关键。宏的求值不是在节点开始时一次性完成的，而是与节点的指令执行紧密相连。
-
-在一个节点内，引擎会严格按照 `run` 列表中的指令顺序执行。在**每一个**指令即将执行其 `runtime` **之前**，引擎会自动**遍历该指令的 `config`**。当它遇到一个值为 `{{...}}` 宏格式的字符串时，它会**执行一次**该宏，并用其返回结果**替换**掉原有的宏字符串。
-
-这意味着：
-1.  **所见即所得**：当您的运行时（如 `llm.default`）拿到 `prompt` 参数时，它**永远**是最终的、计算好的字符串。
-2.  **节点内状态流动**：一个指令的宏，可以**立即访问**到该节点内**上一个指令**执行后产生的任何状态变化。这是实现复杂节点内逻辑链的关键。
-3.  **隐式返回值**: 如果您的代码块最后一行是一个表达式（例如一个数字、一个字符串、一个函数调用），它的结果将成为这个宏的值。否则，其值为 `None`。
-
-## 2. 入门指南 (为所有用户)
-
-### 2.1 访问核心数据：您的世界交互窗口
-
-宏最强大的能力，在于它能访问和操纵 Hevno 引擎在执行图过程中的所有内部状态。您可以把宏想象成一个开在指令配置上的“开发者控制台”，能让您直接与引擎的“记忆”互动。
-
-在 `{{ ... }}` 内部，您可以访问一个包含了**所有可用上下文信息**的全局命名空间。这些上下文对象都支持便捷的**点符号访问**（如 `world.player.hp`）。
-
-*   **持久化世界状态 (`world`)**: 这是您的沙盒（Sandbox）的长期记忆。所有需要跨越多个执行步骤、长期存在的数据都应存放在这里。您可以读取它，也可以向其中写入新数据或修改现有数据，这些改动将被永久记录在下一个状态快照中。
-    *   **用途**: 存储玩家属性（如 `world.player.hp`）、任务进度、世界环境、角色关系等。
-    *   **示例 (读取)**: `"{{ f'玩家当前生命值：{world.player.hp}' }}"`
-    *   **示例 (写入)**: `"{{ world.quest_log.append('新任务：击败恶龙') }}"`
-
-*   **已完成节点的结果 (`nodes`)**: 这是一个对象，其属性是所有在当前节点执行之前，已经成功完成的节点的 `id`。您可以访问这些节点的最终输出结果。这是实现**节点间**数据流动的关键。
-    *   **用途**: 将一个节点的输出作为另一个节点的输入。
-    *   **示例**: `"{{ nodes.get_character_name.output.upper() }}"`
-
-*   **节点内管道状态 (`pipe`)**: 这是一个特殊的对象，它包含了**本节点内**所有**上一个指令**执行完成后的输出结果。它允许您在一个节点内部构建强大的数据处理管道，实现**指令间**的数据流动。
-    *   **用途**: 将 `system.input` 的结果传给 `llm.default`。
-    *   **示例**:
-        ```json
-        "run": [
-          { "runtime": "system.input", "config": { "value": "a cat" } },
-          { "runtime": "llm.default", "config": { "prompt": "{{ f'Tell me a story about {pipe.output}' }}" } }
-        ]
-        ```
-
-*   **本次运行的临时数据 (`run`)**: 这是一个临时存储区域，其生命周期仅限于**单次**图的执行。执行结束后，其中的所有数据都会被丢弃。
-    *   **用途**: 存储触发本次运行的外部输入（如用户的聊天消息）、本次运行中途的临时计算结果等。
-    *   **示例**: `"{{ run.trigger_input.user_message }}"`
-
-*   **会话元信息 (`session`)**: 包含了关于整个交互会话的全局信息，例如会话开始的时间、总共执行的回合数等。
-    *   **用途**: 用于记录、调试或实现与时间相关的逻辑。
-    *   **示例**: `"{{ f'当前是第 {session.turn_count} 回合' }}"`
-
-### 2.2 “开箱即用”的工具箱
-
-我们预置了一些标准 Python 模块，您无需 `import` 即可直接使用：`random`, `math`, `datetime`, `json`, `re`。
-
-*   掷一个20面的骰子: `"{{ random.randint(1, 20) }}"`
-*   从列表中随机选一个: `"{{ random.choice(['红色', '蓝色', '绿色']) }}"`
-
-### 2.3 实用示例
-
-#### 示例1：动态生成 NPC 对话
-
-根据玩家的声望 (`world.player_reputation`)，NPC 会有不同的反应。
-
-```json
-{
-  "id": "npc_greeting",
-  "run": [
-    {
-      "runtime": "llm.default",
-      "config": {
-        "prompt": "{{
-          rep = world.player_reputation
-          if rep > 50:
-              f'欢迎，尊敬的 {world.player_name}！见到您真是我的荣幸。'
-          elif rep < -50:
-              '哼，你还敢出现在我面前？'
-          else:
-              '哦，是你啊。'
-        }}"
-      }
-    }
-  ]
-}
-```
-
-#### 示例2：在一个节点内完成“计算伤害并更新状态”
-
-这个例子完美地展示了指令式执行和 `pipe` 对象的能力。
-
-```json
-{
-  "id": "take_damage",
-  "run": [
-    {
-      "runtime": "system.input",
-      "config": {
-        "value": "{{ run.trigger_input.damage }}"
-      }
-    },
-    {
-      "runtime": "system.execute",
-      "config": {
-        "code": "{{
-          damage_amount = pipe.output
-          world.player_hp -= damage_amount
-          world.battle_log.append(f'玩家受到了 {damage_amount} 点伤害。')
-        }}"
-      }
-    }
-  ]
-}
-```
-**执行流程**:
-1.  第一个指令执行，它的输出 (`damage` 值) 被放入 `pipe` 对象。
-2.  第二个指令开始执行，它的 `config` 中的宏被求值。
-3.  `pipe.output` 成功地获取了上一步的伤害值。
-4.  `world` 状态被成功修改。
-
-
-## 3. 并发安全：引擎的承诺与您的责任
-
-Hevno 引擎天生支持并行节点执行，这意味着没有依赖关系的节点会被同时运行以提升性能。为了让您在享受并行优势的同时，不必担心复杂的数据竞争问题，我们内置了强大的**宏级原子锁 (Macro-level Atomic Lock)** 机制。
-
-### 3.1 引擎的承诺：透明的并发安全
-
-Hevno 引擎的核心承诺是：**为所有基于 Python 基础数据类型（字典、列表、数字、字符串等）的世界状态操作，提供完全透明的、默认开启的并发安全保护。**
-
-这意味着，当您在宏中编写以下代码时，我们保证其结果在任何并行执行下都是正确和可预测的：
-*   `world.counter += 1`
-*   `world.player['stats']['strength'] -= 5`
-*   `world.log.append("New event")`
-
-**工作原理：** 在执行任何一个宏脚本（即 `{{ ... }}` 中的全部内容）之前，引擎会自动获取一个全局写入锁。在宏脚本执行完毕后，锁会自动释放。这保证了**每一个宏脚本的执行都是一个不可分割的原子操作**。您无需做任何事情，即可免费获得这份安全保障。
-
-### 3.2 问题的“完美风暴”：何时会超出引擎的保护范围？
-
-我们的自动化保护机制是有边界的。一个操作**必定会**产生不可预测的并发问题（竞态条件），当且仅当它**同时满足以下所有条件**：
-
-1.  **使用自定义类管理可变状态：** 您在宏中定义了 `class MyObject:` 并在其实例中直接存储可变数据（如 `self.hp = 100`），并将其存入 `world`。
-2.  **使用非纯方法修改状态：** 您调用了该实例的一个方法来直接修改其内部状态（如 `my_obj.take_damage(10)`，其内部实现是 `self.hp -= 10`）。
-3.  **真正的并行执行：** 您将这个修改操作放在了两个或多个**无依赖关系**的并行节点中。
-4.  **操作同一数据实例：** 这些并行节点操作的是**同一个对象实例**（e.g., `world.player_character`）。
-
-这个场景的本质是，您创建了一个引擎无法自动理解其内部工作原理的“黑盒”（您的自定义类），并要求引擎在并行环境下保证其内部操作的原子性。这是一个理论上无法被通用引擎自动解决的问题。
-
-### 3.3 解决方案路径：从推荐模式到自定义运行时
-
-如果您发现自己确实需要实现上述的复杂场景，我们提供了从易到难、从推荐到专业的解决方案路径：
-
-#### **第一层（强烈推荐）：遵循“数据-逻辑分离”设计模式**
-
-这是解决此问题的**首选方案**。它不需要您理解并发的复杂性，只需稍微调整代码组织方式：
-
-*   **状态用字典：** `world.player = {'hp': 100}`
-*   **逻辑用函数：** `def take_damage(p, amount): p['hp'] -= amount`
-*   **在宏中调用：** `{{ take_damage(world.player, 10) }}`
-
-这种模式能完美地被我们的自动化安全机制所覆盖，是 99% 的用户的最佳选择。
-
-#### **第二层（最终选择）：编写自定义运行时（插件）**
-
-如果您是高级开发者，并且有强烈的理由必须使用自定义类和方法来处理并发状态（例如，与外部系统集成或实现极其复杂的领域模型），那么正确的做法是**将这个责任从宏中移出，封装到一个自定义的运行时中**。
-
-**为什么应该使用自定义运行时？**
-
-*   **明确的控制权：** 在您自己的运行时 `execute` 方法中，您可以直接访问 `ExecutionContext` 并获取全局的 **`asyncio.Lock`**。这让您可以**精确地、手动地**控制加锁的范围，以保护您的自定义对象操作。
-*   **清晰的职责划分：**
-    *   **宏（Macro）** 的设计目标是**快速、便捷的逻辑编排和数据转换**，它不应该承载复杂的、需要手动管理的并发控制逻辑。
-    *   **运行时（Runtime）** 的设计目标是**执行封装好的、具有明确输入和输出的、可重用的功能单元**。处理与特定自定义对象相关的、复杂的原子操作，正是运行时的用武之地。
-*   **可测试与可复用：** 将复杂逻辑封装在运行时中，使得该逻辑单元可以被独立测试，并在图定义中被多次复用。
-
-
-## 4. 高级指南 (为开发者)
-
-### 4.1 宏的转义与 `system.execute`
-
-这是宏系统最强大的功能之一，允许您创建能与 LLM 进行深度交互的代理。
-
-**场景**: 您想让 LLM 能够通过返回特定指令来操纵世界状态。
-
-#### **步骤 1: 发送“转义”的指令给 LLM**
-
-您需要向 LLM 发送包含 `{{...}}` 语法的提示，但又不希望它在发送前被引擎执行。诀窍是**在宏内部使用字符串字面量**。
-
-```json
-// 指令 1: 指导 LLM
-{
-  "runtime": "llm.default",
-  "config": {
-    "prompt": "{{
-      # 使用 f-string 和单引号来构建最终的 prompt
-      # 这样 '{{...}}' 部分就会被当作普通文本
-      f'''
-      你是一个游戏助手。要将玩家的生命值设置为100，你应该返回：'{{ world.player_hp = 100 }}'
-      
-      现在，请为我恢复玩家的能量。
-      '''
-    }}"
-  }
-}
-```
-引擎在预处理此指令时，会执行 f-string，生成一个包含 `{{ world.player_hp = 100 }}` **文本**的字符串，然后将其发送给 LLM。
-
-#### **步骤 2: 执行 LLM 返回的指令**
-
-假设上一步的 LLM 返回了字符串 `"{{ world.player_energy = 100 }}"`。这个字符串现在存储在 `pipe.llm_output` 中。它只是一个普通的字符串，不会自动执行。
-
-要执行它，我们需要在下一个指令使用 `system.execute` 运行时。
-
-```json
-// 指令 2: 执行 LLM 的返回
-{
-  "runtime": "system.execute",
-  "config": {
-    // 1. 在预处理阶段，这个宏被执行，
-    //    'code' 的值变成了字符串 "{{ world.player_energy = 100 }}"
-    "code": "{{ pipe.llm_output }}",
-  }
-}
-```
-`system.execute` 运行时会接收到 `code` 字段的值，并对其进行**二次求值**，从而真正执行 `world.player_energy = 100`，修改世界状态。
-
-### 4.2 动态定义函数与 `import`
-
-您可以 `import` 任何库，或在 `world` 对象上动态创建函数，以构建可复用的逻辑或实现世界的自我演化。
-
-```json
-{
-  "id": "teach_world_new_trick",
-  "run": [{
-    "runtime": "system.execute",
-    "config": { "code": "{{
-      import numpy as np # 导入外部库
-
-      def calculate_weighted_average(values, weights):
-          return np.average(values, weights=weights)
-
-      if not hasattr(world, 'utils'): world.utils = {}
-      world.utils['weighted_avg'] = calculate_weighted_average
-    }}"
-  }}]
-}
-```
-在后续节点中，您就可以直接调用 `{{ world.utils.weighted_avg(...) }}`。
-
-### 4.3 宏与依赖推断
-
-*   **自动推断**: 在任何指令的 `config` 中使用 `{{ nodes.some_node_id... }}` 会自动建立对 `some_node_id` 的依赖。
-*   **手动声明**: （未来功能）对于无法自动推断的动态依赖（如 `nodes[world.var]`），可以使用 `depends_on: ["node_A", "node_B"]` 字段来手动声明。
-
----
-
-## 5. 内部实现概要 (为引擎开发者)
-
-1.  **节点内循环**: `ExecutionEngine._execute_node` 循环遍历节点的 `run` 指令列表。
-2.  **指令前求值**: 在每次循环中，它首先调用 `evaluation.evaluate_data` 来处理当前指令的 `config`。
-3.  **宏级原子性**: 在 `evaluation.evaluate_expression` 内部，执行任何宏代码之前，会先获取一个在本次图执行期间唯一的 `asyncio.Lock`。宏执行完毕后，锁被释放。这保证了对 `world` 状态的并发修改是安全的。
-4.  **运行时纯粹性**: 运行时接收到的 `config` 是纯粹、已求值的 Python 对象。这极大地简化了运行时的设计和测试。
-5.  **`system.execute`**：它是一个标准的运行时。其特殊之处在于，它在自己的实现内部再次调用了 `evaluation.evaluate_expression`，从而实现了可控的“二次求值”循环。
-
-
-
----
-
-# Hevno Codex 系统：动态的、可组合的知识引擎
-
-欢迎来到 Hevno 的核心知识管理与文本生成系统——`Codex` 系统。它旨在将传统 LLM 应用中繁琐、静态的 Prompt 工程，转变为一种动态、可组合、且与世界状态深度融合的声明式流程。
-
-**我们的愿景：** 不再手写拼接巨大的 Prompt 字符串，而是像拼装乐高一样，从名为“法典 (Codex)”的知识库中，通过一个名为“唤典 (`system.invoke`)”的强大指令，智能地、动态地构建出所需的一切文本。
-
----
-
-## 1. 核心概念详解
-
-`Codex` 系统由两大核心部分组成，完美体现了 Hevno“数据与行为分离”的设计哲学：
-
-1.  **知识法典 (The Codex)**: 这是**数据**。它是一个纯粹的 JSON/字典结构，存放在持久化的世界状态 `world.codices` 中。它定义了“有什么”可用的知识，是 `StateSnapshot` 的一部分，因此可以被追踪、回滚，甚至被游戏逻辑动态地修改。
-2.  **唤典运行时 (`system.invoke`)**: 这是**行为**。它是一个无状态的运行时，是一个纯粹的状态转换函数。它的工作是接收当前的 `ExecutionContext`（包含 `world`），执行一次短暂的、可预测的计算（即“唤典”过程），然后输出最终组合好的文本。
-
-### 1.1 知识法典 (Codex) 的结构
-
-一个法典集合存放在 `world.codices` 中，它是一个字典，其 `key` 为法典的名称，`value` 为法典对象的定义。
-
-**示例 `world.codices` 结构:**
-```json
-{
-  "world_state": {
-    "codices": {
-      "persona_rules": { /* ... 法典A ... */ },
-      "world_lore": {
-        "description": "包含动态的世界背景知识。",
-        "config": {
-          "recursion_depth": 3
-        },
-        "entries": [
-          {
-            "id": "lore_magic_concept",
-            "content": "{{ f'魔法是这个世界的核心力量，它源自于 {world.magic_source}。' }}",
-            "is_enabled": "{{ world.magic_is_unlocked }}",
-            "trigger_mode": "on_keyword",
-            "keywords": ["魔法", "法术"],
-            "priority": 10
-          },
-          {
-            "id": "lore_king_status",
-            "content": "{{ f'国王目前正在 {nodes.spy_report.output.king_location}。' }}",
-            "trigger_mode": "always_on",
-            "priority": "{{ 100 if world.is_urgent_news else 20 }}"
-          }
-        ]
-      }
-    },
-    "magic_is_unlocked": true,
-    "is_urgent_news": false,
-    "magic_source": "上古龙脉"
-  }
-}
-```
-
-#### **法典条目 (Entry) 的关键属性:**
-
-每个 `entries` 列表中的对象都遵循以下结构：
-
--   `id` (str, 必须): 条目在其法典内的唯一标识符。
--   `content` (str, 必须): **[宏]** 核心内容。这是一个宏字符串，将在**第二阶段（渲染阶段）**被求值。它可以访问完整的上下文，包括 `world`, `run`, `nodes`, `pipe` 以及一个特殊的 `trigger` 对象。
--   `is_enabled` (bool | str, 可选, 默认 `true`): **[宏]** 一个布尔值或返回布尔值的宏。在**第一阶段（选择阶段）**求值，用于动态决定此条目是否参与本次处理。
--   `trigger_mode` (str, 可选, 默认 `"always_on"`): 触发模式。
-    -   `"always_on"`: 只要条目 `is_enabled`，总是被激活。
-    -   `"on_keyword"`: 只有当其 `keywords` 中的至少一个词出现在触发源文本中时才被激活。
--   `keywords` (List[str] | str, 可选, 默认 `[]`): **[宏]** 一个字符串列表或返回列表的宏。用于 `"on_keyword"` 模式。
--   `priority` (int | str, 可选, 默认 `0`): **[宏]** 一个整数或返回整数的宏。在**第一阶段（选择阶段）**求值。用于在全局的“待渲染池”中排序所有被激活的条目，**数值越大越优先**。
-
-#### **新增的 `trigger` 上下文**
-在条目的 `content` 宏中，可以访问一个特殊的 `trigger` 对象，它包含了触发此条目的相关信息：
--   `trigger.source_text` (str): 触发此条目的完整源文本。
--   `trigger.matched_keywords` (List[str]): 一个列表，包含此条目的哪些 `keywords` 在源文本中被匹配到。
-
-### 1.2 `system.invoke` 运行时
-
-这是将 `Codex` 数据变为鲜活文本的核心指令。它能从多个法典中，根据不同触发源，智能地融合信息。
-
-**图中的使用示例:**
-```json
-{
-  "id": "build_llm_context",
-  "run": [{
-    "runtime": "system.invoke",
-    "config": {
-      "from": [
-        { "codex": "persona_rules" },
-        {
-          "codex": "world_lore",
-          "source": "{{ '\\n'.join(h.content for h in world.history[-3:]) }}"
-        }
-      ],
-      "recursion_enabled": true,
-      "debug": true 
-    }
-  }]
-}
-```
-
-#### **`invoke` 配置的关键属性:**
-
--   `from` (List[dict], 必须): 一个列表，定义了所有要咨询的数据源。列表中的每个对象包含：
-    -   `codex` (str, 必须): 要咨询的法典名称（必须与 `world.codices` 中的键匹配）。
-    -   `source` (str, 可选): **[宏]** 一个宏字符串，其求值结果将作为此法典的“触发源文本”。如果省略，则此法典只会激活其 `always_on` 条目。
--   `recursion_enabled` (bool, 可选, 默认 `false`): 是否允许在所有激活的条目间进行跨法典的递归触发。详见下文。
--   `debug` (bool, 可选, 默认 `false`): 是否开启调试模式。开启后，输出将变为一个包含 `final_text` 和详细 `trace` 信息的结构化对象，而非单个字符串。
-    -   **`trace` 对象示例**:
-        ```json
-        {
-          "final_text": "...",
-          "trace": {
-            "initial_activation": [
-              { "id": "lore_king_status", "priority": 100, "reason": "always_on", "matched_keywords": [] }
-            ],
-            "recursive_activations": [
-              { "id": "lore_magic_concept", "priority": 10, "reason": "recursive_keyword_match", "triggered_by": "some_other_entry" }
-            ],
-            "evaluation_log": [
-              {"id": "lore_king_status", "status": "rendered"},
-              {"id": "lore_magic_concept", "status": "rendered"}
-            ],
-            "rejected_entries": [
-              { "id": "secret_entry", "reason": "is_enabled macro returned false" }
-            ]
-          }
-        }
-        ```
-
----
-
-## 2. 执行模型：两阶段求值与递归
-
-`system.invoke` 的核心是其内部的“两阶段求值”机制和强大的递归循环，这保证了宏在正确的时间被求值，并能访问到正确的上下文。
-
-### 2.1 阶段一：选择与过滤 (Structural Evaluation)
-
-此阶段的目标是确定**哪些条目被激活**以及它们的**最终顺序**。
-
-1.  **上下文**: 只能访问 `world` 和 `run`。**注意：此时无法访问 `nodes` 上下文。**
-2.  **流程**:
-    -   `invoke` 遍历 `config.from` 中的每个数据源，并求值其 `source` 宏得到触发文本。
-    -   接着，`invoke` 深入每个法典的每个条目，**只求值其结构性宏**：`is_enabled`, `keywords`, `priority`。
-    -   `content` 宏在此阶段**保持原样**，不被触碰。
-    -   根据求值后的结构属性和触发文本，筛选出所有被激活的条目，放入一个全局的“待渲染池 (Rendering Pool)”。
-
-*此阶段结束后，我们得到了一个包含所有待处理条目（及其最终优先级）的列表，但它们的内容仍然是宏模板。*
-
-### 2.2 阶段二：渲染与注入 (Content Evaluation)
-
-此阶段的目标是将选中的条目的内容渲染成最终文本。
-
-1.  **上下文**: 可以访问**全部**上下文，包括 `world`, `run`, `nodes`, `pipe` 和新增的 `trigger`。
-2.  **流程**:
-    -   对“待渲染池”中的所有条目，根据它们在阶段一计算出的 `priority` 进行一次**全局降序排序**。
-    -   **（递归触发）** 如果 `recursion_enabled: true`，则启动一个动态循环（详见下一节）。
-    -   按最终顺序遍历池中的每一个条目，**此刻才开始求值它们的 `content` 宏**。
-    -   将所有渲染好的文本片段用 `\n\n` 拼接起来，形成最终输出。
-
-### 2.3 递归执行流程 (`recursion_enabled: true`)
-
-当递归开启时，渲染过程不再是一次性的遍历，而是一个动态的循环，直到没有更多条目可渲染或达到 `recursion_depth` 限制：
-
-1.  **初始填充**: 系统首先执行**阶段一**，从所有 `source` 文本中激活初始的一批条目，将它们放入“待渲染池”。
-
-2.  **启动循环**:
-    a. **排序**: 对当前“待渲染池”中的所有条目，按 `priority` 进行降序排序。
-    b. **提取**: 从池中取出并移除**优先级最高**的条目。
-    c. **渲染**: 执行**阶段二**，渲染该条目的 `content` 宏，得到一段新的文本。这段文本被追加到最终结果中。
-    d. **再触发**: 将刚刚渲染出的新文本，作为**新的触发源**，去扫描**所有法典中所有尚未被渲染的条目**。
-    e. **再填充**: 如果有新的条目在此次扫描中被激活（满足 `is_enabled` 和 `on_keyword` 条件），则计算它们的 `priority` 并将它们加入“待渲染池”。
-    f. **重复**: 只要“待渲染池”不为空，就跳回步骤 **a**，重新排序并继续处理。
-
-这个过程确保了渲染的顺序是动态响应的。一个条目被渲染后，其内容可能会激活一个更高优先级的条目，而这个条目会在下一次循环中被优先处理。
-
----
-
-## 3. 最佳实践与示例
-
-### 3.1 关键：处理隐式依赖
-
-Hevno 引擎的依赖推断是**静态的**。它在图执行开始前扫描图定义，当 `{{ nodes.A.output }}` 出现在`config`中时，会自动建立依赖。
-
-**Codex 的内容存在于 `world` 状态中，是动态的。** 引擎的静态分析器无法预知 `world.codices` 内部的宏是否会引用 `nodes`。因此，`Codex` 内部对 `nodes` 的引用属于**隐式依赖**。
-
-> **规则：如果你的 `invoke` 节点所调用的 Codex 条目的 `content` 宏中引用了 `nodes.some_node.output`，你必须在 `invoke` 节点上使用 `depends_on: ["some_node"]` 来明确声明这一依赖关系。**
-
-**正确示例：**
-```json
-// world.codices
-{
-  "npc_dialogue": {
-    "entries": [{
-      "id": "report_summary",
-      "content": "{{ f'根据密探 {nodes.spy_identity.output} 的报告，我们得知：{nodes.spy_report.output}' }}"
-    }]
-  }
-}
-```
-```json
-// 图定义 (graph "nodes" list)
-[
-  { "id": "spy_identity", "run": [/* ... */] },
-  { "id": "spy_report", "run": [/* ... */] },
-  {
-    "id": "generate_npc_dialogue",
-    // 关键：由于 codex 内容引用了 nodes，我们必须在这里明确声明依赖关系。
-    "depends_on": ["spy_identity", "spy_report"],
-    "run": [{
-      "runtime": "system.invoke",
-      "config": {
-        "from": [{ "codex": "npc_dialogue" }]
-      }
-    }]
-  }
-]
-```
-
-### 3.2 示例：构建复杂的 LLM Prompt
-
-`Codex` 系统最强大的用途之一是动态构建提示。
-
-**场景**：我们想让一个 AI 角色扮演，它需要一个固定的“人格”部分，和一个根据用户输入动态变化的“知识”部分。
-
-**`world.codices` 定义:**
-```json
-{
-  "persona": {
-    "entries": [
-      { "id": "role", "content": "你是一个中世纪的、脾气暴躁的矮人铁匠。", "priority": 100 },
-      { "id": "rules", "content": "你的回答必须简短且粗鲁。", "priority": 90 }
-    ]
-  },
-  "knowledge": {
-    "entries": [
-      {
-        "id": "sword_info", "trigger_mode": "on_keyword", "keywords": ["剑", "武器"],
-        "content": "关于剑？我只打最好的大马士革钢。价格不菲。"
-      },
-      {
-        "id": "armor_info", "trigger_mode": "on_keyword", "keywords": ["盔甲", "护甲"],
-        "content": "盔甲得量身定做。别拿那些现成的垃圾跟我比。"
-      }
-    ]
-  }
-}
-```
-
-**图定义:**
-```json
-[
-  {
-    "id": "build_prompt",
-    "run": [{
-      "runtime": "system.invoke",
-      "config": {
-        "from": [
-          { "codex": "persona" }, // 总是激活，提供基础人设
-          { "codex": "knowledge", "source": "{{ run.trigger_input.user_message }}" } // 根据用户输入触发
-        ]
-      }
-    }]
-  },
-  {
-    "id": "call_llm",
-    "run": [{
-      "runtime": "llm.default",
-      "config": {
-        // 将 invoke 的结果作为 prompt，并附加上下文
-        "prompt": "{{ f'{nodes.build_prompt.output}\\n\\nHuman: {run.trigger_input.user_message}\\nDwarf:' }}"
-      }
-    }]
-  }
-]
-```
-当用户输入 `"我想买一把剑"` 时，`system.invoke` 会智能地组合出：
-```
-你是一个中世纪的、脾气暴躁的矮人铁匠。
-
-你的回答必须简短且粗鲁。
-
-关于剑？我只打最好的大马士革钢。价格不菲。
-```
-这个组合后的文本再被传递给 `llm.default`，从而实现动态、精准的上下文注入。
-```
-
-### app.py
-```
-# backend/app.py
-
-import os
-from dotenv import load_dotenv
-
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-
-from backend.core.loader import load_modules
-from backend.container import container
-
-# 导入所有 API 路由
-from backend.api import base_router, sandbox_router
-from backend.api import persistence as persistence_router_module
-
-
-PLUGGABLE_MODULES = [
-    "backend.runtimes",
-    "backend.llm.providers",
-]
-
-def create_app() -> FastAPI:
+        # --- Assert ---
+        assert response.status == LLMResponseStatus.SUCCESS
+        assert response.content == "Mocked successful response"
+        assert response.usage["total_tokens"] == 30
+        mock_model_instance.generate_content_async.assert_awaited_once()
+
+    async def test_generate_filtered(self, mock_genai_model: MagicMock, gemini_provider: GeminiProvider):
+        """测试场景：API 调用因安全策略被阻止。"""
+        # --- Arrange ---
+        mock_response_data = MagicMock()
+        mock_response_data.parts = [] # 空 parts 表示内容被过滤
+        feedback_mock = MagicMock()
+        feedback_mock.block_reason.name = "SAFETY"
+        mock_response_data.prompt_feedback = feedback_mock
+        
+        mock_model_instance = mock_genai_model.return_value
+        mock_model_instance.generate_content_async = AsyncMock(return_value=mock_response_data)
+
+        # --- Act ---
+        response = await gemini_provider.generate(
+            prompt="A sensitive prompt", model_name="gemini-1.5-pro", api_key="fake_key"
+        )
+
+        # --- Assert ---
+        assert response.status == LLMResponseStatus.FILTERED
+        assert response.error_details.error_type == LLMErrorType.INVALID_REQUEST_ERROR
+        assert "Request blocked due to SAFETY" in response.error_details.message
+        mock_model_instance.generate_content_async.assert_awaited_once()
+
+    def test_translate_errors(self, mock_genai_model: MagicMock, gemini_provider: GeminiProvider):
+        """测试 `translate_error` 方法能否正确映射各种异常。"""
+        # --- Act & Assert ---
+        # 逐一测试每种错误映射
+        auth_error = gemini_provider.translate_error(google_exceptions.PermissionDenied("auth failed"))
+        assert auth_error.error_type == LLMErrorType.AUTHENTICATION_ERROR
+        assert not auth_error.is_retryable
+
+        rate_limit_error = gemini_provider.translate_error(google_exceptions.ResourceExhausted("rate limit"))
+        assert rate_limit_error.error_type == LLMErrorType.RATE_LIMIT_ERROR
+        assert not rate_limit_error.is_retryable
+
+        server_error = gemini_provider.translate_error(google_exceptions.ServiceUnavailable("server down"))
+        assert server_error.error_type == LLMErrorType.PROVIDER_ERROR
+        assert server_error.is_retryable
+
+# ---------------------------------------------------------------------------
+# Section 3: 核心服务集成测试 (service.py)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.llm_gateway
+class TestLLMServiceIntegration:
     """
-    应用工厂函数：构建、配置并返回 FastAPI 应用实例。
-    【重构后】此函数不再负责创建服务，而是从容器中获取它们。
+    对 LLMService 的集成测试，测试其重试和故障转移的核心逻辑。
+    我们在这里使用一个 mock 的 provider，以便精确控制其行为。
     """
-    # 0. 加载环境变量 (可以保留，或者依赖容器已加载)
-    load_dotenv()
 
-    # 1. 动态加载所有可插拔模块 (这需要在服务创建前完成)
-    print("--- Loading Pluggable Modules ---")
+    @pytest.fixture
+    def mock_gemini_provider(self) -> AsyncMock:
+        """提供一个可被精确控制行为的 mock GeminiProvider。"""
+        # 使用 autospec=True 可以确保 mock 的接口与原始类匹配
+        return AsyncMock(spec=GeminiProvider)
+        
+    @pytest.fixture
+    def llm_service_with_mock_provider(self, key_pool_manager: KeyPoolManager, mock_gemini_provider: AsyncMock) -> LLMService:
+        """提供一个配置了 mock provider 的 LLMService 实例。"""
+        # 1. 创建一个局部的、干净的 registry 实例
+        registry = ProviderRegistry()
+        
+        # 2. 注册 mock provider。注意这里我们直接传递 mock 对象，而不是类
+        #    为了让它工作，我们需要稍微调整 register 方法的类型提示，或者直接在这里操作内部字典
+        #    更简单的方法是：直接操作 registry 的内部状态以进行精确的 mock
+        
+        # 我们直接将 mock provider 实例放入 registry 的 `_providers` 字典中
+        # 这样可以绕过 register 和 instantiate_all 的复杂逻辑
+        registry._providers["gemini"] = mock_gemini_provider
+
+        
+        return LLMService(key_manager=key_pool_manager, provider_registry=registry, max_retries=2)
+    
+
+    async def test_request_success_on_first_try(self, llm_service_with_mock_provider: LLMService, mock_gemini_provider: AsyncMock):
+        """测试快乐路径：第一次尝试即成功。"""
+        # --- Arrange ---
+        mock_gemini_provider.generate.return_value = LLMResponse(status=LLMResponseStatus.SUCCESS, content="Success!")
+        
+        # --- Act ---
+        response = await llm_service_with_mock_provider.request(model_name="gemini/gemini-1.5-pro", prompt="Hello")
+
+        # --- Assert ---
+        assert response.status == LLMResponseStatus.SUCCESS
+        mock_gemini_provider.generate.assert_awaited_once()
+
+    async def test_retry_on_provider_error_and_succeed(self, llm_service_with_mock_provider: LLMService, mock_gemini_provider: AsyncMock):
+        """测试重试逻辑：第一次失败（可重试），第二次成功。"""
+        # --- Arrange ---
+        # 第一次调用抛出可重试异常，第二次调用返回成功响应
+        mock_gemini_provider.generate.side_effect = [
+            google_exceptions.ServiceUnavailable("Server temporary down"),
+            LLMResponse(status=LLMResponseStatus.SUCCESS, content="Success after retry!")
+        ]
+        # 配置 translate_error 以正确识别该异常
+        mock_gemini_provider.translate_error.return_value = LLMError(
+            error_type=LLMErrorType.PROVIDER_ERROR, message="Server down", is_retryable=True
+        )
+        
+        # --- Act ---
+        response = await llm_service_with_mock_provider.request(model_name="gemini/gemini-1.5-pro", prompt="Hello")
+        
+        # --- Assert ---
+        assert response.status == LLMResponseStatus.SUCCESS
+        assert response.content == "Success after retry!"
+        assert mock_gemini_provider.generate.call_count == 2
+        mock_gemini_provider.translate_error.assert_called_once()
+
+    async def test_failover_on_auth_error_and_succeed(self, llm_service_with_mock_provider: LLMService, mock_gemini_provider: AsyncMock):
+        """测试故障转移逻辑：第一次认证失败，切换密钥后第二次成功。"""
+        # --- Arrange ---
+        mock_gemini_provider.generate.side_effect = [
+            google_exceptions.PermissionDenied("Invalid Key"),
+            LLMResponse(status=LLMResponseStatus.SUCCESS, content="Success with new key!")
+        ]
+        mock_gemini_provider.translate_error.return_value = LLMError(
+            error_type=LLMErrorType.AUTHENTICATION_ERROR, message="Invalid Key", is_retryable=False
+        )
+        
+        # --- Act ---
+        response = await llm_service_with_mock_provider.request(model_name="gemini/gemini-1.5-pro", prompt="Hello")
+
+        # --- Assert ---
+        assert response.status == LLMResponseStatus.SUCCESS
+        assert mock_gemini_provider.generate.call_count == 2
+        
+        # 验证两次调用使用了不同的密钥
+        first_call_key = mock_gemini_provider.generate.call_args_list[0].kwargs['api_key']
+        second_call_key = mock_gemini_provider.generate.call_args_list[1].kwargs['api_key']
+        assert first_call_key != second_call_key
+
+        # 验证第一个密钥已被禁用
+        pool = llm_service_with_mock_provider.key_manager.get_pool("gemini")
+        banned_key = next(k for k in pool._keys if k.key_string == first_call_key)
+        assert banned_key.status == KeyStatus.BANNED
+
+    async def test_final_failure_after_all_retries(self, llm_service_with_mock_provider: LLMService, mock_gemini_provider: AsyncMock):
+        """测试最终失败路径：所有重试次数用尽。"""
+        # --- Arrange ---
+        # 所有调用都抛出同一个可重试异常
+        mock_gemini_provider.generate.side_effect = google_exceptions.ServiceUnavailable("Server persistently down")
+        mock_gemini_provider.translate_error.return_value = LLMError(
+            error_type=LLMErrorType.PROVIDER_ERROR, message="Server down", is_retryable=True
+        )
+        
+        # --- Act & Assert ---
+        with pytest.raises(LLMRequestFailedError) as exc_info:
+            await llm_service_with_mock_provider.request(model_name="gemini/gemini-1.5-pro", prompt="Hello")
+        
+        # 验证异常信息和调用次数
+        max_retries = llm_service_with_mock_provider.max_retries
+        assert f"failed after {max_retries} attempt(s)" in str(exc_info.value)
+        assert exc_info.value.last_error.error_type == LLMErrorType.PROVIDER_ERROR
+        assert mock_gemini_provider.generate.call_count == max_retries
+```
+
+### conftest.py
+```
+# tests/conftest.py
+import pytest
+from fastapi.testclient import TestClient
+from typing import Generator
+
+# --- Session-wide setup ---
+@pytest.fixture(scope="session", autouse=True)
+def load_test_env_and_modules():
+    from dotenv import load_dotenv
+    from backend.core.loader import load_modules
+    
+    # 确保测试环境和模块在所有测试运行前被加载
+    load_dotenv(dotenv_path=".env.test", override=True)
+    
+    PLUGGABLE_MODULES = [
+        "backend.runtimes",
+        "backend.llm.providers",
+        "backend.services"
+    ]
     load_modules(PLUGGABLE_MODULES)
-    print("--- Modules Loaded ---")
 
-    # 2. 创建 FastAPI 实例
-    app = FastAPI(
-        title="Hevno Backend Engine",
-        description="A dynamically loaded, modular execution engine for Hevno.",
-        version="0.8.0-container-refactor"
-    )
-
-    # 3. 从容器中获取核心服务并附加到 app.state
-    #    现在 app.py 不再需要知道如何构建这些服务
-    print("--- Attaching Core Services from Container ---")
-    app.state.engine = container.execution_engine
-    app.state.persistence_service = container.persistence_service
-    app.state.snapshot_store = container.snapshot_store
-    app.state.sandbox_store = container.sandbox_store
-    app.state.auditor = container.auditor
-    print("--- Core Services Attached ---")
-
-    # 4. 配置中间件
-    origins = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173").split(",")
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    # 5. 包含所有 API 路由
-    app.include_router(base_router.router)
-    app.include_router(sandbox_router.router)
-    app.include_router(persistence_router_module.router) 
-
-    print("\n--- Hevno Engine Ready ---")
-    return app
-```
-
-### main.py
-```
-# backend/main.py 
-
-import uvicorn
-import os 
+# --- 导入核心组件 ---
+from backend.core.models import GraphCollection
+from backend.core.engine import ExecutionEngine
+from backend.container import container  # <-- 【核心修改】直接从容器导入
 from backend.app import create_app
 
-# 调用工厂函数来获取完全配置好的应用实例
-app = create_app()
+# --- Fixtures for Core Components ---
 
-if __name__ == "__main__":
-    uvicorn.run(
-        "backend.main:app", 
-        host=os.getenv("HOST", "0.0.0.0"),
-        port=int(os.getenv("PORT", 8000)),
-        reload=True, # 在开发时启用重载
-        reload_dirs=["backend"]
-    )
-```
-
-### llm/service.py
-```
-# backend/llm/service.py
-from __future__ import annotations
-import asyncio
-from typing import Dict, Optional, Any
-
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-)
-
-from backend.llm.manager import KeyPoolManager, KeyInfo
-from backend.llm.models import (
-    LLMResponse,
-    LLMError,
-    LLMErrorType,
-    LLMResponseStatus,
-    LLMRequestFailedError,
-)
-from backend.llm.registry import provider_registry, ProviderRegistry
-from backend.core.services import service_registry, ServiceInterface
-
-
-
-@service_registry.register("llm")
-class LLMService(ServiceInterface):
+@pytest.fixture
+def test_engine() -> ExecutionEngine:
     """
-    LLM Gateway 的核心服务，负责协调所有组件并执行请求。
+    【重构后】直接从容器获取引擎实例。
+    这使得引擎的集成测试完全脱离了 FastAPI 应用。
     """
-    def __init__(
-        self,
-        key_manager: KeyPoolManager,
-        provider_registry: ProviderRegistry,
-        max_retries: int = 3
-    ):
-        self.key_manager = key_manager
-        self.provider_registry = provider_registry
-        self.max_retries = max_retries
+    return container.execution_engine
 
-    async def request(
-        self,
-        model_name: str,
-        prompt: str,
-        **kwargs
-    ) -> LLMResponse:
-        self.last_known_error = None
-        try:
-            provider_name, actual_model_name = self._parse_model_name(model_name)
-        except ValueError as e:
-            return self._create_failure_response(
-                model_name=model_name,
-                error=LLMError(
-                    error_type=LLMErrorType.INVALID_REQUEST_ERROR,
-                    message=str(e),
-                    is_retryable=False,
-                ),
-            )
+@pytest.fixture
+def test_client() -> Generator[TestClient, None, None]:
+    """
+    【重构后】这个 fixture 现在只为 API E2E 测试服务。
+    """
+    # 每次测试都创建一个新的 app 实例
+    app = create_app()
 
-        def log_before_sleep(retry_state):
-            pass
-        
-        retry_decorator = retry(
-            stop=stop_after_attempt(self.max_retries),
-            wait=wait_exponential(multiplier=1, min=2, max=10),
-            retry=retry_if_exception_type(Exception),
-            reraise=True,
-            before_sleep=log_before_sleep
-        )
-
-        try:
-            wrapped_attempt = retry_decorator(self._attempt_request)
-            return await wrapped_attempt(provider_name, actual_model_name, prompt, **kwargs)
-        
-        except LLMRequestFailedError as e:
-            final_message = (
-                f"LLM request for model '{model_name}' failed after {self.max_retries} attempt(s)."
-            )
-            raise LLMRequestFailedError(
-                final_message,
-                last_error=self.last_known_error 
-            ) from e
-        
-        except Exception as e:
-            raise
-
-    async def _attempt_request(
-        self,
-        provider_name: str,
-        model_name: str,
-        prompt: str,
-        **kwargs
-    ) -> LLMResponse:
-        provider = self.provider_registry.get(provider_name)
-        if not provider:
-            raise LLMRequestFailedError(f"Provider '{provider_name}' not found.")
-
-        try:
-            async with self.key_manager.acquire_key(provider_name) as key_info:
-                try:
-                    response = await provider.generate(
-                        prompt=prompt, model_name=model_name, api_key=key_info.key_string, **kwargs
-                    )
-                    if response.status in [LLMResponseStatus.SUCCESS, LLMResponseStatus.FILTERED]:
-                        return response
-                    raise LLMRequestFailedError("Provider returned an error response.", last_error=response.error_details)
-                
-                except Exception as e:
-                    llm_error = provider.translate_error(e)
-                    self.last_known_error = llm_error
-                    await self._handle_error(provider_name, key_info, llm_error)
-                    error_message = f"Request attempt failed: {llm_error.message}"
-                    raise LLMRequestFailedError(error_message, last_error=llm_error) from e
-        
-        except (RuntimeError, ValueError) as e:
-            raise LLMRequestFailedError(str(e))
-
-    async def _handle_error(self, provider_name: str, key_info: KeyInfo, error: LLMError):
-        if error.error_type == LLMErrorType.AUTHENTICATION_ERROR:
-            await self.key_manager.mark_as_banned(provider_name, key_info.key_string)
-        elif error.error_type == LLMErrorType.RATE_LIMIT_ERROR:
-            self.key_manager.mark_as_rate_limited(
-                provider_name, key_info.key_string, error.retry_after_seconds or 60
-            )
-
-    def _parse_model_name(self, model_name: str) -> (str, str):
-        parts = model_name.split('/', 1)
-        if len(parts) != 2 or not all(parts):
-            raise ValueError(f"Invalid model name format: '{model_name}'. Expected 'provider/model_id'.")
-        return parts[0], parts[1]
+    # 从容器中获取存储实例，用于清理
+    sandbox_store = container.sandbox_store
+    snapshot_store = container.snapshot_store
     
-    def _create_failure_response(self, model_name: str, error: LLMError) -> LLMResponse:
-        return LLMResponse(status=LLMResponseStatus.ERROR, model_name=model_name, error_details=error)
-
-@service_registry.register("mock_llm")
-class MockLLMService(ServiceInterface):
-    """
-    一个 LLMService 的模拟实现，用于调试。
-    它不进行任何网络调用，而是立即返回一个可预测的假响应。
-    """
-    def __init__(self, *args, **kwargs):
-        print("--- Hevno LLM Gateway is running in MOCK/DEBUG mode. No real API calls will be made. ---")
-
-    async def request(
-        self,
-        model_name: str,
-        prompt: str,
-        **kwargs
-    ) -> LLMResponse:
-        # 模拟一个非常短暂的延迟
-        await asyncio.sleep(0.05)
-        
-        mock_content = f"[MOCK RESPONSE for {model_name}] - Prompt received: '{prompt[:50]}...'"
-        
-        return LLMResponse(
-            status=LLMResponseStatus.SUCCESS,
-            content=mock_content,
-            model_name=model_name,
-            usage={"prompt_tokens": len(prompt.split()), "completion_tokens": 15, "total_tokens": len(prompt.split()) + 15}
-        )
-
-
-```
-
-### llm/models.py
-```
-# backend/llm/models.py
-
-from enum import Enum
-from typing import Optional, Dict, Any
-
-from pydantic import BaseModel, Field
-
-
-# --- Enums for Status and Error Types ---
-
-class LLMResponseStatus(str, Enum):
-    """定义 LLM 响应的标准化状态。"""
-    SUCCESS = "success"
-    FILTERED = "filtered"
-    ERROR = "error"
-
-
-class LLMErrorType(str, Enum):
-    """定义标准化的 LLM 错误类型，用于驱动重试和故障转移逻辑。"""
-    AUTHENTICATION_ERROR = "authentication_error"  # 密钥无效或权限不足
-    RATE_LIMIT_ERROR = "rate_limit_error"          # 达到速率限制
-    PROVIDER_ERROR = "provider_error"              # 服务商侧 5xx 或其他服务器错误
-    NETWORK_ERROR = "network_error"                # 网络连接问题
-    INVALID_REQUEST_ERROR = "invalid_request_error"  # 请求格式错误 (4xx)
-    UNKNOWN_ERROR = "unknown_error"                # 未知或未分类的错误
-
-
-# --- Core Data Models ---
-
-class LLMError(BaseModel):
-    """
-    一个标准化的错误对象，用于封装来自任何提供商的错误信息。
-    """
-    error_type: LLMErrorType = Field(
-        ...,
-        description="错误的标准化类别。"
-    )
-    message: str = Field(
-        ...,
-        description="可读的错误信息。"
-    )
-    is_retryable: bool = Field(
-        ...,
-        description="此错误是否适合重试（例如，网络错误或某些服务端错误）。"
-    )
-    retry_after_seconds: Optional[int] = Field(
-        default=None,
-        description="如果提供商明确告知，需要等待多少秒后才能重试。"
-    )
-    provider_details: Optional[Dict[str, Any]] = Field(
-        default_factory=dict,
-        description="原始的、特定于提供商的错误细节，用于调试。"
-    )
-
-
-class LLMResponse(BaseModel):
-    """
-    一个标准化的响应对象，用于封装来自任何提供商的成功、过滤或错误结果。
-    """
-    status: LLMResponseStatus = Field(
-        ...,
-        description="响应的总体状态。"
-    )
-    content: Optional[str] = Field(
-        default=None,
-        description="LLM 生成的文本内容。仅在 status 为 'success' 时保证存在。"
-    )
-    model_name: Optional[str] = Field(
-        default=None,
-        description="实际用于生成此响应的模型名称。"
-    )
-    usage: Optional[Dict[str, int]] = Field(
-        default=None,
-        description="Token 使用情况统计，例如 {'prompt_tokens': 10, 'completion_tokens': 200}。"
-    )
-    error_details: Optional[LLMError] = Field(
-        default=None,
-        description="如果 status 为 'error'，则包含此字段以提供详细的错误信息。"
-    )
+    # 在每次测试前清理
+    sandbox_store.clear()
+    snapshot_store.clear()
     
-    # 可以在这里添加一个验证器，确保在status为error时，error_details不为空
-    # 但为了保持模型的简单性，我们暂时将此逻辑留给上层服务处理。
-
-
-# --- Custom Exception ---
-
-class LLMRequestFailedError(Exception):
-    """
-    在所有重试和故障转移策略都用尽后，由 LLMService 抛出的最终异常。
-    """
-    def __init__(self, message: str, last_error: Optional[LLMError] = None):
-        """
-        :param message: 对失败的总体描述。
-        :param last_error: 导致最终失败的最后一个标准化错误对象。
-        """
-        super().__init__(message)
-        self.last_error = last_error
-
-    def __str__(self):
-        if self.last_error:
-            return (
-                f"{super().__str__()}\n"  # <--- super().__str__() 会返回我们传入的 message
-                f"Last known error ({self.last_error.error_type.value}): {self.last_error.message}"
-            )
-        return super().__str__()
-```
-
-### llm/registry.py
-```
-# backend/llm/registry.py
-
-from typing import Dict, Type, Optional, Callable
-from pydantic import BaseModel
-from backend.llm.providers.base import LLMProvider
-
-
-class ProviderInfo(BaseModel):
-    provider_class: Type[LLMProvider]
-    key_env_var: str
-
-class ProviderRegistry:
-    """
-    负责注册和查找 LLMProvider 实例及其元数据。
-    """
-    def __init__(self):
-        self._providers: Dict[str, LLMProvider] = {}
-        self._provider_info: Dict[str, ProviderInfo] = {}
-
-    def register(self, name: str, key_env_var: str) -> Callable[[Type[LLMProvider]], Type[LLMProvider]]:
-        """
-        装饰器，用于注册 LLM Provider 类及其关联的环境变量。
-        """
-        def decorator(provider_class: Type[LLMProvider]) -> Type[LLMProvider]:
-            if name in self._provider_info:
-                print(f"Warning: Overwriting LLM provider registration for '{name}'.")
-            self._provider_info[name] = ProviderInfo(provider_class=provider_class, key_env_var=key_env_var)
-            print(f"LLM Provider '{name}' registered via decorator (keys from '{key_env_var}').")
-            return provider_class
-        return decorator
+    with TestClient(app) as client:
+        yield client
     
-    def get_provider_info(self, name: str) -> Optional[ProviderInfo]:
-        return self._provider_info.get(name)
-
-    def instantiate_all(self):
-        """实例化所有已注册的 Provider。"""
-        for name, info in self._provider_info.items():
-            if name not in self._providers:
-                self._providers[name] = info.provider_class()
+    # 在每次测试后再次清理
+    sandbox_store.clear()
+    snapshot_store.clear()
     
-    def get(self, name: str) -> Optional[LLMProvider]:
-        return self._providers.get(name)
-    
-    def get_all_provider_info(self) -> Dict[str, ProviderInfo]:
-        return self._provider_info
-
-provider_registry = ProviderRegistry()
-```
-
-### llm/__init__.py
-```
-
-```
-
-### llm/reporters.py
-```
-# backend/llm/reporters.py
-from typing import Any, Dict
-from backend.core.reporting import Reportable
-from backend.llm.registry import provider_registry
-
-class LLMProviderReporter(Reportable):
-    
-    @property
-    def report_key(self) -> str:
-        return "llm_providers"
-    
-    async def generate_report(self) -> Any:
-        manifest = []
-        all_info = provider_registry.get_all_provider_info()
-        for name, info in all_info.items():
-            provider_class = info.provider_class
-            manifest.append({
-                "name": name,
-                # 同样，假设 LLMProvider 基类增加了 supported_models 属性
-                "supported_models": getattr(provider_class, 'supported_models', [])
-            })
-        return sorted(manifest, key=lambda x: x['name'])
-```
-
-### llm/manager.py
-```
-# backend/llm/manager.py
-
-import asyncio
-import os
-import time
-from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import List, Dict, Optional, AsyncIterator
-
-
-# --- Enums and Data Classes for Key State Management ---
-
-class KeyStatus(str, Enum):
-    """定义 API 密钥的健康状态。"""
-    AVAILABLE = "available"
-    RATE_LIMITED = "rate_limited"
-    BANNED = "banned"
-
-
-@dataclass
-class KeyInfo:
-    """存储单个 API 密钥及其状态信息。"""
-    key_string: str
-    status: KeyStatus = KeyStatus.AVAILABLE
-    rate_limit_until: float = 0.0  # Unix timestamp until which the key is rate-limited
-
-    def is_available(self) -> bool:
-        """检查密钥当前是否可用。"""
-        if self.status == KeyStatus.BANNED:
-            return False
-        if self.status == KeyStatus.RATE_LIMITED:
-            if time.time() < self.rate_limit_until:
-                return False
-            # 如果限速时间已过，自动恢复为可用
-            self.status = KeyStatus.AVAILABLE
-            self.rate_limit_until = 0.0
-        return self.status == KeyStatus.AVAILABLE
-
-
-# --- Core Manager Components ---
-
-class CredentialManager:
-    """负责从环境变量中安全地加载和解析密钥。"""
-
-    def load_keys_from_env(self, env_variable: str) -> List[str]:
-        """
-        从指定的环境变量中加载 API 密钥。
-        密钥应以逗号分隔。
-
-        :param env_variable: 环境变量的名称 (e.g., 'GEMINI_API_KEYS').
-        :return: 一个包含 API 密钥字符串的列表。
-        """
-        keys_str = os.getenv(env_variable)
-        if not keys_str:
-            print(f"Warning: Environment variable '{env_variable}' not set. No keys loaded.")
-            return []
-        
-        # 按逗号分割，并去除每个密钥前后的空白字符
-        keys = [key.strip() for key in keys_str.split(',') if key.strip()]
-        if not keys:
-            print(f"Warning: Environment variable '{env_variable}' is set but contains no valid keys.")
-        return keys
-
-
-class ProviderKeyPool:
-    """
-    管理特定提供商（如 'gemini'）的一组 API 密钥。
-    内置并发控制和密钥选择逻辑。
-    """
-    def __init__(self, provider_name: str, keys: List[str]):
-        if not keys:
-            raise ValueError(f"Cannot initialize ProviderKeyPool for '{provider_name}' with an empty key list.")
-        
-        self.provider_name = provider_name
-        self._keys: List[KeyInfo] = [KeyInfo(key_string=k) for k in keys]
-        
-        # 使用 Semaphore 控制对该提供商的并发请求数量，初始值等于可用密钥数
-        self._semaphore = asyncio.Semaphore(len(self._keys))
-
-    def _get_next_available_key(self) -> Optional[KeyInfo]:
-        """循环查找下一个可用的密钥。"""
-        # 简单的轮询策略
-        for key_info in self._keys:
-            if key_info.is_available():
-                return key_info
-        return None
-
-    @asynccontextmanager
-    async def acquire_key(self) -> AsyncIterator[KeyInfo]:
-        """
-        一个安全的异步上下文管理器，用于获取和释放密钥。
-        这是与该池交互的主要方式。
-
-        :yields: 一个可用的 KeyInfo 对象。
-        :raises asyncio.TimeoutError: 如果在指定时间内无法获取密钥。
-        :raises RuntimeError: 如果池中已无任何可用密钥。
-        """
-        # 1. 获取信号量，这会阻塞直到有空闲的“插槽”
-        await self._semaphore.acquire()
-
-        try:
-            # 2. 从池中选择一个当前可用的密钥
-            key_info = self._get_next_available_key()
-            if not key_info:
-                # 这种情况理论上不应该发生，因为信号量应该反映可用密钥数
-                # 但作为防御性编程，我们处理它
-                raise RuntimeError(f"No available keys in pool '{self.provider_name}' despite acquiring semaphore.")
-            
-            # 3. 将密钥提供给调用者
-            yield key_info
-        finally:
-            # 4. 无论发生什么，都释放信号量
-            self._semaphore.release()
-
-    def mark_as_rate_limited(self, key_string: str, duration_seconds: int = 60):
-        """标记一个密钥为被限速状态。"""
-        for key in self._keys:
-            if key.key_string == key_string:
-                key.status = KeyStatus.RATE_LIMITED
-                key.rate_limit_until = time.time() + duration_seconds
-                print(f"Key for '{self.provider_name}' ending with '...{key_string[-4:]}' marked as rate-limited for {duration_seconds}s.")
-                break
-
-    async def mark_as_banned(self, key_string: str):
-        """永久性地标记一个密钥为被禁用，并减少并发信号量。"""
-        for key in self._keys:
-            if key.key_string == key_string and key.status != KeyStatus.BANNED:
-                key.status = KeyStatus.BANNED
-                # 关键一步：永久性地减少一个并发“插槽”
-                # 我们通过尝试获取然后不释放来实现
-                # 注意：这假设信号量初始值与密钥数相同
-                await self._semaphore.acquire()
-                print(f"Key for '{self.provider_name}' ending with '...{key_string[-4:]}' permanently banned. Concurrency reduced.")
-                break
-
-
-class KeyPoolManager:
-    """
-    顶层管理器，聚合了所有提供商的密钥池。
-    这是上层服务（LLMService）与之交互的唯一入口。
-    """
-    def __init__(self, credential_manager: CredentialManager):
-        self._pools: Dict[str, ProviderKeyPool] = {}
-        self._cred_manager = credential_manager
-
-    def register_provider(self, provider_name: str, env_variable: str):
-        """
-
-        从环境变量加载密钥，并为提供商创建一个密钥池。
-        :param provider_name: 提供商的名称 (e.g., 'gemini').
-        :param env_variable: 包含该提供商密钥的环境变量。
-        """
-        keys = self._cred_manager.load_keys_from_env(env_variable)
-        if keys:
-            self._pools[provider_name] = ProviderKeyPool(provider_name, keys)
-            print(f"Registered provider '{provider_name}' with {len(keys)} keys from '{env_variable}'.")
-
-    def get_pool(self, provider_name: str) -> Optional[ProviderKeyPool]:
-        """获取指定提供商的密钥池。"""
-        return self._pools.get(provider_name)
-
-    # 为了方便上层服务调用，我们将核心方法直接暴露在这里
-    
-    @asynccontextmanager
-    async def acquire_key(self, provider_name: str) -> AsyncIterator[KeyInfo]:
-        """
-        从指定提供商的池中获取一个密钥。
-        """
-        pool = self.get_pool(provider_name)
-        if not pool:
-            raise ValueError(f"No key pool registered for provider '{provider_name}'.")
-        
-        async with pool.acquire_key() as key_info:
-            yield key_info
-
-    def mark_as_rate_limited(self, provider_name: str, key_string: str, duration_seconds: int = 60):
-        pool = self.get_pool(provider_name)
-        if pool:
-            pool.mark_as_rate_limited(key_string, duration_seconds)
-
-    async def mark_as_banned(self, provider_name: str, key_string: str):
-        pool = self.get_pool(provider_name)
-        if pool:
-            await pool.mark_as_banned(key_string)
-```
-
-### core/interfaces.py
-```
-# backend/core/interfaces.py
-from __future__ import annotations
-from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
-
-from backend.core.state import ExecutionContext
-
-
-class SubGraphRunner(ABC):
-    """
-    一个抽象接口，定义了执行子图的能力。
-    这是引擎必须提供给需要回调的运行时的服务。
-    """
-    @abstractmethod
-    async def execute_graph(
-        self,
-        graph_name: str,
-        context: ExecutionContext,
-        inherited_inputs: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        pass
-
-class RuntimeInterface(ABC):
-    """
-    重新定义的运行时接口。
-    它现在只依赖于 ExecutionContext 和可选的 SubGraphRunner。
-    它不再知道 ExecutionEngine 的存在。
-    """
-    @abstractmethod
-    async def execute(
-        self,
-        config: Dict[str, Any],
-        context: ExecutionContext,
-        subgraph_runner: Optional[SubGraphRunner] = None,
-        # 我们可以保留 pipeline_state 以支持节点内管道
-        pipeline_state: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """
-        :param config: 已求值的配置。
-        :param context: 当前的执行上下文 (包含 world_state 等)。
-        :param subgraph_runner: 一个可选的回调接口，用于执行子图。
-        :param pipeline_state: 节点内上一步的输出。
-        """
-        pass
-
-```
-
-### core/services.py
-```
-# backend/core/services.py
-from typing import Dict, Any, Type, Callable
-
-
-class ServiceInterface:
-    """一个可选的基类或标记接口，用于所有服务。"""
-    pass
-
-class ServiceRegistry:
-    """管理整个应用中的核心服务。"""
-    def __init__(self):
-
-        self._service_classes: Dict[str, Type[ServiceInterface]] = {}
-
-
-    def register(self, name: str) -> Callable[[Type[ServiceInterface]], Type[ServiceInterface]]:
-        """装饰器，用于注册服务类。"""
-        def decorator(service_class: Type[ServiceInterface]) -> Type[ServiceInterface]:
-            if name in self._service_classes:
-                print(f"Warning: Overwriting service registration for '{name}'.")
-            self._service_classes[name] = service_class
-            print(f"Service '{name}' registered via decorator: {service_class.__name__}")
-            return service_class
-        return decorator
-
-    def get_class(self, name: str) -> Type[ServiceInterface] | None:
-        """获取已注册的服务类。"""
-        return self._service_classes.get(name)
-
-
-# 全局单例
-service_registry = ServiceRegistry()
-```
-
-### core/models.py
-```
-# backend/models.py 
-from pydantic import BaseModel, Field, RootModel, field_validator
-from typing import List, Dict, Any, Optional # <-- 导入 Optional
-
-class RuntimeInstruction(BaseModel):
-    """
-    一个运行时指令，封装了运行时名称及其隔离的配置。
-    这是节点执行逻辑的基本单元。
-    """
-    runtime: str
-    config: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="该运行时专属的、隔离的配置字典。"
-    )
-
-class GenericNode(BaseModel):
-    """
-    节点模型，现在以一个有序的运行时指令列表为核心。
-    """
-    id: str
-    run: List[RuntimeInstruction] = Field(
-        ...,
-        description="定义节点执行逻辑的有序指令列表。"
-    )
-    depends_on: Optional[List[str]] = Field(
-        default=None,
-        description="一个可选的列表，用于明确声明此节点在执行前必须等待的其他节点的ID。用于处理无法通过宏自动推断的隐式依赖。"
-    )
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
-class GraphDefinition(BaseModel):
-    """图定义，包含一个节点列表。"""
-    nodes: List[GenericNode]
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
-class GraphCollection(RootModel[Dict[str, GraphDefinition]]):
-    """
-    整个配置文件的顶层模型。
-    使用 RootModel，模型本身就是一个 `Dict[str, GraphDefinition]`。
-    """
-    
-    @field_validator('root')
-    @classmethod
-    def check_main_graph_exists(cls, v: Dict[str, GraphDefinition]) -> Dict[str, GraphDefinition]:
-        """验证器，确保存在一个 'main' 图作为入口点。"""
-        if "main" not in v:
-            raise ValueError("A 'main' graph must be defined as the entry point.")
-        return v
-```
-
-### core/registry.py
-```
-# backend/core/registry.py (修改后)
-from typing import Dict, Type, Callable
-from backend.core.interfaces import RuntimeInterface
-
-class RuntimeRegistry:
-    def __init__(self):
-        self._registry: Dict[str, Type[RuntimeInterface]] = {}
-
-    def register(self, name: str) -> Callable[[Type[RuntimeInterface]], Type[RuntimeInterface]]:
-        """
-        一个可以作为装饰器使用的注册方法。
-        用法:
-        @runtime_registry.register("system.input")
-        class InputRuntime(RuntimeInterface):
-            ...
-        """
-        def decorator(runtime_class: Type[RuntimeInterface]) -> Type[RuntimeInterface]:
-            if name in self._registry:
-                print(f"Warning: Overwriting runtime registration for '{name}'.")
-            self._registry[name] = runtime_class
-            print(f"Runtime '{name}' registered via decorator.")
-            return runtime_class
-        return decorator
-
-    def get_runtime(self, name: str) -> RuntimeInterface:
-        runtime_class = self._registry.get(name)
-        if runtime_class is None:
-            raise ValueError(f"Runtime '{name}' not found.")
-        return runtime_class()
-
-# 全局单例
-runtime_registry = RuntimeRegistry()
-```
-
-### core/evaluation.py
-```
-# backend/core/evaluation.py
-import ast
-import asyncio
-import re
-from typing import Any, Dict, List, Optional   
-from functools import partial
-from backend.core.utils import DotAccessibleDict
-from backend.core.state import ExecutionContext # 显式导入
-
-# 预编译宏的正则表达式和预置模块保持不变...
-INLINE_MACRO_REGEX = re.compile(r"{{\s*(.+?)\s*}}", re.DOTALL)
-MACRO_REGEX = re.compile(r"^{{\s*(.+)\s*}}$", re.DOTALL)
-import random
-import math
-import datetime
-import json
-import re as re_module
-
-PRE_IMPORTED_MODULES = {
-    "random": random,
-    "math": math,
-    "datetime": datetime,
-    "json": json,
-    "re": re_module,
-}
-
-def build_evaluation_context(
-    exec_context: ExecutionContext,
-    pipe_vars: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
-    """
-    从 ExecutionContext 构建宏的执行环境。
-    这个函数现在变得非常简单，因为它信任传入的上下文。
-    """
-    context = {
-        **PRE_IMPORTED_MODULES,
-        # 直接从共享上下文中获取 world 和 session
-        "world": DotAccessibleDict(exec_context.shared.world_state),
-        "session": DotAccessibleDict(exec_context.shared.session_info),
-        # run 和 nodes 是当前图执行所私有的
-        "run": DotAccessibleDict(exec_context.run_vars),
-        "nodes": DotAccessibleDict(exec_context.node_states),
+# ---------------------------------------------------------------------------
+# Fixtures for Graph Collections (更新 llm.default 配置)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def linear_collection() -> GraphCollection:
+    return GraphCollection.model_validate({
+        "main": { "nodes": [
+            {"id": "A", "run": [{"runtime": "system.input", "config": {"value": "a story about a cat"}}]},
+            {"id": "B", "run": [{"runtime": "llm.default", "config": {"model": "mock/model", "prompt": "{{ f'The story is: {nodes.A.output}' }}"}}]},
+            {"id": "C", "run": [{"runtime": "llm.default", "config": {"model": "mock/model", "prompt": "{{ nodes.B.llm_output }}"}}]}
+        ]}
+    })
+@pytest.fixture
+def parallel_collection() -> GraphCollection:
+    """一个扇出再扇入的图 (A, B) -> C。"""
+    return GraphCollection.model_validate({
+        "main": { "nodes": [
+            {"id": "source_A", "run": [{"runtime": "system.input", "config": {"value": "Value A"}}]},
+            {"id": "source_B", "run": [{"runtime": "system.input", "config": {"value": "Value B"}}]},
+            {
+                "id": "merger",
+                "run": [{
+                    "runtime": "system.input",
+                    "config": {"value": "{{ f'Merged: {nodes.source_A.output} and {nodes.source_B.output}' }}"}
+                }]
+            }
+        ]}
+    })
+
+@pytest.fixture
+def pipeline_collection() -> GraphCollection:
+    return GraphCollection.model_validate({
+        "main": { "nodes": [{
+            "id": "A",
+            "run": [
+                {"runtime": "system.set_world_var", "config": {"variable_name": "main_character", "value": "Sir Reginald"}},
+                {"runtime": "system.input", "config": {"value": "A secret message"}},
+                {"runtime": "llm.default", "config": {"model": "mock/model", "prompt": "{{ f'Tell a story about {world.main_character}. He just received this message: {pipe.output}' }}"}}
+            ]
+        }]}
+    })
+
+@pytest.fixture
+def world_vars_collection() -> GraphCollection:
+    """一个测试世界变量设置和读取的图。"""
+    return GraphCollection.model_validate({
+        "main": { "nodes": [
+            {
+                "id": "setter",
+                "run": [{
+                    "runtime": "system.set_world_var",
+                    "config": {"variable_name": "theme", "value": "cyberpunk"}
+                }]
+            },
+            {
+                "id": "reader",
+                "run": [{
+                    "runtime": "system.input",
+                    "config": {"value": "{{ f'The theme is: {world.theme} and some data from setter: {nodes.setter}'}}"}
+                }]
+            }
+        ]}
+    })
+
+@pytest.fixture
+def execute_runtime_collection() -> GraphCollection:
+    """一个测试 system.execute 运行时的图，用于二次求值。"""
+    return GraphCollection.model_validate({
+        "main": { "nodes": [
+            {
+                "id": "A_generate_code",
+                "run": [{"runtime": "system.input", "config": {"value": "world.player_status = 'empowered'"}}]
+            },
+            {
+                "id": "B_execute_code",
+                "run": [{
+                    "runtime": "system.execute",
+                    "config": {"code": "{{ nodes.A_generate_code.output }}"}
+                }]
+            }
+        ]}
+    })
+
+@pytest.fixture
+def cyclic_collection() -> GraphCollection:
+    """一个包含环路的图。"""
+    return GraphCollection.model_validate({
+        "main": { "nodes": [
+            {"id": "A", "run": [{"runtime": "system.input", "config": {"value": "{{ nodes.C.output }}"}}]},
+            {"id": "B", "run": [{"runtime": "system.input", "config": {"value": "{{ nodes.A.output }}"}}]},
+            {"id": "C", "run": [{"runtime": "system.input", "config": {"value": "{{ nodes.B.output }}"}}]}
+        ]}
+    })
+
+@pytest.fixture
+def failing_node_collection() -> GraphCollection:
+    """一个包含注定会因宏求值失败的节点的图。"""
+    return GraphCollection.model_validate({
+        "main": { "nodes": [
+            {"id": "A_ok", "run": [{"runtime": "system.input", "config": {"value": "start"}}]},
+            {"id": "B_fail", "run": [{"runtime": "system.input", "config": {"value": "{{ non_existent_variable }}"}}]},
+            {"id": "C_skip", "run": [{"runtime": "system.input", "config": {"value": "{{ nodes.B_fail.output }}"}}]},
+            {"id": "D_independent", "run": [{"runtime": "system.input", "config": {"value": "independent"}}]}
+        ]}
+    })
+
+@pytest.fixture
+def invalid_graph_no_main() -> dict:
+    """一个无效的图定义，缺少 'main' 入口点。"""
+    return {"not_main": {"nodes": [{"id": "a", "run": []}]}}
+
+@pytest.fixture
+def graph_evolution_collection() -> GraphCollection:
+    """一个用于测试图演化的图。"""
+    new_graph_dict = {
+        "main": {"nodes": [{"id": "new_node", "run": [{"runtime": "system.input", "config": {"value": "This is the evolved graph!"}}]}]}
     }
-    if pipe_vars is not None:
-        context['pipe'] = DotAccessibleDict(pipe_vars)
-        
+    return GraphCollection.model_validate({
+        "main": {"nodes": [{
+            "id": "graph_generator",
+            "run": [{
+                "runtime": "system.set_world_var",
+                "config": {
+                    "variable_name": "__graph_collection__",
+                    "value": new_graph_dict
+                }
+            }]
+        }]}
+    })
+
+@pytest.fixture
+def advanced_macro_collection() -> GraphCollection:
+    """
+    一个用于测试高级宏功能的图。
+    使用新的 `depends_on` 字段来明确声明隐式依赖，代码更清晰。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                # 步骤1: 定义函数，无变化
+                {
+                    "id": "teach_skill",
+                    "run": [{
+                        "runtime": "system.execute",
+                        "config": {
+                            "code": """
+import math
+def calculate_hypotenuse(a, b):
+    return math.sqrt(a**2 + b**2)
+if not hasattr(world, 'math_utils'): world.math_utils = {}
+world.math_utils.hypot = calculate_hypotenuse
+"""
+                        }
+                    }]
+                },
+                # 步骤2: 调用函数，并使用 `depends_on`
+                {
+                    "id": "use_skill",
+                    # 【关键修正】明确声明依赖
+                    "depends_on": ["teach_skill"],
+                    "run": [{
+                        "runtime": "system.input",
+                        # 宏现在非常干净，只包含业务逻辑
+                        "config": {"value": "{{ world.math_utils.hypot(3, 4) }}"}
+                    }]
+                },
+                # 步骤3: 模拟 LLM，无变化
+                {
+                    "id": "llm_propose_change",
+                    "run": [{
+                        "runtime": "system.input",
+                        "config": {"value": "world.game_difficulty = 'hard'"}
+                    }]
+                },
+                # 步骤4: 执行 LLM 代码，它已经有明确的宏依赖，无需 `depends_on`
+                {
+                    "id": "execute_change",
+                    # 这里的依赖是自动推断的，所以 `depends_on` 不是必需的
+                    # 但为了演示，也可以添加： "depends_on": ["llm_propose_change"]
+                    "run": [{
+                        "runtime": "system.execute",
+                        "config": {"code": "{{ nodes.llm_propose_change.output }}"}
+                    }]
+                }
+            ]
+        }
+    })
+
+# ---------------------------------------------------------------------------
+# 用于测试 Subgraph Call 的 Fixtures
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def subgraph_call_collection() -> GraphCollection:
+    """
+    一个包含主图和可复用子图的集合，用于测试 system.call。
+    - main 图调用 process_item 子图。
+    - process_item 子图依赖一个名为 'item_input' 的占位符。
+    - process_item 子图还会读取 world 状态。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "data_provider",
+                    "run": [{"runtime": "system.input", "config": {"value": "Hello from main"}}]
+                },
+                {
+                    "id": "main_caller",
+                    "run": [{
+                        "runtime": "system.call",
+                        "config": {
+                            "graph": "process_item",
+                            "using": {
+                                "item_input": "{{ nodes.data_provider.output }}"
+                            }
+                        }
+                    }]
+                }
+            ]
+        },
+        "process_item": {
+            "nodes": [
+                {
+                    "id": "processor",
+                    "run": [{
+                        "runtime": "system.input",
+                        "config": {
+                            "value": "{{ f'Processed: {nodes.item_input.output} with world state: {world.global_setting}' }}"
+                        }
+                    }]
+                }
+            ]
+        }
+    })
+
+@pytest.fixture
+def nested_subgraph_collection() -> GraphCollection:
+    """一个测试嵌套调用的图：main -> sub1 -> sub2。"""
+    return GraphCollection.model_validate({
+        "main": {"nodes": [{
+            "id": "main_caller",
+            "run": [{"runtime": "system.call", "config": {"graph": "sub1", "using": {"input_from_main": "level 0"}}}]
+        }]},
+        "sub1": {"nodes": [{
+            "id": "sub1_caller",
+            "run": [{"runtime": "system.call", "config": {"graph": "sub2", "using": {"input_from_sub1": "{{ nodes.input_from_main.output }}"}}}]
+        }]},
+        "sub2": {"nodes": [{
+            "id": "final_processor",
+            "run": [{"runtime": "system.input", "config": {"value": "{{ f'Reached level 2 from: {nodes.input_from_sub1.output}' }}"}}]
+        }]}
+    })
+
+@pytest.fixture
+def subgraph_call_to_nonexistent_graph_collection() -> GraphCollection:
+    """一个尝试调用不存在子图的图，用于测试错误处理。"""
+    return GraphCollection.model_validate({
+        "main": {"nodes": [{
+            "id": "bad_caller",
+            "run": [{"runtime": "system.call", "config": {"graph": "i_do_not_exist"}}]
+        }]}
+    })
+
+@pytest.fixture
+def subgraph_modifies_world_collection() -> GraphCollection:
+    """
+    一个子图会修改 world 状态的集合。
+    - main 调用 modifier 子图。
+    - modifier 子图根据输入修改 world.counter。
+    - main 中的后续节点 reader 会读取这个被修改后的状态。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "caller",
+                    "run": [{"runtime": "system.call", "config": {"graph": "modifier", "using": {"amount": 10}}}]
+                },
+                {
+                    "id": "reader",
+                    # 这里的宏依赖会自动创建从 caller 到 reader 的依赖
+                    "run": [{
+                        "runtime": "system.input",
+                        "config": {"value": "{{ f'Final counter: {world.counter}, Subgraph raw output: {nodes.caller.output}' }}"}
+                    }]
+                }
+            ]
+        },
+        "modifier": {
+            "nodes": [
+                {
+                    "id": "incrementer",
+                    # 这是一个隐式依赖，我们用 depends_on 来确保执行顺序
+                    # 子图无法通过宏推断它依赖于父图设置的 world.counter
+                    # 但在这里，我们假设初始状态设置了 counter
+                    "run": [{
+                        "runtime": "system.execute",
+                        "config": {"code": "world.counter += nodes.amount.output"}
+                    }]
+                }
+            ]
+        }
+    })
+
+@pytest.fixture
+def subgraph_with_failure_collection() -> GraphCollection:
+    """
+    一个子图内部会失败的集合。
+    - main 调用 failing_subgraph。
+    - failing_subgraph 中的一个节点会因为宏错误而失败。
+    - main 中的后续节点 downstream_of_fail 应该被跳过。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "caller",
+                    "run": [{"runtime": "system.call", "config": {"graph": "failing_subgraph"}}]
+                },
+                {
+                    "id": "downstream_of_fail",
+                    "run": [{"runtime": "system.input", "config": {"value": "{{ nodes.caller.output }}"}}]
+                }
+            ]
+        },
+        "failing_subgraph": {
+            "nodes": [
+                {"id": "A_ok", "run": [{"runtime": "system.input", "config": {"value": "ok"}}]},
+                {"id": "B_fail", "run": [{"runtime": "system.input", "config": {"value": "{{ non_existent.var }}"}}]}
+            ]
+        }
+    })
+
+@pytest.fixture
+def dynamic_subgraph_call_collection() -> GraphCollection:
+    """
+    一个动态决定调用哪个子图的集合。
+    - main 根据 world.target_graph 的值来调用 sub_a 或 sub_b。
+    """
+    return GraphCollection.model_validate({
+        "main": {"nodes": [{
+            "id": "dynamic_caller",
+            "run": [{
+                "runtime": "system.call",
+                "config": {
+                    "graph": "{{ world.target_graph }}",
+                    "using": {"data": "dynamic data"}
+                }
+            }]
+        }]},
+        # 【关键修正】在子图内部使用正确的 f-string 宏格式
+        "sub_a": {"nodes": [{
+            "id": "processor_a",
+            "run": [{"runtime": "system.input", "config": {"value": "{{ f'Processed by A: {nodes.data.output}' }}"}}]
+        }]},
+        "sub_b": {"nodes": [{
+            "id": "processor_b",
+            "run": [{"runtime": "system.input", "config": {"value": "{{ f'Processed by B: {nodes.data.output}' }}"}}]
+        }]}
+    })
+
+
+@pytest.fixture
+def concurrent_write_collection() -> GraphCollection:
+    """
+    一个专门用于测试并发写入的图。
+    - incrementer_A 和 incrementer_B 没有相互依赖，引擎会并行执行它们。
+    - 两个节点都对同一个 world.counter 变量执行多次非原子操作 (read-modify-write)。
+    - 如果没有锁，最终结果将几乎肯定小于 200。
+    - 如果有宏级原子锁，每个宏的执行都是一个整体，结果必须是 200。
+    """
+    increment_loop_count = 100
+    increment_code = f"""
+for i in range({increment_loop_count}):
+    # 这是一个典型的 read-modify-write 操作，非常容易产生竞态条件
+    world.counter += 1
+"""
+    
+    return GraphCollection.model_validate({
+        "main": { "nodes": [
+            {
+                "id": "incrementer_A",
+                "run": [{"runtime": "system.execute", "config": {"code": increment_code}}]
+            },
+            {
+                "id": "incrementer_B",
+                "run": [{"runtime": "system.execute", "config": {"code": increment_code}}]
+            },
+            {
+                "id": "reader",
+                # depends_on 确保 reader 在两个写入者都完成后才执行
+                "depends_on": ["incrementer_A", "incrementer_B"],
+                "run": [{"runtime": "system.input", "config": {"value": "{{ world.counter }}"}}]
+            }
+        ]}
+    })
+
+@pytest.fixture
+def map_collection_basic() -> GraphCollection:
+    base = {
+        "main": { "nodes": [
+            {"id": "character_provider", "run": [{"runtime": "system.input", "config": {"value": ["Aragorn", "Gandalf", "Legolas"]}}]},
+            {"id": "global_setting_provider", "run": [{"runtime": "system.input", "config": {"value": "The Fellowship of the Ring"}}]},
+            {"id": "character_processor_map", "run": [{"runtime": "system.map", "config": {
+                "list": "{{ nodes.character_provider.output }}",
+                "graph": "process_character",
+                "using": {
+                    "character_input": "{{ source.item }}",
+                    "global_story_setting": "{{ nodes.global_setting_provider.output }}",
+                    "character_index": "{{ source.index }}"
+                }}}]}
+            ]},
+        "process_character": {"nodes": [{"id": "generate_bio", "run": [{"runtime": "llm.default", "config": {
+            # 【修正】添加 model 字段
+            "model": "mock/model",
+            "prompt": "{{ f'Create a bio for {nodes.character_input.output} in the context of {nodes.global_story_setting.output}. Index: {nodes.character_index.output}' }}"
+            }}]}]}
+    }
+    return GraphCollection.model_validate(base)
+
+
+@pytest.fixture
+def map_collection_with_collect(map_collection_basic: GraphCollection) -> GraphCollection:
+    """
+    一个测试 system.map 的 `collect` 功能的集合。
+    - 它只从每个子图执行中提取 `generate_bio` 节点的 `llm_output` 字段。
+    """
+    # 【修正】通过参数接收 fixture，而不是直接调用
+    base_data = map_collection_basic.model_dump()
+    
+    map_instruction = base_data["main"]["nodes"][2]["run"][0]
+    # 添加 collect 字段
+    map_instruction["config"]["collect"] = "{{ nodes.generate_bio.llm_output }}"
+    
+    return GraphCollection.model_validate(base_data)
+
+
+@pytest.fixture
+def map_collection_concurrent_write() -> GraphCollection:
+    """
+    一个测试在 map 内部并发修改 world_state 的集合。
+    - 每个子图实例都会给 world.gold 增加10。
+    - 如果没有原子锁，最终结果会因为竞态条件而不确定。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "task_provider",
+                    "run": [{"runtime": "system.input", "config": {"value": list(range(10))}}] # 10个并行任务
+                },
+                {
+                    "id": "concurrent_adder_map",
+                    "run": [{
+                        "runtime": "system.map",
+                        "config": {
+                            "list": "{{ nodes.task_provider.output }}",
+                            "graph": "add_gold"
+                            # using 是空的，因为子图不依赖 source
+                        }
+                    }]
+                },
+                {
+                    "id": "reader",
+                    "depends_on": ["concurrent_adder_map"],
+                    "run": [{"runtime": "system.input", "config": {"value": "{{ world.gold }}"}}]
+                }
+            ]
+        },
+        "add_gold": {
+            "nodes": [
+                {
+                    "id": "add_10_gold",
+                    "run": [{"runtime": "system.execute", "config": {"code": "world.gold += 10"}}]
+                }
+            ]
+        }
+    })
+
+@pytest.fixture
+def map_collection_with_failure() -> GraphCollection:
+    """
+    一个 map 迭代中部分子图会失败的集合。
+    - list 中有一个 str，会导致子图中的宏求值失败。
+    - system.map 应该能正确返回所有结果，包括成功和失败的项。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "data_provider",
+                    "run": [{"runtime": "system.input", "config": {"value": [{"name": "Alice"}, "Bob", {"name": "Charlie"}]}}]
+                },
+                {
+                    "id": "mapper",
+                    "run": [{
+                        "runtime": "system.map",
+                        "config": {
+                            "list": "{{ nodes.data_provider.output }}",
+                            "graph": "process_name",
+                            # 【关键修正】将 source.item 映射到子图的占位符
+                            "using": {
+                                "character_data": "{{ source.item }}"
+                            }
+                        }
+                    }]
+                }
+            ]
+        },
+        "process_name": {
+            "nodes": [
+                {
+                    "id": "get_name",
+                    "run": [{
+                        "runtime": "system.input",
+                        # 【关键修正】从占位符节点获取数据
+                        # 当 character_data 是 "Bob" (str) 时，.name 会触发 AttributeError
+                        "config": {"value": "{{ nodes.character_data.output.name }}"}
+                    }]
+                }
+            ]
+        }
+    })
+
+
+
+# ---------------------------------------------------------------------------
+#  Codex System Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def codex_basic_data() -> dict:
+    """
+    分离的 Graph 和 Codex 数据，用于测试 `always_on` 和优先级。
+    """
+    graph_definition = {
+        "main": {
+            "nodes": [{
+                "id": "invoke_test",
+                "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "basic_info"}]}}]
+            }]
+        }
+    }
+    codices_data = {
+        "basic_info": {
+            "description": "基本的问候和介绍",
+            "entries": [
+                {"id": "greeting", "content": "你好，冒险者！", "priority": 10},
+                {"id": "intro", "content": "欢迎来到这个奇幻的世界。", "priority": 5}
+            ]
+        }
+    }
+    return {"graph": graph_definition, "codices": codices_data}
+
+
+@pytest.fixture
+def codex_keyword_and_priority_data() -> dict:
+    """
+    测试 `on_keyword` 触发模式和 `priority` 排序。
+    """
+    graph_definition = {
+        "main": {
+            "nodes": [
+                {
+                    "id": "invoke_weather",
+                    "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "weather_lore", "source": "今天的魔法天气怎么样？"}]}}]
+                },
+                {
+                    "id": "invoke_mood",
+                    "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "mood_expressions", "source": "我很开心，因为天气很好。"}]}}]
+                }
+            ]
+        }
+    }
+    codices_data = {
+        "weather_lore": {
+            "entries": [
+                {"id": "sunny", "content": "阳光明媚，万里无云。", "trigger_mode": "on_keyword", "keywords": ["阳光", "晴朗"], "priority": 10},
+                {"id": "rainy", "content": "外面下着大雨，带把伞吧。", "trigger_mode": "on_keyword", "keywords": ["下雨", "雨天"], "priority": 20},
+                {"id": "magic_weather", "content": "魔法能量今天异常活跃，可能会有异象发生。", "trigger_mode": "on_keyword", "keywords": ["魔法天气", "异象"], "priority": 30}
+            ]
+        },
+        "mood_expressions": {
+            "entries": [
+                {"id": "happy_mood", "content": "你看起来很高兴。", "trigger_mode": "on_keyword", "keywords": ["开心", "高兴", "快乐"], "priority": 5},
+                {"id": "sad_mood", "content": "你似乎有些低落。", "trigger_mode": "on_keyword", "keywords": ["伤心", "低落"], "priority": 10}
+            ]
+        }
+    }
+    return {"graph": graph_definition, "codices": codices_data}
+
+
+@pytest.fixture
+def codex_macro_eval_data() -> dict:
+    """
+    测试 Codex 条目内部宏求值的集合。
+    使用三引号来避免引号冲突。
+    """
+    # 【修正】确保 graph_definition 是一个正确的字典
+    graph_definition = {
+        "main": {
+            "nodes": [
+                {
+                    "id": "get_weather_report",
+                    "run": [{
+                        "runtime": "system.invoke",
+                        "config": {
+                            "from": [{"codex": "dynamic_entries", "source": "请告诉我关于秘密和夜幕下的世界。"}],
+                            "debug": True
+                        }
+                    }]
+                }
+            ]
+        }
+    }
+    codices_data = {
+        "dynamic_entries": {
+            "entries": [
+                # 【修正】使用三引号 f-string，更清晰
+                {"id": "night_info", "content": """{{ f"现在是{'夜晚' if world.is_night else '白天'}。" }}""", "is_enabled": "{{ world.is_night }}"},
+                {"id": "level_message", "content": """{{ f'你的等级是：{world.player_level}级。' }}""", "priority": "{{ 100 if world.player_level > 3 else 0 }}"},
+                {"id": "secret_keyword_entry", "content": """{{ f"你提到了'{trigger.matched_keywords[0]}'，这是一个秘密信息。" }}""", "trigger_mode": "on_keyword", "keywords": "{{ [world.hidden_keyword] }}", "priority": 50},
+                {"id": "always_on_with_trigger_info", "content": """{{ f"原始输入是：'{trigger.source_text}'。" }}""", "trigger_mode": "always_on", "priority": 1}
+            ]
+        }
+    }
+    return {"graph": graph_definition, "codices": codices_data}
+
+
+@pytest.fixture
+def codex_recursion_data() -> dict:
+    """
+    测试 Codex 的递归功能。
+    """
+    graph_definition = {
+        "main": {"nodes": [{
+            "id": "recursive_invoke",
+            "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "recursive_lore", "source": "告诉我关于A"}], "recursion_enabled": True, "debug": True}}]
+        }]}
+    }
+    codices_data = {
+        "recursive_lore": {
+            "config": {"recursion_depth": 5}, # 增加深度以确保测试通过
+            "entries": [
+                {"id": "entry_A", "content": "这是关于A的信息，它引出B。", "trigger_mode": "on_keyword", "keywords": ["A"], "priority": 10},
+                {"id": "entry_B", "content": "B被A触发了，它又引出C。", "trigger_mode": "on_keyword", "keywords": ["B"], "priority": 20},
+                {"id": "entry_C", "content": "C被B触发了，这是最终信息。", "trigger_mode": "on_keyword", "keywords": ["C"], "priority": 30},
+                {"id": "entry_D_always_on", "content": "这是一个总是存在的背景信息。", "trigger_mode": "always_on", "priority": 5}
+            ]
+        }
+    }
+    return {"graph": graph_definition, "codices": codices_data}
+
+
+@pytest.fixture
+def codex_invalid_structure_data() -> dict:
+    """
+    测试无效 Codex 结构时的错误处理。
+    """
+    graph_definition = {"main": {"nodes": [{"id": "invoke_invalid", "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "bad_codex"}]}}]}]}}
+    codices_data = {
+        "bad_codex": {
+            "entries": [
+                {"id": "valid_one", "content": "valid"},
+                {"id": "invalid_one", "content": 123} # content 必须是字符串
+            ]
+        }
+    }
+    return {"graph": graph_definition, "codices": codices_data}
+
+
+@pytest.fixture
+def codex_concurrent_world_write_data() -> dict:
+    """
+    测试 `system.invoke` 内部宏对 `world_state` 的并发写入。
+    """
+    graph_definition = {
+        "main": {
+            "nodes": [
+                {
+                    "id": "invoke_and_increment",
+                    "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "concurrent_codex", "source": "触发计数"}]}}]
+                },
+                {
+                    "id": "read_counter",
+                    "depends_on": ["invoke_and_increment"],
+                    "run": [{"runtime": "system.input", "config": {"value": "{{ world.counter }}"}}]
+                }
+            ]
+        }
+    }
+    codices_data = {
+        "concurrent_codex": {
+            "entries": [
+                {"id": "increment_1", "content": "{{ world.counter = world.counter + 1; 'Incremented 1.' }}", "trigger_mode": "on_keyword", "keywords": ["计数"], "priority": 10},
+                {"id": "increment_2", "content": "{{ world.counter += 2; 'Incremented 2.' }}", "trigger_mode": "on_keyword", "keywords": ["计数"], "priority": 20},
+                {"id": "increment_3", "content": "{{ world.counter += 3; 'Incremented 3.' }}", "trigger_mode": "on_keyword", "keywords": ["计数"], "priority": 30}
+            ]
+        }
+    }
+    return {"graph": graph_definition, "codices": codices_data}
+
+@pytest.fixture
+def codex_nonexistent_codex_data() -> dict:
+    graph_definition = {
+        "main": {"nodes": [{
+            "id": "invoke_nonexistent",
+            "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "nonexistent_codex"}]}}]
+        }]}
+    }
+    # codices 是空的，因为我们就是想测试找不到的情况
+    return {"graph": graph_definition, "codices": {}}
+```
+
+### test_02_evaluation_unit.py
+```
+# tests/test_02_evaluation_unit.py
+import pytest
+from uuid import uuid4
+import asyncio
+
+from backend.core.evaluation import (
+    evaluate_expression, evaluate_data, build_evaluation_context
+)
+from backend.core.state import ExecutionContext
+from backend.core.state import StateSnapshot
+from backend.core.models import GraphCollection
+from backend.runtimes.base_runtimes import SetWorldVariableRuntime
+from backend.runtimes.control_runtimes import ExecuteRuntime
+from backend.llm.service import MockLLMService
+
+@pytest.fixture
+def mock_exec_context() -> ExecutionContext:
+    """提供一个可复用的、模拟的 ExecutionContext。"""
+    graph_coll = GraphCollection.model_validate({"main": {"nodes": []}})
+    initial_world = {"user_name": "Alice", "hp": 100}
+    snapshot = StateSnapshot(
+        sandbox_id=uuid4(),
+        graph_collection=graph_coll,
+        world_state=initial_world
+    )
+    # 使用正确的工厂方法创建上下文
+    context = ExecutionContext.create_for_main_run(
+        snapshot, 
+        services={"llm": MockLLMService()}
+    )
+    
+    context.node_states = {"node_A": {"output": "Success"}}
+    context.run_vars = {"trigger_input": {"message": "Do it!"}}
+
     return context
 
-async def evaluate_expression(code_str: str, context: Dict[str, Any], lock: asyncio.Lock) -> Any:
-    """..."""
-    # ast.parse 可能会失败，需要 try...except
-    try:
-        tree = ast.parse(code_str, mode='exec')
-    except SyntaxError as e:
-        raise ValueError(f"Macro syntax error: {e}\nCode: {code_str}")
+@pytest.fixture
+def mock_eval_context(mock_exec_context: ExecutionContext) -> dict:
+    """提供一个扁平化的、用于宏执行的字典上下文。"""
+    return build_evaluation_context(mock_exec_context, pipe_vars={"from_pipe": "pipe_data"})
 
-    # 如果代码块为空，直接返回 None
-    if not tree.body:
-        return None
+@pytest.fixture
+def test_lock() -> asyncio.Lock:
+    """提供一个在测试中共享的锁。"""
+    return asyncio.Lock()
 
-    # 如果最后一行是表达式，我们将其转换为一个赋值语句，以便捕获结果
-    result_var = "_macro_result"
-    if isinstance(tree.body[-1], ast.Expr):
-        # 包装最后一条表达式
-        assign_node = ast.Assign(
-            targets=[ast.Name(id=result_var, ctx=ast.Store())],
-            value=tree.body[-1].value
-        )
-        tree.body[-1] = ast.fix_missing_locations(assign_node)
+@pytest.mark.asyncio
+class TestEvaluationCore:
+    """对宏求值核心 `evaluate_expression` 进行深度单元测试。"""
     
-    # 将 AST 编译为代码对象
-    code_obj = compile(tree, filename="<macro>", mode="exec")
+    async def test_simple_expressions(self, mock_eval_context, test_lock):
+        assert await evaluate_expression("1 + 1", mock_eval_context, test_lock) == 2
+
+    async def test_context_access(self, mock_eval_context, test_lock):
+        code = "f'{nodes.node_A.output}, {world.user_name}, {run.trigger_input.message}, {pipe.from_pipe}'"
+        result = await evaluate_expression(code, mock_eval_context, test_lock)
+        assert result == "Success, Alice, Do it!, pipe_data"
+
+    async def test_side_effects_on_world_state(self, mock_exec_context: ExecutionContext, test_lock):
+        eval_context = build_evaluation_context(mock_exec_context)
+        assert eval_context["world"].hp == 100
+        await evaluate_expression("world.hp -= 10", eval_context, test_lock)
+        assert eval_context["world"].hp == 90
+        # 验证底层共享状态是否真的被修改
+        assert mock_exec_context.shared.world_state["hp"] == 90
+
+    async def test_multiline_script_with_return(self, mock_eval_context, test_lock):
+        code = """
+bonus = 0
+if world.hp > 50:
+    bonus = 20
+else:
+    bonus = 5
+bonus
+"""
+        # 测试 if 分支
+        mock_eval_context["world"].hp = 80
+        assert await evaluate_expression(code, mock_eval_context, test_lock) == 20
+        # 测试 else 分支
+        mock_eval_context["world"].hp = 40
+        assert await evaluate_expression(code, mock_eval_context, test_lock) == 5
+
+    async def test_syntax_error_handling(self, mock_eval_context, test_lock):
+        with pytest.raises(ValueError, match="Macro syntax error"):
+            await evaluate_expression("1 +", mock_eval_context, test_lock)
+
+@pytest.mark.asyncio
+class TestRecursiveEvaluation:
+    """对递归求值函数 `evaluate_data` 进行测试。"""
     
-    # 在锁的保护下运行
-    async with lock:
-        # 在另一个线程中运行，以避免阻塞事件循环
-        # 注意：这里我们直接修改传入的 context 字典来捕获结果
-        await asyncio.get_running_loop().run_in_executor(
-            None, exec, code_obj, context
-        )
-    
-    # 从被修改的上下文字典中获取结果
-    return context.get(result_var)
-
-async def evaluate_data(data: Any, eval_context: Dict[str, Any], lock: asyncio.Lock) -> Any:
-    if isinstance(data, str):
-        # 模式1: 检查是否为“全宏替换”
-        # 这种模式很重要，因为它允许宏返回非字符串类型（如列表、布尔值）
-        full_match = MACRO_REGEX.match(data)
-        if full_match:
-            code_to_run = full_match.group(1)
-            # 这里返回的结果可以是任何类型
-            return await evaluate_expression(code_to_run, eval_context, lock)
-
-        # 模式2: 如果不是全宏，检查是否包含“内联模板”
-        # 这种模式的结果总是字符串
-        if '{{' in data and '}}' in data:
-            matches = list(INLINE_MACRO_REGEX.finditer(data))
-            if not matches:
-                # 包含 {{ 和 }} 但格式不正确，按原样返回
-                return data
-
-            # 并发执行所有宏的求值
-            codes_to_run = [m.group(1) for m in matches]
-            tasks = [evaluate_expression(code, eval_context, lock) for code in codes_to_run]
-            evaluated_results = await asyncio.gather(*tasks)
-
-            # 将求值结果替换回原字符串
-            # 使用一个迭代器来确保替换顺序正确
-            results_iter = iter(evaluated_results)
-            # re.sub 的 lambda 每次调用时，都会从迭代器中取下一个结果
-            # 这比多次调用 str.replace() 更安全、更高效
-            final_string = INLINE_MACRO_REGEX.sub(lambda m: str(next(results_iter)), data)
-            
-            return final_string
-
-        # 如果两种模式都不匹配，说明是普通字符串
-        return data
-
-    if isinstance(data, dict):
-        keys = list(data.keys())
-        # 创建异步任务列表
-        value_tasks = [evaluate_data(data[k], eval_context, lock) for k in keys]
-        # 并发执行所有值的求值
-        evaluated_values = await asyncio.gather(*value_tasks)
-        # 重新组装字典
-        return dict(zip(keys, evaluated_values))
-
-    if isinstance(data, list):
-        # 并发执行列表中所有项的求值
-        item_tasks = [evaluate_data(item, eval_context, lock) for item in data]
-        return await asyncio.gather(*item_tasks)
-
-    return data
-```
-
-### core/__init__.py
-```
-
-```
-
-### core/engine.py
-```
-# backend/core/engine.py
-
-import asyncio
-from enum import Enum, auto
-from typing import Dict, Any, Set, List, Optional
-from collections import defaultdict
-from fastapi import Request
-
-from backend.core.models import GraphCollection, GraphDefinition, GenericNode
-from backend.core.dependency_parser import build_dependency_graph
-from backend.core.registry import RuntimeRegistry
-from backend.core.evaluation import build_evaluation_context, evaluate_data
-from backend.core.state import ExecutionContext
-from backend.core.interfaces import RuntimeInterface, SubGraphRunner
-
-
-class NodeState(Enum):
-    PENDING = auto()
-    READY = auto()
-    RUNNING = auto()
-    SUCCEEDED = auto()
-    FAILED = auto()
-    SKIPPED = auto()
-
-class GraphRun:
-    def __init__(self, context: ExecutionContext, graph_def: GraphDefinition):
-        self.context = context
-        self.graph_def = graph_def
-        if not self.graph_def:
-            raise ValueError("GraphRun must be initialized with a valid GraphDefinition.")
-        self.node_map: Dict[str, GenericNode] = {n.id: n for n in self.graph_def.nodes}
-        self.node_states: Dict[str, NodeState] = {}
-        self.dependencies: Dict[str, Set[str]] = build_dependency_graph(
-            [node.model_dump() for node in self.graph_def.nodes]
-        )
-        self.subscribers: Dict[str, Set[str]] = self._build_subscribers()
-        self._detect_cycles()
-        self._initialize_node_states()
-
-    def _build_subscribers(self) -> Dict[str, Set[str]]:
-        subscribers = defaultdict(set)
-        for node_id, deps in self.dependencies.items():
-            for dep_id in deps:
-                subscribers[dep_id].add(node_id)
-        return subscribers
-
-    def _detect_cycles(self):
-        path = set()
-        visited = set()
-        def visit(node_id):
-            path.add(node_id)
-            visited.add(node_id)
-            for neighbour in self.dependencies.get(node_id, set()):
-                if neighbour in path:
-                    raise ValueError(f"Cycle detected involving node {neighbour}")
-                if neighbour not in visited:
-                    visit(neighbour)
-            path.remove(node_id)
-        for node_id in self.node_map:
-            if node_id not in visited:
-                visit(node_id)
-
-    def _initialize_node_states(self):
-        for node_id in self.node_map:
-            if not self.dependencies.get(node_id):
-                self.node_states[node_id] = NodeState.READY
-            else:
-                self.node_states[node_id] = NodeState.PENDING
-
-    def get_node(self, node_id: str) -> GenericNode:
-        return self.node_map[node_id]
-    def get_node_state(self, node_id: str) -> NodeState:
-        return self.node_states.get(node_id)
-    def set_node_state(self, node_id: str, state: NodeState):
-        self.node_states[node_id] = state
-    def get_node_result(self, node_id: str) -> Dict[str, Any]:
-        return self.context.node_states.get(node_id)
-    def set_node_result(self, node_id: str, result: Dict[str, Any]):
-        self.context.node_states[node_id] = result
-    def get_nodes_in_state(self, state: NodeState) -> List[str]:
-        return [nid for nid, s in self.node_states.items() if s == state]
-    def get_dependencies(self, node_id: str) -> Set[str]:
-        return self.dependencies.get(node_id, set())
-    def get_subscribers(self, node_id: str) -> Set[str]:
-        return self.subscribers.get(node_id, set())
-    def get_execution_context(self) -> ExecutionContext:
-        return self.context
-    def get_final_node_states(self) -> Dict[str, Any]:
-        return self.context.node_states
-
-# ExecutionEngine 现在实现了 SubGraphRunner 接口
-class ExecutionEngine(SubGraphRunner):
-    # 【已修改】更新了 __init__ 的类型提示，使其更准确
-    def __init__(self, registry: RuntimeRegistry, services: Dict[str, Any], num_workers: int = 5):
-        self.registry = registry
-        # 在构造时接收并存储服务字典
-        self.services = services
-        self.num_workers = num_workers
-
-    async def step(self, initial_snapshot, triggering_input: Dict[str, Any] = None):
-        if triggering_input is None: triggering_input = {}
-        
-        # 从 self.services 字典注入服务
-        context = ExecutionContext.create_for_main_run(
-            snapshot=initial_snapshot,
-            services=self.services,  # <-- 从实例属性注入
-            run_vars={"trigger_input": triggering_input}
-        )
-        
-        main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
-        if not main_graph_def: raise ValueError("'main' graph not found.")
-        
-        final_node_states = await self._internal_execute_graph(main_graph_def, context)
-        next_snapshot = context.to_next_snapshot(final_node_states, triggering_input)
-        return next_snapshot
-
-    # --- 实现 SubGraphRunner 接口 ---
-    async def execute_graph(
-        self,
-        graph_name: str,
-        # 注意：这里接收的是一个 ExecutionContext，但我们将用它来创建子上下文
-        parent_context: ExecutionContext,
-        inherited_inputs: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """这是暴露给运行时的公共接口。"""
-        graph_collection = parent_context.initial_snapshot.graph_collection.root
-        graph_def = graph_collection.get(graph_name)
-        if not graph_def:
-            raise ValueError(f"Graph '{graph_name}' not found.")
-        
-        # --- 【关键】为子图运行创建自己的上下文 ---
-        # 它会共享 world_state 和锁，但有自己的 node_states
-        sub_run_context = ExecutionContext.create_for_sub_run(parent_context)
-
-        return await self._internal_execute_graph(
-            graph_def=graph_def,
-            context=sub_run_context, # <-- 使用新的子上下文
-            inherited_inputs=inherited_inputs
-        )
-
-    async def _internal_execute_graph(self, graph_def: GraphDefinition, context: ExecutionContext, inherited_inputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        内部核心调度器，用于执行一个图。
-        """
-        run = GraphRun(context=context, graph_def=graph_def)
-        task_queue = asyncio.Queue()
-        
-        if inherited_inputs:
-            for node_id, result in inherited_inputs.items():
-                run.set_node_state(node_id, NodeState.SUCCEEDED)
-                run.set_node_result(node_id, result)
-        
-        for node_id in run.get_nodes_in_state(NodeState.PENDING):
-            dependencies = run.get_dependencies(node_id)
-            if all(run.get_node_state(dep_id) == NodeState.SUCCEEDED for dep_id in dependencies):
-                run.set_node_state(node_id, NodeState.READY)
-        
-        for node_id in run.get_nodes_in_state(NodeState.READY):
-            task_queue.put_nowait(node_id)
-
-        if task_queue.empty() and not any(s == NodeState.SUCCEEDED for s in run.node_states.values()):
-            print(f"Warning: Graph '{graph_def.nodes[0].id if graph_def.nodes else 'empty'}' has no runnable starting nodes.")
-            return {}
-
-        workers = [
-            asyncio.create_task(self._worker(f"worker-{i}", run, task_queue))
-            for i in range(self.num_workers)
-        ]
-        
-        await task_queue.join()
-
-        for w in workers:
-            w.cancel()
-        
-        await asyncio.gather(*workers, return_exceptions=True)
-        
-        final_states = {
-            nid: run.get_node_result(nid)
-            for nid, n in run.node_map.items()
-            if run.get_node_result(nid) is not None
+    async def test_evaluate_data_recursively(self, mock_eval_context, test_lock):
+        data = {
+            "static": "hello",
+            "direct": "{{ 1 + 2 }}",
+            "nested": ["{{ world.user_name }}", {"deep": "{{ pipe.from_pipe.upper() }}"}]
         }
-        return final_states
+        result = await evaluate_data(data, mock_eval_context, test_lock)
+        expected = {
+            "static": "hello",
+            "direct": 3,
+            "nested": ["Alice", {"deep": "PIPE_DATA"}]
+        }
+        assert result == expected
 
-    async def _worker(self, name: str, run: 'GraphRun', queue: asyncio.Queue):
-        while True:
-            try:
-                node_id = await queue.get()
-            except asyncio.CancelledError:
-                break
+@pytest.mark.asyncio
+class TestRuntimesWithMacros:
+    """对每个运行时进行独立的单元测试，假设宏预处理已完成。"""
 
-            run.set_node_state(node_id, NodeState.RUNNING)
-            try:
-                node = run.get_node(node_id)
-                context = run.get_execution_context()
-                output = await self._execute_node(node, context)
-                if isinstance(output, dict) and "error" in output:
-                    run.set_node_state(node_id, NodeState.FAILED)
-                else:
-                    run.set_node_state(node_id, NodeState.SUCCEEDED)
-                run.set_node_result(node_id, output)
-            except Exception as e:
-                error_message = f"Worker-level error for node {node_id}: {type(e).__name__}: {e}"
-                import traceback
-                traceback.print_exc()
-                run.set_node_state(node_id, NodeState.FAILED)
-                run.set_node_result(node_id, {"error": error_message})
-            self._process_subscribers(node_id, run, queue)
-            queue.task_done()
+    async def test_set_world_variable_runtime(self, mock_exec_context: ExecutionContext):
+        runtime = SetWorldVariableRuntime()
+        assert "new_var" not in mock_exec_context.shared.world_state
+        await runtime.execute(
+            config={"variable_name": "new_var", "value": "is_set"},
+            context=mock_exec_context
+        )
+        assert mock_exec_context.shared.world_state["new_var"] == "is_set"
 
-    def _process_subscribers(self, completed_node_id: str, run: 'GraphRun', queue: asyncio.Queue):
-        completed_node_state = run.get_node_state(completed_node_id)
-        for sub_id in run.get_subscribers(completed_node_id):
-            if run.get_node_state(sub_id) != NodeState.PENDING:
-                continue
-            if completed_node_state == NodeState.FAILED:
-                run.set_node_state(sub_id, NodeState.SKIPPED)
-                run.set_node_result(sub_id, {"status": "skipped", "reason": f"Upstream failure of node {completed_node_id}."})
-                self._process_subscribers(sub_id, run, queue)
-                continue
-            dependencies = run.get_dependencies(sub_id)
-            is_ready = all(
-                (dep_id not in run.node_map) or (run.get_node_state(dep_id) == NodeState.SUCCEEDED)
-                for dep_id in dependencies
-            )
-            if is_ready:
-                run.set_node_state(sub_id, NodeState.READY)
-                queue.put_nowait(sub_id)
+    async def test_execute_runtime(self, mock_exec_context: ExecutionContext):
+        runtime = ExecuteRuntime()
+        assert mock_exec_context.shared.world_state["hp"] == 100
+        code_str = "world.hp -= 25"
+        await runtime.execute(
+            config={"code": code_str}, 
+            context=mock_exec_context
+        )
+        assert mock_exec_context.shared.world_state["hp"] == 75
 
-    async def _execute_node(self, node: GenericNode, context: ExecutionContext) -> Dict[str, Any]:
-        pipeline_state: Dict[str, Any] = {}
-        if not node.run: return {}
-        
-        lock = context.shared.global_write_lock
+        code_str_with_return = "f'New HP is {world.hp}'"
+        result = await runtime.execute(
+            config={"code": code_str_with_return}, 
+            context=mock_exec_context
+        )
+        assert result == {"output": "New HP is 75"}
 
-        for i, instruction in enumerate(node.run):
-            runtime_name = instruction.runtime
-            try:
-                eval_context = build_evaluation_context(context, pipe_vars=pipeline_state)
-                
-                config_to_process = instruction.config.copy()
-                runtime_instance: RuntimeInterface = self.registry.get_runtime(runtime_name)
-                
-                templates = {}
-                template_fields = getattr(runtime_instance, 'template_fields', [])
-                for field in template_fields:
-                    if field in config_to_process:
-                        templates[field] = config_to_process.pop(field)
 
-                processed_config = await evaluate_data(config_to_process, eval_context, lock)
-
-                if templates:
-                    processed_config.update(templates)
-
-                output = await runtime_instance.execute(
-                    config=processed_config,
-                    context=context,
-                    subgraph_runner=self,
-                    pipeline_state=pipeline_state
-                )
-                
-                if not isinstance(output, dict):
-                    error_message = f"Runtime '{runtime_name}' did not return a dictionary. Got: {type(output).__name__}"
-                    return {"error": error_message, "failed_step": i, "runtime": runtime_name}
-                pipeline_state.update(output)
-            except Exception as e:
-                import traceback
-                print(f"Error in node {node.id}, step {i} ({runtime_name}): {type(e).__name__}: {e}")
-                traceback.print_exc()
-                error_message = f"Failed at step {i+1} ('{runtime_name}'): {type(e).__name__}: {e}"
-                return {"error": error_message, "failed_step": i, "runtime": runtime_name}
-        return pipeline_state
-
-def get_engine(request: Request) -> ExecutionEngine:
-    """依赖注入函数，用于获取执行引擎实例。"""
-    return request.app.state.engine
-
-```
-
-### core/utils.py
-```
-# backend/core/utils.py
-
-from typing import Any, Dict
-
-class DotAccessibleDict:
-    """
-    一个【递归】代理类，它包装一个字典，并允许通过点符号进行属性访问。
-    【关键修正】所有读取和写入操作都会直接作用于原始的底层字典。
-    """
-    def __init__(self, data: Dict[str, Any]):
-        # 不再使用 object.__setattr__，而是直接存储引用。
-        # Pydantic的BaseModel等复杂对象可能需要它，但我们这里用于简单字典，
-        # 直接存储引用更清晰。
-        self._data = data
-
-    @classmethod
-    def _wrap(cls, value: Any) -> Any:
-        """递归包装值。如果值是字典，包装它；如果是列表，递归包装其内容。"""
-        if isinstance(value, dict):
-            return cls(value)
-        if isinstance(value, list):
-            # 列表本身不被包装，但其内容需要递归检查
-            return [cls._wrap(item) for item in value]
-        return value
-
-    def __contains__(self, key: str) -> bool:
-        """
-        当执行 `key in obj` 时调用。
-        直接代理到底层字典的 `in` 操作。
-        """
-        return key in self._data
-
-    def __getattr__(self, name: str) -> Any:
-        """
-        当访问 obj.key 时调用。
-        【核心修正】如果 'name' 不是 _data 的键，则检查它是否是 _data 的一个可调用方法 (如 .get, .keys)。
-        """
-        if name.startswith('__'):  # 避免代理魔术方法
-            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
-            
-        try:
-            # 优先检查底层字典中是否存在该键
-            value = self._data[name]
-            return self._wrap(value)
-        except KeyError:
-            # 如果键不存在，检查底层字典是否有一个同名的方法
-            underlying_attr = getattr(self._data, name, None)
-            if callable(underlying_attr):
-                return underlying_attr  # 返回该方法本身，以便可以被调用
-            
-            # 如果都不是，则抛出异常
-            raise AttributeError(f"'{type(self).__name__}' object has no attribute or method '{name}'")
-
-    def __setattr__(self, name: str, value: Any):
-        """当执行 obj.key = value 时调用。"""
-        # --- 核心修正 ---
-        # 如果 name 是 `_data`，就设置实例属性，否则直接修改底层字典。
-        if name == '_data':
-            super().__setattr__(name, value)
-        else:
-            self._data[name] = value
-
-    def __delattr__(self, name: str):
-        """当执行 del obj.key 时调用。"""
-        try:
-            del self._data[name]
-        except KeyError:
-            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
-
-    # 保持辅助方法不变
-    def __repr__(self) -> str:
-        return f"DotAccessibleDict({self._data})"
+@pytest.mark.asyncio
+class TestBuiltinModules:
     
-    def __getitem__(self, key):
-        return self._wrap(self._data[key])
+    async def test_random_module(self, mock_eval_context, test_lock):
+        result = await evaluate_expression("random.randint(10, 10)", mock_eval_context, test_lock)
+        assert result == 10
+
+    async def test_math_module(self, mock_eval_context, test_lock):
+        result = await evaluate_expression("math.ceil(3.14)", mock_eval_context, test_lock)
+        assert result == 4
+
+    async def test_json_module(self, mock_eval_context, test_lock):
+        code = "json.dumps({'a': 1})" # `import json` is not needed due to pre-imported modules
+        result = await evaluate_expression(code, mock_eval_context, test_lock)
+        assert result == '{"a": 1}'
+
+    async def test_re_module(self, mock_eval_context, test_lock):
+        code = "re.match(r'\\w+', 'hello').group(0)"
+        result = await evaluate_expression(code, mock_eval_context, test_lock)
+        assert result == "hello"
+
+@pytest.mark.asyncio
+class TestDotAccessibleDictInteraction:
     
-    def __setitem__(self, key, value):
-        self._data[key] = value
-```
+    async def test_deep_read(self, mock_exec_context, test_lock):
+        mock_exec_context.shared.world_state["player"] = {"stats": {"strength": 10}}
+        eval_context = build_evaluation_context(mock_exec_context)
+        result = await evaluate_expression("world.player.stats.strength", eval_context, test_lock)
+        assert result == 10
 
-### core/loader.py
-```
-# backend/core/loader.py
-import os
-import pkgutil
-import importlib
-from typing import List
-
-def load_modules(directories: List[str]):
-    """
-    动态地扫描并导入指定目录下的所有 Python 模块。
-
-    :param directories: 一个包含要扫描的包目录路径的列表 (e.g., ["backend.runtimes", "backend.llm.providers"])
-    """
-    print("\n--- Starting Dynamic Module Loading ---")
-    for package_name in directories:
-        try:
-            package = importlib.import_module(package_name)
-            
-            # 使用 pkgutil.walk_packages 来安全地、递归地查找所有子模块
-            for _, module_name, _ in pkgutil.walk_packages(package.__path__, package.__name__ + '.'):
-                try:
-                    importlib.import_module(module_name)
-                except Exception as e:
-                    print(f"  - Failed to load module '{module_name}': {e}")
-        except ImportError as e:
-            print(f"Warning: Could not import package '{package_name}'. Skipping. Error: {e}")
-    print("--- Finished Dynamic Module Loading ---\n")
-```
-
-### core/dependency_parser.py
-```
-# backend/core/dependency_parser.py
-import re
-from typing import Set, Dict, Any, List
-
-NODE_DEP_REGEX = re.compile(r'nodes\.([a-zA-Z0-9_]+)')
-
-def extract_dependencies_from_string(s: str) -> Set[str]:
-    if not isinstance(s, str):
-        return set()
-    if '{{' in s and '}}' in s and 'nodes.' in s:
-        return set(NODE_DEP_REGEX.findall(s))
-    return set()
-
-def extract_dependencies_from_value(value: Any) -> Set[str]:
-    deps = set()
-    if isinstance(value, str):
-        deps.update(extract_dependencies_from_string(value))
-    elif isinstance(value, list):
-        for item in value:
-            deps.update(extract_dependencies_from_value(item))
-    elif isinstance(value, dict):
-        for k, v in value.items():
-            deps.update(extract_dependencies_from_value(k))
-            deps.update(extract_dependencies_from_value(v))
-    return deps
-
-def build_dependency_graph(nodes: List[Dict[str, Any]]) -> Dict[str, Set[str]]:
-    dependency_map: Dict[str, Set[str]] = {}
-
-    for node in nodes:
-        node_id = node['id']
-        auto_inferred_deps = set()
-        for instruction in node.get('run', []):
-            instruction_config = instruction.get('config', {})
-            dependencies = extract_dependencies_from_value(instruction_config)
-            auto_inferred_deps.update(dependencies)
-        
-        explicit_deps = set(node.get('depends_on') or [])
-
-        all_dependencies = auto_inferred_deps.union(explicit_deps)
-        
-        # 不再过滤，保留所有依赖
-        dependency_map[node_id] = all_dependencies
+    async def test_deep_write(self, mock_exec_context, test_lock):
+        mock_exec_context.shared.world_state["player"] = {"stats": {"strength": 10}}
+        eval_context = build_evaluation_context(mock_exec_context)
+        await evaluate_expression("world.player.stats.strength = 15", eval_context, test_lock)
+        assert mock_exec_context.shared.world_state["player"]["stats"]["strength"] == 15
     
-    return dependency_map
+    async def test_attribute_error_on_missing_key(self, mock_eval_context, test_lock):
+        with pytest.raises(AttributeError):
+            # The evaluator will raise AttributeError when a key is not found
+            await evaluate_expression("world.non_existent_key", mock_eval_context, test_lock)
+
+    async def test_list_of_dicts_access(self, mock_exec_context, test_lock):
+        mock_exec_context.shared.world_state["inventory"] = [{"name": "sword"}, {"name": "shield"}]
+        eval_context = build_evaluation_context(mock_exec_context)
+        result = await evaluate_expression("world.inventory[1].name", eval_context, test_lock)
+        assert result == "shield"
+
+@pytest.mark.asyncio
+class TestEdgeCases:
+    
+    async def test_macro_returning_none(self, mock_eval_context, test_lock):
+        code = "x = 1" # This script doesn't have an expression as its last line
+        result = await evaluate_expression(code, mock_eval_context, test_lock)
+        assert result is None
+
+    async def test_empty_macro(self, mock_eval_context, test_lock):
+        result = await evaluate_expression("", mock_eval_context, test_lock)
+        assert result is None
+        result = await evaluate_expression("   ", mock_eval_context, test_lock)
+        assert result is None
+
+    async def test_evaluate_data_with_none_values(self, mock_eval_context, test_lock):
+        data = {"key1": None, "key2": "{{ 1 + 1 }}"}
+        result = await evaluate_data(data, mock_eval_context, test_lock)
+        assert result == {"key1": None, "key2": 2}
 ```
 
-### core/state.py
+### test_01_foundations.py
 ```
-# backend/core/state.py
+# tests/test_01_foundations.py
+import pytest
+from pydantic import ValidationError
+from uuid import uuid4
 
-from __future__ import annotations
-from fastapi import Request
-import asyncio
-import json
-from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
-from uuid import UUID, uuid4
+from backend.core.models import GraphCollection, GenericNode, GraphDefinition, RuntimeInstruction
+from backend.core.state import StateSnapshot, Sandbox, SnapshotStore
+from backend.core.dependency_parser import build_dependency_graph
 
-from pydantic import BaseModel, Field, ConfigDict, ValidationError
 
+class TestCoreModels:
+    """测试核心数据模型，已更新为新架构。"""
+
+    def test_runtime_instruction_validation(self):
+        """测试 RuntimeInstruction 模型。"""
+        # 有效
+        inst = RuntimeInstruction(runtime="test.runtime", config={"key": "value"})
+        assert inst.runtime == "test.runtime"
+        assert inst.config == {"key": "value"}
+        # config 默认为空字典
+        inst_default = RuntimeInstruction(runtime="test.runtime")
+        assert inst_default.config == {}
+
+        # 无效 (缺少 runtime)
+        with pytest.raises(ValidationError):
+            RuntimeInstruction(config={})
+
+    def test_generic_node_validation_success(self):
+        """测试 GenericNode 使用新的 `run` 字段。"""
+        node = GenericNode(
+            id="n1",
+            run=[
+                {"runtime": "step1", "config": {"p1": 1}},
+                {"runtime": "step2"}
+            ]
+        )
+        assert node.id == "n1"
+        assert len(node.run) == 2
+        assert isinstance(node.run[0], RuntimeInstruction)
+        assert node.run[0].runtime == "step1"
+        assert node.run[0].config == {"p1": 1}
+        assert node.run[1].config == {}
+
+    def test_generic_node_validation_fails(self):
+        """测试 GenericNode 的无效 `run` 字段。"""
+        # `run` 列表中的项不是有效的指令
+        with pytest.raises(ValidationError):
+            GenericNode(id="n1", run=["not_an_instruction"])
+        
+        with pytest.raises(ValidationError):
+            GenericNode(id="n1", run=[{"config": {}}]) # runtime 缺失
+
+    def test_graph_collection_validation(self):
+        """测试 GraphCollection 验证逻辑，此逻辑不变。"""
+        valid_data = {"main": {"nodes": [{"id": "a", "run": []}]}}
+        collection = GraphCollection.model_validate(valid_data)
+        assert "main" in collection.root
+
+        with pytest.raises(ValidationError, match="A 'main' graph must be defined"):
+            GraphCollection.model_validate({"other": {"nodes": []}})
+
+
+class TestSandboxModels:
+    """测试沙盒相关模型，基本不变。"""
+    # ... 此部分测试与旧版本基本一致，无需修改，因为模型本身的结构和不变性没有改变 ...
+    @pytest.fixture
+    def sample_graph_collection(self) -> GraphCollection:
+        return GraphCollection.model_validate({"main": {"nodes": [{"id": "a", "run": []}]}})
+
+    def test_state_snapshot_is_immutable(self, sample_graph_collection: GraphCollection):
+        snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=sample_graph_collection)
+        with pytest.raises(ValidationError, match="Instance is frozen"):
+            snapshot.world_state = {"new_key": "new_value"}
+
+
+class TestDependencyParser:
+    """测试依赖解析器，使用新的节点结构。"""
+
+    def test_simple_dependency(self):
+        nodes = [{"id": "A", "run": []}, {"id": "B", "run": [{"config": {"value": "{{ nodes.A.output }}"}}]}]
+        deps = build_dependency_graph(nodes)
+        assert deps["B"] == {"A"}
+
+    def test_dependency_in_nested_structure(self):
+        nodes = [
+            {"id": "source", "run": []},
+            {"id": "consumer", "run": [{"config": {"nested": ["{{ nodes.source.val }}"]}}]}
+        ]
+        deps = build_dependency_graph(nodes)
+        assert deps["consumer"] == {"source"}
+
+    def test_ignores_non_node_macros(self):
+        nodes = [{"id": "A", "run": [{"config": {"value": "{{ world.x }}"}}]}]
+        deps = build_dependency_graph(nodes)
+        assert deps["A"] == set()
+
+    def test_dependency_on_placeholder_node_is_preserved(self):
+        """
+        验证对图中不存在的节点（即子图的输入占位符）的依赖会被保留。
+        这对于 system.call 功能至关重要。
+        """
+        nodes = [{"id": "A", "run": [{"config": {"value": "{{ nodes.placeholder_input.val }}"}}]}]
+        deps = build_dependency_graph(nodes)
+        # 之前这里断言 deps["A"] == set()，现在它必须保留依赖
+        assert deps["A"] == {"placeholder_input"}
+```
+
+### __init__.py
+```
+
+```
+
+### test_04_api_e2e.py
+```
+# tests/test_04_api_e2e.py
+import pytest
+from fastapi.testclient import TestClient
+from uuid import uuid4
 
 from backend.core.models import GraphCollection
-from backend.core.utils import DotAccessibleDict
-
-# --- 1. 持久化状态模型 (原 state_models.py) ---
-# 这些模型定义了存储在数据库或内存中的长期状态
-
-class StateSnapshot(BaseModel):
-    """
-    一个不可变的快照，代表 Sandbox 在某个时间点的完整状态。
-    """
-    id: UUID = Field(default_factory=uuid4)
-    sandbox_id: UUID
-    graph_collection: GraphCollection
-    world_state: Dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    parent_snapshot_id: Optional[UUID] = None
-    triggering_input: Dict[str, Any] = Field(default_factory=dict)
-    run_output: Optional[Dict[str, Any]] = None
-
-    model_config = ConfigDict(frozen=True)
-
-class Sandbox(BaseModel):
-    """
-    一个交互式模拟环境的容器。
-    它管理着一系列的状态快照。
-    """
-    id: UUID = Field(default_factory=uuid4)
-    name: str
-    head_snapshot_id: Optional[UUID] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-    def get_latest_snapshot(self, store: SnapshotStore) -> Optional[StateSnapshot]:
-        if self.head_snapshot_id:
-            return store.get(self.head_snapshot_id)
-        return None
-
-class SnapshotStore:
-    """一个简单的内存快照存储。"""
-    def __init__(self):
-        self._store: Dict[UUID, StateSnapshot] = {}
-
-    def save(self, snapshot: StateSnapshot):
-        if snapshot.id in self._store:
-            raise ValueError(f"Snapshot with id {snapshot.id} already exists.")
-        self._store[snapshot.id] = snapshot
-
-    def get(self, snapshot_id: UUID) -> Optional[StateSnapshot]:
-        return self._store.get(snapshot_id)
-
-    def find_by_sandbox(self, sandbox_id: UUID) -> List[StateSnapshot]:
-        return [s for s in self._store.values() if s.sandbox_id == sandbox_id]
-
-    def clear(self):
-        self._store = {}
 
 
-# --- 2. 运行时上下文模型 (原 types.py) ---
-# 这些模型定义了在单次图执行期间，存在于内存中的临时状态和上下文
-
-# 【已删除】移除了 ServiceRegistry = Dict[str, Any] 类型别名。
-# 它与 backend/core/services.py 中的 ServiceRegistry 类名冲突。
-# 现在统一使用 ServiceRegistry 类，并在需要的地方使用 Dict[str, Any] 进行类型提示。
-
-class SharedContext(BaseModel):
-    """
-    一个封装了所有图执行期间共享资源的对象。
-    """
-    world_state: Dict[str, Any]
-    session_info: Dict[str, Any]
-    global_write_lock: asyncio.Lock
-    services: DotAccessibleDict
-
-    model_config = {"arbitrary_types_allowed": True}
-
-class ExecutionContext(BaseModel):
-    """
-    代表一个【单次图执行】的上下文。
-    它包含私有状态（如 node_states）和对全局共享状态的引用。
-    """
-    node_states: Dict[str, Any] = Field(default_factory=dict)
-    run_vars: Dict[str, Any] = Field(default_factory=dict)
-    shared: SharedContext
-    initial_snapshot: StateSnapshot # 引用初始快照以获取图定义等信息
-
-    model_config = {"arbitrary_types_allowed": True}
-
-    @classmethod
-    def create_for_main_run(
-        cls, 
-        snapshot: StateSnapshot, 
-        # 【已修改】将类型提示从冲突的 ServiceRegistry 别名改为明确的字典类型
-        services: Dict[str, Any], 
-        run_vars: Dict[str, Any] = None
-    ) -> 'ExecutionContext':
-        """为顶层图执行创建初始上下文。"""
-        shared_context = SharedContext(
-            world_state=snapshot.world_state.copy(),
-            session_info={
-                "start_time": datetime.now(timezone.utc),
-                "conversation_turn": 0,
-            },
-            global_write_lock=asyncio.Lock(),
-            services=DotAccessibleDict(services)
-        )
-        return cls(
-            shared=shared_context,
-            initial_snapshot=snapshot,
-            run_vars=run_vars or {}
-        )
-
-    @classmethod
-    def create_for_sub_run(cls, parent_context: 'ExecutionContext', run_vars: Dict[str, Any] = None) -> 'ExecutionContext':
-        """为子图（由 call/map 调用）创建一个新的执行上下文。"""
-        return cls(
-            shared=parent_context.shared,
-            initial_snapshot=parent_context.initial_snapshot,
-            run_vars=run_vars or {}
-        )
-
-    def to_next_snapshot(
-        self,
-        final_node_states: Dict[str, Any],
-        triggering_input: Dict[str, Any]
-    ) -> StateSnapshot:
-        """从当前上下文的状态生成下一个快照。"""
-        final_world_state = self.shared.world_state
-        
-        current_graphs = self.initial_snapshot.graph_collection
-        if '__graph_collection__' in final_world_state:
-            try:
-                evolved_graph_value = final_world_state['__graph_collection__']
-                if isinstance(evolved_graph_value, str):
-                    evolved_graph_dict = json.loads(evolved_graph_value)
-                else:
-                    evolved_graph_dict = evolved_graph_value
-                
-                evolved_graphs = GraphCollection.model_validate(evolved_graph_dict)
-                current_graphs = evolved_graphs
-            except (ValidationError, json.JSONDecodeError) as e:
-                print(f"Warning: Failed to parse evolved graph collection from world_state: {e}")
-
-        return StateSnapshot(
-            sandbox_id=self.initial_snapshot.sandbox_id,
-            graph_collection=current_graphs,
-            world_state=final_world_state,
-            parent_snapshot_id=self.initial_snapshot.id,
-            run_output=final_node_states,
-            triggering_input=triggering_input
-        )
-
-def get_sandbox_store(request: Request) -> Dict[UUID, Sandbox]:
-    """依赖注入函数，用于获取沙盒存储。"""
-    return request.app.state.sandbox_store
-
-def get_snapshot_store(request: Request) -> SnapshotStore:
-    """依赖注入函数，用于获取快照存储。"""
-    return request.app.state.snapshot_store
-
-
-# --- 3. 统一的模型重建 ---
-# 确保 Pydantic 能够正确处理所有内部引用和向前引用
-StateSnapshot.model_rebuild()
-Sandbox.model_rebuild()
-SharedContext.model_rebuild()
-ExecutionContext.model_rebuild()
-```
-
-### core/reporting.py
-```
-# backend/core/reporting.py
-
-from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Callable, Type
-
-class Reportable(ABC):
-    """
-    一个统一的汇报协议。
-    任何希望向系统提供状态或元数据的组件都应实现此接口。
-    """
+@pytest.mark.e2e
+class TestApiSandboxLifecycle:
+    """测试沙盒从创建、执行、查询到回滚的完整生命周期。"""
     
-    @property
-    @abstractmethod
-    def report_key(self) -> str:
-        """
-        返回此报告在最终JSON对象中的唯一键名。
-        例如: "runtimes", "llm_providers", "system_stats"
-        """
-        pass
-
-    @property
-    def is_static(self) -> bool:
-        """
-        指明此报告是否为静态。
-        True: 报告内容在应用启动后不变，可以被缓存。
-        False: 报告内容是动态的，每次请求都需重新生成。
-        默认值为静态。
-        """
-        return True
-
-    @abstractmethod
-    async def generate_report(self) -> Any:
-        """
-        生成并返回此组件的报告内容。
-        内容可以是任何可以被JSON序列化的类型 (dict, list, str, etc.)。
-        """
-        pass
-
-class AuditorRegistry:
-    """一个简单的注册表，用于收集所有 Reportable 实例。"""
-    def __init__(self):
-        self._reportables: List[Reportable] = []
-
-    def register(self, reportable: Reportable):
-        """注册一个 Reportable 实例。"""
-        print(f"Auditor: Registering reportable component with key '{reportable.report_key}'.")
-        self._reportables.append(reportable)
-    
-    def get_all(self) -> List[Reportable]:
-        return self._reportables
-
-class Auditor:
-    """
-    审阅官服务。负责从注册表中收集所有报告并进行聚合。
-    """
-    def __init__(self, registry: AuditorRegistry):
-        self._registry = registry
-        self._static_report_cache: Dict[str, Any] | None = None
-
-    async def generate_full_report(self) -> Dict[str, Any]:
-        """生成完整的系统报告。"""
-        full_report = {}
-
-        # 1. 处理静态报告 (带缓存)
-        if self._static_report_cache is None:
-            self._static_report_cache = await self._generate_static_reports()
-        full_report.update(self._static_report_cache)
-
-        # 2. 处理动态报告 (实时生成)
-        dynamic_reports = await self._generate_dynamic_reports()
-        full_report.update(dynamic_reports)
-
-        return full_report
-
-    async def _generate_static_reports(self) -> Dict[str, Any]:
-        """仅生成并缓存所有静态报告。"""
-        print("Auditor: Generating static report cache...")
-        static_reports = {}
-        tasks = []
-        reportables = [r for r in self._registry.get_all() if r.is_static]
-        for r in reportables:
-            tasks.append(r.generate_report())
-        
-        results = await asyncio.gather(*tasks)
-        
-        for r, result in zip(reportables, results):
-            static_reports[r.report_key] = result
-        
-        return static_reports
-
-    async def _generate_dynamic_reports(self) -> Dict[str, Any]:
-        """仅生成所有动态报告。"""
-        dynamic_reports = {}
-        tasks = []
-        reportables = [r for r in self._registry.get_all() if r.is_static is False]
-        if not reportables:
-            return {}
-            
-        for r in reportables:
-            tasks.append(r.generate_report())
-        
-        results = await asyncio.gather(*tasks)
-        
-        for r, result in zip(reportables, results):
-            dynamic_reports[r.report_key] = result
-            
-        return dynamic_reports
-
-# 全局单例
-auditor_registry = AuditorRegistry()
-```
-
-### runtimes/__init__.py
-```
-
-```
-
-### runtimes/base_runtimes.py
-```
-# backend/runtimes/base_runtimes.py
-import asyncio 
-from typing import Dict, Any, Optional
-from backend.core.interfaces import RuntimeInterface
-from backend.core.registry import runtime_registry 
-from backend.core.state import ExecutionContext
-from backend.llm.models import LLMResponse, LLMRequestFailedError
-
-@runtime_registry.register("system.input") 
-class InputRuntime(RuntimeInterface):
-    """从 config 中获取 'value'。"""
-    async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
-        return {"output": config.get("value", "")}
-
-@runtime_registry.register("llm.default")
-class LLMRuntime(RuntimeInterface):
-    """
-    一个轻量级的运行时，它通过 Hevno LLM Gateway 发起 LLM 调用。
-    它的职责是：
-    1. 从 config 中解析出调用意图（模型、prompt 等）。
-    2. 从上下文中获取 LLMService。
-    3. 调用 LLMService.request()。
-    4. 将结果（成功或失败）格式化为标准的节点输出。
-    """
-    async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
-        # ... (解析 config 的逻辑不变) ...
-        model_name = config.get("model")
-        prompt = config.get("prompt")
-        llm_params = {k: v for k, v in config.items() if k not in ["model", "prompt"]}
-
-        if not model_name:
-            raise ValueError("LLMRuntime requires a 'model' field in its config (e.g., 'gemini/gemini-1.5-flash').")
-        if not prompt:
-            raise ValueError("LLMRuntime requires a 'prompt' field in its config.")
-
-        # 所有非'model'和'prompt'的键都作为额外参数传递
-        llm_params = {k: v for k, v in config.items() if k not in ["model", "prompt"]}
-
-        # 2. 从共享上下文中获取 LLM Service
-        llm_service = context.shared.services.llm
-
-        try:
-            # 3. 调用 Gateway
-            response: LLMResponse = await llm_service.request(
-                model_name=model_name,
-                prompt=prompt,
-                **llm_params
-            )
-            
-            # 4. 处理成功或过滤的响应
-            if response.error_details:
-                # 这是一个“软失败”，比如内容过滤
-                return {
-                    "error": response.error_details.message,
-                    "error_type": response.error_details.error_type.value,
-                    "details": response.error_details.model_dump()
-                }
-
-            return {
-                "llm_output": response.content,
-                "usage": response.usage,
-                "model_name": response.model_name
+    def test_full_lifecycle(self, test_client: TestClient, linear_collection: GraphCollection):
+        # 1. 创建沙盒
+        response = test_client.post(
+            "/api/sandboxes",
+            json={
+                "name": "E2E Test",
+                "graph_collection": linear_collection.model_dump(),
+                "initial_state": {} 
             }
+        )
+        assert response.status_code == 200, response.text
+        sandbox_data = response.json()
+        sandbox_id = sandbox_data["id"]
+        genesis_snapshot_id = sandbox_data["head_snapshot_id"]
+        assert sandbox_id is not None
+        assert genesis_snapshot_id is not None
 
-        except LLMRequestFailedError as e:
-            # 5. 处理硬失败（所有重试都用尽后）
-            print(f"ERROR: LLM request failed for node after all retries. Error: {e}")
-            return {
-                "error": str(e),
-                "details": e.last_error.model_dump() if e.last_error else None
+        # 2. 执行一步
+        response = test_client.post(f"/api/sandboxes/{sandbox_id}/step", json={"user_message": "test"})
+        assert response.status_code == 200, response.text
+        step1_snapshot_data = response.json()
+        step1_snapshot_id = step1_snapshot_data["id"]
+        
+        # 验证图执行成功，并且最终节点 'C' 存在于输出中
+        run_output = step1_snapshot_data.get("run_output", {})
+        assert "C" in run_output
+        
+        # 【关键修改】验证 'C' 节点的输出是来自 MockLLMService
+        assert "llm_output" in run_output["C"]
+        assert run_output["C"]["llm_output"].startswith("[MOCK RESPONSE for mock/model]")
+
+        # 3. 获取历史记录
+        response = test_client.get(f"/api/sandboxes/{sandbox_id}/history")
+        assert response.status_code == 200, response.text
+        history = response.json()
+        assert len(history) == 2, "History should contain the genesis and the first step snapshots."
+
+        # 4. 回滚到创世快照
+        response = test_client.put(
+            f"/api/sandboxes/{sandbox_id}/revert",
+            params={"snapshot_id": genesis_snapshot_id}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {"message": f"Sandbox reverted to snapshot {genesis_snapshot_id}"}
+
+        # 5. 再次执行一步，验证父快照是创世快照
+        response = test_client.post(f"/api/sandboxes/{sandbox_id}/step", json={"user_message": "re-test"})
+        assert response.status_code == 200, response.text
+        step2_snapshot_data = response.json()
+        assert step2_snapshot_data["parent_snapshot_id"] == genesis_snapshot_id
+
+
+@pytest.mark.e2e
+class TestApiErrorHandling:
+    """测试 API 在各种错误情况下的响应。"""
+
+    def test_create_sandbox_with_invalid_graph(self, test_client: TestClient, invalid_graph_no_main: dict):
+        response = test_client.post(
+            "/api/sandboxes",
+            json={
+                "name": "Invalid Graph Test",
+                "graph_collection": invalid_graph_no_main
             }
-
-@runtime_registry.register("system.set_world_var")
-class SetWorldVariableRuntime(RuntimeInterface):
-    """从 config 中获取变量名和值，并设置一个持久化的世界变量。"""
-    async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
-        variable_name = config.get("variable_name")
-        value_to_set = config.get("value")
-
-        if not variable_name:
-            raise ValueError("SetWorldVariableRuntime requires 'variable_name' in its config.")
+        )
+        assert response.status_code == 422, "Should fail with Unprocessable Entity for invalid graph structure"
         
-        context.shared.world_state[variable_name] = value_to_set
+        error_data = response.json()
+        print("Received error data:", error_data) # <--- 增加这行来调试，确认结构
+
+        error_detail = error_data["detail"][0]
         
-        return {}
+        # 【最终修正】直接检查 `msg` 字段，这是处理 RootModel 验证错误的更可靠方法
+        assert "A 'main' graph must be defined" in error_detail["msg"]
+        
+        # 我们仍然可以检查错误类型和位置
+        assert error_detail["type"] == "value_error"
+        # 对于 RootModel，位置可能只指向模型本身，而不是 'root' 字段
+        assert error_detail["loc"] == ["body", "graph_collection"]
+
+    def test_operations_on_nonexistent_sandbox(self, test_client: TestClient):
+        nonexistent_id = uuid4()
+        
+        # Step
+        response = test_client.post(f"/api/sandboxes/{nonexistent_id}/step", json={})
+        assert response.status_code == 404
+        
+        # History
+        response = test_client.get(f"/api/sandboxes/{nonexistent_id}/history")
+        assert response.status_code == 404
+
+        # Revert
+        response = test_client.put(f"/api/sandboxes/{nonexistent_id}/revert", params={"snapshot_id": uuid4()})
+        assert response.status_code == 404
+
+
+@pytest.mark.e2e
+class TestApiWithComplexGraphs:
+    """测试涉及更复杂图逻辑（如子图调用）的 API 端点。"""
+
+    def test_e2e_with_subgraph_call(self, test_client: TestClient, subgraph_call_collection: GraphCollection):
+        """
+        通过 API 端到端测试一个包含 system.call 的图。
+        """
+        # 1. 创建沙盒
+        response = test_client.post(
+            "/api/sandboxes",
+            json={
+                "name": "E2E Subgraph Test",
+                "graph_collection": subgraph_call_collection.model_dump(),
+                "initial_state": {"global_setting": "Omega"}
+            }
+        )
+        assert response.status_code == 200, response.text
+        sandbox_id = response.json()["id"]
+
+        # 2. 执行一步
+        response = test_client.post(f"/api/sandboxes/{sandbox_id}/step", json={})
+        assert response.status_code == 200, response.text
+        
+        # 3. 验证结果
+        snapshot_data = response.json()
+        run_output = snapshot_data.get("run_output", {})
+        
+        # 断言调用节点和子图的输出结构
+        assert "main_caller" in run_output
+        subgraph_output = run_output["main_caller"]["output"]
+        assert "processor" in subgraph_output
+        
+        # 验证子图内部节点的最终输出值
+        processor_output = subgraph_output["processor"]["output"]
+        expected_str = "Processed: Hello from main with world state: Omega"
+        assert processor_output == expected_str
 ```
 
-### runtimes/control_runtimes.py
+### test_05_concurrency.py
 ```
-# backend/runtimes/control_runtimes.py
-import asyncio
-from typing import Dict, Any, List, Optional
+# tests/test_05_concurrency.py
+import pytest
+from uuid import uuid4
 
-from backend.core.interfaces import RuntimeInterface, SubGraphRunner # <-- 从新位置导入
-# 导入所有需要的核心组件
-from backend.core.evaluation import evaluate_data, evaluate_expression, build_evaluation_context
-from backend.core.state import ExecutionContext
-from backend.core.utils import DotAccessibleDict
-from backend.core.registry import runtime_registry
+from backend.core.state import StateSnapshot
+from backend.core.models import GraphCollection
 
-@runtime_registry.register("system.execute")
-class ExecuteRuntime(RuntimeInterface):
+
+@pytest.mark.asyncio
+class TestConcurrencyWithLock:
     """
-    一个特殊的运行时，用于二次执行代码。
-    它接收一个 'code' 字段，并对其内容进行求值。
+    测试引擎的宏级原子锁是否能正确处理并发写入，防止竞态条件。
     """
-    async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
-        code_to_execute = config.get("code")
 
-        if not isinstance(code_to_execute, str):
-            return {"output": code_to_execute}
-
-        eval_context = build_evaluation_context(context)
-        # --- 修正: 从共享上下文中获取并传递锁 ---
-        lock = context.shared.global_write_lock
-        result = await evaluate_expression(code_to_execute, eval_context, lock)
-        return {"output": result}
-
-@runtime_registry.register("system.call")
-class CallRuntime(RuntimeInterface):
-    """执行一个子图。"""
-    async def execute(self, config: Dict[str, Any], context: ExecutionContext, subgraph_runner: Optional[SubGraphRunner] = None, **kwargs) -> Dict[str, Any]:
-        if not subgraph_runner:
-            raise ValueError("CallRuntime requires a SubGraphRunner.")
-            
-        graph_name = config.get("graph")
-        using_inputs = config.get("using", {})
+    async def test_concurrent_writes_are_atomic_and_correct(
+        self, 
+        test_engine, # <-- 【修改】直接请求由 conftest.py 提供的 test_engine
+        concurrent_write_collection: GraphCollection
+    ):
+        """
+        验证两个并行节点对同一个 world_state 变量的多次修改是原子性的。
         
-        inherited_inputs = {
-            placeholder_name: {"output": value}
-            for placeholder_name, value in using_inputs.items()
-        }
-
-        # 调用 subgraph_runner，它会负责创建正确的子上下文
-        subgraph_results = await subgraph_runner.execute_graph(
-            graph_name=graph_name,
-            parent_context=context, # 传递当前的上下文
-            inherited_inputs=inherited_inputs
+        【测试逻辑完全不变】
+        这个测试的逻辑非常健壮，它验证了：
+        1. 两个没有依赖关系的节点 `incrementer_A` 和 `incrementer_B` 会被并行执行。
+        2. 每个节点内部的宏 `world.counter += 1` 是一个经典的 read-modify-write 操作，
+           在没有锁的情况下极易出错。
+        3. 引擎的 `global_write_lock` 会在执行每个宏脚本之前获取，
+           确保整个脚本（即使是 for 循环）作为一个原子单元执行。
+        4. 因此，最终的 `world.counter` 必须是确定且正确的值 (200)，而不是一个因竞态条件
+           产生的随机值。
+        """
+        # 1. 准备初始状态
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=concurrent_write_collection,
+            world_state={"counter": 0}  # 计数器从 0 开始
         )
         
-        return {"output": subgraph_results}
+        # 2. 执行图
+        # 引擎将并行调度 incrementer_A 和 incrementer_B
+        final_snapshot = await test_engine.step(initial_snapshot, {})
 
-@runtime_registry.register("system.map")
-class MapRuntime(RuntimeInterface):
-    """并行迭代。"""
-    template_fields = ["using", "collect"]
-
-    async def execute(self, config: Dict[str, Any], context: ExecutionContext, subgraph_runner: Optional[SubGraphRunner] = None, **kwargs) -> Dict[str, Any]:
-        if not subgraph_runner:
-            raise ValueError("MapRuntime requires a SubGraphRunner.")
-
-        list_to_iterate = config.get("list")
-        graph_name = config.get("graph")
-        using_template = config.get("using", {})
-        collect_template = config.get("collect")
-
-        if not isinstance(list_to_iterate, list):
-            raise TypeError(f"system.map 'list' field must be a list...")
-
-        tasks = []
-        base_eval_context = build_evaluation_context(context)
-        lock = context.shared.global_write_lock
-
-        for index, item in enumerate(list_to_iterate):
-            # a. 创建包含 `source` 的临时上下文，用于求值 `using`
-            using_eval_context = {
-                **base_eval_context,
-                "source": DotAccessibleDict({"item": item, "index": index})
-            }
-            
-            # b. 求值 `using` 字典 (需要传递锁)
-            evaluated_using = await evaluate_data(using_template, using_eval_context, lock)
-            inherited_inputs = {
-                placeholder: {"output": value}
-                for placeholder, value in evaluated_using.items()
-            }
-            
-            # c. 创建子图执行任务
-            #    subgraph_runner.execute_graph 会处理子上下文的创建
-            task = asyncio.create_task(
-                subgraph_runner.execute_graph(
-                    graph_name=graph_name,
-                    parent_context=context,
-                    inherited_inputs=inherited_inputs
-                )
-            )
-            tasks.append(task)
+        # 3. 验证结果
+        final_world_state = final_snapshot.world_state
+        run_output = final_snapshot.run_output
         
-        subgraph_results: List[Dict[str, Any]] = await asyncio.gather(*tasks)
+        # 两个节点中的宏，每个都将计数器增加 100 次
+        expected_final_count = 200
+
+        print(f"Final counter value in world_state: {final_world_state.get('counter')}")
+        print(f"Final counter value from reader node: {run_output.get('reader', {}).get('output')}")
         
-        # d. 聚合阶段
-        if collect_template:
-            collected_outputs = []
-            for result in subgraph_results:
-                # `nodes` 指向当前子图的结果
-                collect_eval_context = build_evaluation_context(context)
-                collect_eval_context["nodes"] = DotAccessibleDict(result)
-                
-                collected_value = await evaluate_data(collect_template, collect_eval_context, lock)
-                collected_outputs.append(collected_value)
-            
-            return {"output": collected_outputs}
-        else:
-            return {"output": subgraph_results}
+        # 【核心断言】
+        # 验证持久化的 world_state 中的最终值是否正确。
+        # 如果没有锁，这个值几乎肯定会因为竞态条件而小于 200。
+        # 我们的宏级原子锁保证了每个宏脚本的执行都是不可分割的，
+        # 因此结果必须是确定和正确的。
+        assert final_world_state.get("counter") == expected_final_count
+        
+        # 验证 reader 节点读取到的也是正确的值
+        assert run_output["reader"]["output"] == expected_final_count
+
+        # 验证两个写入节点都成功执行了
+        assert "error" not in run_output.get("incrementer_A", {})
+        assert "error" not in run_output.get("incrementer_B", {})
 ```
 
-### runtimes/reporters.py
+### test_09_persistence_api.py
 ```
-# backend/runtimes/reporters.py
-from typing import Any, Dict, Type
-from backend.core.reporting import Reportable
-from backend.core.registry import runtime_registry
-from backend.core.interfaces import RuntimeInterface
+# tests/test_09_persistence_api.py
 
-class RuntimeReporter(Reportable):
-    
-    @property
-    def report_key(self) -> str:
-        return "runtimes"
-
-    async def generate_report(self) -> Any:
-        report = []
-        # 注意：这里我们不再需要一个特殊的自省接口，
-        # 我们直接使用运行时类本身声明的元数据。
-        for name, runtime_class in runtime_registry._registry.items():
-            # 假设 RuntimeInterface 增加了 config_model, description, category
-            # (这个设计依然很好，可以保留)
-            config_model = getattr(runtime_class, 'config_model', None)
-            
-            report.append({
-                "name": name,
-                "description": getattr(runtime_class, 'description', "N/A"),
-                "category": getattr(runtime_class, 'category', "General"),
-                "config_schema": config_model.model_json_schema() if config_model else {}
-            })
-        return sorted(report, key=lambda x: x['name'])
-```
-
-### persistence/service.py
-```
-# backend/persistence/service.py (新文件)
-
+import pytest
 import io
 import json
 import zipfile
-from pathlib import Path
-from typing import Type, TypeVar, Tuple, Dict, Any, List
-from fastapi import Request
-from pydantic import BaseModel, ValidationError
+from uuid import UUID
 
-from backend.persistence.models import PackageManifest, AssetType, FILE_EXTENSIONS
+from fastapi.testclient import TestClient
 from backend.core.models import GraphCollection
-from backend.runtimes.codex.models import CodexCollection
-from backend.core.state import Sandbox, StateSnapshot
+from backend.core.state import Sandbox, SnapshotStore
 
-T = TypeVar('T', bound=BaseModel)
+# pytest 会自动发现并使用 conftest.py 中的 fixtures，无需显式导入
 
-class PersistenceService:
+class TestPersistenceAPI:
     """
-    处理所有文件系统和包导入/导出操作的核心服务。
+    测试与持久化相关的 API 端点 (/api/sandboxes/import, /api/sandboxes/{id}/export)
     """
-    def __init__(self, assets_base_dir: str):
-        self.assets_base_dir = Path(assets_base_dir)
-        self.assets_base_dir.mkdir(parents=True, exist_ok=True)
-        print(f"PersistenceService initialized. Assets directory: {self.assets_base_dir.resolve()}")
 
-    def _get_asset_path(self, asset_type: AssetType, asset_name: str) -> Path:
-        """根据资产类型和名称构造标准化的文件路径。"""
-        extension = FILE_EXTENSIONS[asset_type]
-        # 简单的安全措施，防止路径遍历
-        safe_name = Path(asset_name).name 
-        return self.assets_base_dir / asset_type.value / f"{safe_name}{extension}"
+    def test_sandbox_export_import_roundtrip(
+        self,
+        test_client: TestClient,
+        linear_collection: GraphCollection,
+    ):
+        """
+        测试一个完整的导出和导入流程（往返测试）。
+        1. 创建一个沙盒并执行一步以生成历史记录。
+        2. 导出该沙盒为一个 .hevno.zip 文件。
+        3. 验证导出的文件结构和内容。
+        4. 清理状态，模拟一个新环境。
+        5. 导入之前导出的文件。
+        6. 验证沙盒和其历史记录是否被成功恢复。
+        """
+        # --- 步骤 1 & 2: 创建沙盒，执行一步，然后导出 ---
+        create_response = test_client.post(
+            "/api/sandboxes",
+            json={
+                "name": "Export-Test-Sandbox",
+                "graph_collection": linear_collection.model_dump(),
+                "initial_state": {"counter": 0}
+            }
+        )
+        assert create_response.status_code == 200
+        sandbox_data = create_response.json()
+        sandbox_id = sandbox_data["id"]
 
-    def save_asset(self, asset_model: T, asset_type: AssetType, asset_name: str) -> Path:
-        """将 Pydantic 模型保存为格式化的 JSON 文件。"""
-        file_path = self._get_asset_path(asset_type, asset_name)
-        file_path.parent.mkdir(parents=True, exist_ok=True)
+        # 执行一步以产生更多历史快照
+        step_response = test_client.post(
+            f"/api/sandboxes/{sandbox_id}/step",
+            json={"user_message": "test input"}
+        )
+        assert step_response.status_code == 200
         
-        # 使用 model_dump_json 以获得最佳的 JSON 输出
-        json_content = asset_model.model_dump_json(indent=2)
-        file_path.write_text(json_content, encoding='utf-8')
-        return file_path
-
-    def load_asset(self, asset_type: AssetType, asset_name: str, model_class: Type[T]) -> T:
-        """从文件加载并验证 Pydantic 模型。"""
-        file_path = self._get_asset_path(asset_type, asset_name)
-        if not file_path.exists():
-            raise FileNotFoundError(f"Asset '{asset_name}' of type '{asset_type.value}' not found.")
+        # 导出沙盒
+        export_response = test_client.get(f"/api/sandboxes/{sandbox_id}/export")
+        assert export_response.status_code == 200
         
-        json_content = file_path.read_text(encoding='utf-8')
-        try:
-            return model_class.model_validate_json(json_content)
-        except ValidationError as e:
-            raise ValueError(f"Failed to validate asset '{asset_name}': {e}") from e
+        # --- 步骤 3: 验证导出的 ZIP 文件 ---
+        assert export_response.headers["content-type"] == "application/zip"
+        assert "attachment" in export_response.headers["content-disposition"]
+        assert export_response.headers["content-disposition"].endswith(".hevno.zip")
 
-    def list_assets(self, asset_type: AssetType) -> List[str]:
-        """列出指定类型的所有资产名称。"""
-        asset_dir = self.assets_base_dir / asset_type.value
-        if not asset_dir.exists():
-            return []
-        
-        extension = FILE_EXTENSIONS[asset_type]
-        return [p.stem.replace(extension, '') for p in asset_dir.glob(f"*{extension}")]
-
-    def export_package(self, manifest: PackageManifest, data_files: Dict[str, BaseModel]) -> bytes:
-        """在内存中创建一个 .hevno.zip 包并返回其字节流。"""
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-            # 1. 写入清单
-            zf.writestr('manifest.json', manifest.model_dump_json(indent=2))
-            
-            # 2. 写入所有数据文件到 data/ 目录
-            for filename, model_instance in data_files.items():
-                file_content = model_instance.model_dump_json(indent=2)
-                zf.writestr(f'data/{filename}', file_content)
-        
-        return zip_buffer.getvalue()
-
-    def import_package(self, zip_bytes: bytes) -> Tuple[PackageManifest, Dict[str, str]]:
-        """解压包，读取清单和所有数据文件（作为原始字符串）。"""
+        zip_bytes = export_response.content
         zip_buffer = io.BytesIO(zip_bytes)
-        data_files: Dict[str, str] = {}
         
         with zipfile.ZipFile(zip_buffer, 'r') as zf:
-            # 1. 读取并验证清单
-            try:
-                manifest_content = zf.read('manifest.json').decode('utf-8')
-                manifest = PackageManifest.model_validate_json(manifest_content)
-            except KeyError:
-                raise ValueError("Package is missing 'manifest.json'.")
-            except (ValidationError, json.JSONDecodeError) as e:
-                raise ValueError(f"Invalid 'manifest.json': {e}") from e
-
-            # 2. 读取所有数据文件
-            for item in zf.infolist():
-                if item.filename.startswith('data/') and not item.is_dir():
-                    relative_path = item.filename.split('data/', 1)[1]
-                    data_files[relative_path] = zf.read(item).decode('utf-8')
-        
-        return manifest, data_files
-
-def get_persistence_service(request: Request) -> PersistenceService:
-    """依赖注入函数，用于获取持久化服务实例。"""
-    return request.app.state.persistence_service
-```
-
-### persistence/models.py
-```
-# backend/persistence/models.py (新文件)
-
-from enum import Enum
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
-from datetime import datetime, timezone
-
-# --- 文件约定 ---
-# 在一个中心位置定义，方便整个应用引用
-class AssetType(str, Enum):
-    GRAPH = "graph"
-    CODEX = "codex"
-    SANDBOX = "sandbox"
-
-FILE_EXTENSIONS = {
-    AssetType.GRAPH: ".graph.hevno.json",
-    AssetType.CODEX: ".codex.hevno.json",
-}
-
-# --- 插件占位符模型 (为未来预留) ---
-class PluginRequirement(BaseModel):
-    """
-    描述一个必需的插件依赖。
-    这个模型现在是占位符，但在依赖检查阶段会变得至关重要。
-    """
-    name: str = Field(..., description="插件的唯一标识符, e.g., 'hevno-dice-roller'")
-    source_url: str = Field(..., description="插件的来源, e.g., 'https://github.com/alice/hevno-dice-roller'")
-    version: str = Field(..., description="兼容的版本或 Git 引用 (commit hash, tag, or branch)")
-
-# --- 包清单模型 ---
-class PackageType(str, Enum):
-    """定义导出的包的类型。"""
-    SANDBOX_ARCHIVE = "sandbox_archive"
-    GRAPH_COLLECTION = "graph_collection"
-    CODEX_COLLECTION = "codex_collection"
-
-class PackageManifest(BaseModel):
-    """
-    定义 .hevno.zip 包中 manifest.json 的结构。
-    这是包的“身份证”，描述了其内容和要求。
-    """
-    format_version: str = Field(default="1.0", description="清单格式的版本。")
-    package_type: PackageType
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    entry_point: str = Field(..., description="指向包内主数据文件的相对路径, e.g., 'data/sandbox.json' or 'data/main.graph.hevno.json'")
-    
-    # 【核心扩展点】为插件系统预留的依赖声明
-    required_plugins: List[PluginRequirement] = Field(
-        default_factory=list,
-        description="运行此包内容所需的插件列表。"
-    )
-    # 也可以在这里添加作者、描述等元数据
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-```
-
-### persistence/__init__.py
-```
-
-```
-
-### api/persistence.py
-```
-# backend/api/persistence.py
-
-from typing import Dict, Any, List
-from uuid import UUID
-
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
-from fastapi.responses import StreamingResponse
-import io
-from pydantic import ValidationError
-
-from backend.persistence.service import PersistenceService
-from backend.persistence.models import PackageManifest, PackageType, AssetType
-from backend.core.state import Sandbox, SnapshotStore, StateSnapshot, GraphCollection
-# 导入需要用到的依赖注入函数
-from backend.persistence.service import get_persistence_service # 
-from backend.core.state import get_sandbox_store, get_snapshot_store 
-
-router = APIRouter(prefix="/api", tags=["Persistence"])
-
-@router.get("/sandboxes/{sandbox_id}/export")
-async def export_sandbox(
-    sandbox_id: UUID,
-    sandbox_store: Dict = Depends(get_sandbox_store),
-    snapshot_store: SnapshotStore = Depends(get_snapshot_store),
-    persistence_service: PersistenceService = Depends(get_persistence_service)
-):
-    """将一个沙盒及其完整历史导出为一个 .hevno.zip 文件。"""
-    sandbox = sandbox_store.get(sandbox_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Sandbox not found")
-
-    snapshots = snapshot_store.find_by_sandbox(sandbox_id)
-    if not snapshots:
-        raise HTTPException(status_code=404, detail="No snapshots found for this sandbox")
-
-    # 1. 准备数据
-    manifest = PackageManifest(
-        package_type=PackageType.SANDBOX_ARCHIVE,
-        entry_point="sandbox.json",
-        metadata={"sandbox_name": sandbox.name}
-    )
-    
-    # 【未来扩展点】在这里调用 Stage 3 的逻辑来填充 manifest.required_plugins
-    # required_plugins = scan_for_plugins(snapshots)
-    # manifest.required_plugins = required_plugins
-
-    data_files = {"sandbox.json": sandbox}
-    for snap in snapshots:
-        data_files[f"snapshots/{snap.id}.json"] = snap
-
-    # 2. 打包
-    try:
-        zip_bytes = persistence_service.export_package(manifest, data_files)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create package: {e}")
-
-    # 3. 返回文件流
-    filename = f"hevno_sandbox_{sandbox.name.replace(' ', '_')}_{sandbox.id}.hevno.zip"
-    return StreamingResponse(
-        io.BytesIO(zip_bytes),
-        media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
-    )
-
-@router.post("/sandboxes/import")
-async def import_sandbox(
-    file: UploadFile = File(...),
-    sandbox_store: Dict = Depends(get_sandbox_store),
-    snapshot_store: SnapshotStore = Depends(get_snapshot_store),
-    persistence_service: PersistenceService = Depends(get_persistence_service)
-) -> Sandbox:
-    """从一个 .hevno.zip 文件导入一个沙盒。"""
-    if not file.filename.endswith(".hevno.zip"):
-        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a .hevno.zip file.")
-
-    zip_bytes = await file.read()
-    
-    try:
-        manifest, data_files = persistence_service.import_package(zip_bytes)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    if manifest.package_type != PackageType.SANDBOX_ARCHIVE:
-        raise HTTPException(status_code=400, detail=f"Invalid package type. Expected '{PackageType.SANDBOX_ARCHIVE}', got '{manifest.package_type}'.")
-
-    # 【未来扩展点】在这里调用 Stage 3 的逻辑来检查依赖
-    # check_plugin_requirements(manifest.required_plugins)
-
-    try:
-        # 1. 恢复 Sandbox
-        sandbox_data = data_files.get(manifest.entry_point)
-        if not sandbox_data:
-            raise ValueError(f"Entry point file '{manifest.entry_point}' not found in package.")
-        
-        new_sandbox = Sandbox.model_validate_json(sandbox_data)
-
-        if new_sandbox.id in sandbox_store:
-            raise HTTPException(status_code=409, detail=f"Conflict: A sandbox with ID '{new_sandbox.id}' already exists.")
-
-        # 2. 恢复所有 Snapshots
-        for filename, content in data_files.items():
-            if filename.startswith("snapshots/"):
-                snapshot = StateSnapshot.model_validate_json(content)
-                snapshot_store.save(snapshot) # 假设 save 内部会检查重复
-        
-        # 3. 保存 Sandbox
-        sandbox_store[new_sandbox.id] = new_sandbox
-        return new_sandbox
-
-    except (ValidationError, ValueError, KeyError) as e:
-        raise HTTPException(status_code=422, detail=f"Failed to process package data: {e}")
-
-# (为简洁起见，资产管理器的 API 暂时省略，但其实现将与上述类似)
-```
-
-### api/sandbox_router.py
-```
-# backend/api/sandbox_router.py (新文件)
-
-from typing import Dict, Any, List, Optional
-from uuid import UUID
-from pydantic import BaseModel
-from fastapi import APIRouter, Body, Depends, HTTPException
-
-from backend.core.models import GraphCollection
-from backend.core.engine import ExecutionEngine, get_engine
-from backend.core.state import Sandbox, StateSnapshot, SnapshotStore, get_sandbox_store, get_snapshot_store
-
-router = APIRouter(prefix="/api/sandboxes", tags=["Sandboxes"])
-
-class CreateSandboxRequest(BaseModel):
-    name: str
-    graph_collection: GraphCollection
-    initial_state: Optional[Dict[str, Any]] = None
-
-@router.post("", response_model=Sandbox)
-async def create_sandbox(
-    request_body: CreateSandboxRequest, 
-    sandbox_store: Dict = Depends(get_sandbox_store),
-    snapshot_store: SnapshotStore = Depends(get_snapshot_store)
-):
-    sandbox = Sandbox(name=request_body.name)
-    genesis_snapshot = StateSnapshot(
-        sandbox_id=sandbox.id,
-        graph_collection=request_body.graph_collection,
-        world_state=request_body.initial_state or {}
-    )
-    snapshot_store.save(genesis_snapshot)
-    sandbox.head_snapshot_id = genesis_snapshot.id
-    sandbox_store[sandbox.id] = sandbox
-    return sandbox
-
-@router.post("/{sandbox_id}/step", response_model=StateSnapshot)
-async def execute_sandbox_step(
-    sandbox_id: UUID, 
-    user_input: Dict[str, Any] = Body(...),
-    sandbox_store: Dict = Depends(get_sandbox_store),
-    snapshot_store: SnapshotStore = Depends(get_snapshot_store),
-    engine: ExecutionEngine = Depends(get_engine)
-):
-    sandbox = sandbox_store.get(sandbox_id)
-    if not sandbox:
-        raise HTTPException(status_code=404, detail="Sandbox not found.")
-    
-    latest_snapshot = sandbox.get_latest_snapshot(snapshot_store)
-    if not latest_snapshot:
-        raise HTTPException(status_code=409, detail="Sandbox has no initial state.")
-    
-    new_snapshot = await engine.step(latest_snapshot, user_input)
-    
-    snapshot_store.save(new_snapshot)
-    sandbox.head_snapshot_id = new_snapshot.id
-    return new_snapshot
-
-@router.get("/{sandbox_id}/history", response_model=List[StateSnapshot])
-async def get_sandbox_history(
-    sandbox_id: UUID,
-    sandbox_store: Dict = Depends(get_sandbox_store),
-    snapshot_store: SnapshotStore = Depends(get_snapshot_store)
-):
-    snapshots = snapshot_store.find_by_sandbox(sandbox_id)
-    if not snapshots and not sandbox_store.get(sandbox_id):
-        raise HTTPException(status_code=404, detail="Sandbox not found.")
-    return snapshots
-
-@router.put("/{sandbox_id}/revert")
-async def revert_sandbox_to_snapshot(
-    sandbox_id: UUID, 
-    snapshot_id: UUID,
-    sandbox_store: Dict = Depends(get_sandbox_store),
-    snapshot_store: SnapshotStore = Depends(get_snapshot_store)
-):
-    sandbox = sandbox_store.get(sandbox_id)
-    target_snapshot = snapshot_store.get(snapshot_id)
-    if not sandbox or not target_snapshot or target_snapshot.sandbox_id != sandbox.id:
-        raise HTTPException(status_code=404, detail="Sandbox or Snapshot not found.")
-    
-    sandbox.head_snapshot_id = snapshot_id
-    # 注意: 对字典的修改是原地生效的，但如果 sandbox_store 是其他类型的对象，
-    # 重新赋值（sandbox_store[sandbox.id] = sandbox）会更安全。
-    return {"message": f"Sandbox reverted to snapshot {snapshot_id}"}
-        
-```
-
-### api/reporters.py
-```
-# backend/api/reporters.py
-from typing import Dict, Any
-from backend.core.reporting import Reportable
-
-class SandboxStatsReporter(Reportable):
-    # 接收 main.py 中的状态存储作为依赖
-    def __init__(self, sandbox_store: Dict, snapshot_store):
-        self._sandbox_store = sandbox_store
-        self._snapshot_store = snapshot_store
-
-    @property
-    def report_key(self) -> str:
-        return "system_stats"
-
-    @property
-    def is_static(self) -> bool:
-        # 这是一个动态报告！
-        return False
-
-    async def generate_report(self) -> Any:
-        # 每次调用都实时计算
-        active_sandboxes = len(self._sandbox_store)
-        total_snapshots = len(self._snapshot_store._store) # 假设可以访问内部存储
-        
-        # 甚至可以报告更复杂的信息
-        graphs_in_use = set()
-        for sandbox in self._sandbox_store.values():
-            latest_snapshot = sandbox.get_latest_snapshot(self._snapshot_store)
-            if latest_snapshot:
-                graphs_in_use.update(latest_snapshot.graph_collection.root.keys())
-
-        return {
-            "active_sandbox_count": active_sandboxes,
-            "total_snapshot_count": total_snapshots,
-            "unique_graph_names_in_use": sorted(list(graphs_in_use))
-        }
-```
-
-### api/base_router.py
-```
-# backend/api/base_router.py
-
-from fastapi import APIRouter, Depends, Request
-from backend.core.reporting import Auditor
-
-router = APIRouter()
-
-# 这是一个示例，展示了依赖注入仍然可以工作，尽管函数定义在别处
-def get_auditor(request: Request) -> Auditor:
-    return request.app.state.auditor
-
-@router.get("/")
-def read_root():
-    return {"message": "Hevno Backend is running on a factory-pattern architecture!"}
-
-@router.get("/api/system/report", tags=["System"])
-async def get_system_report(auditor: Auditor = Depends(get_auditor)):
-    return await auditor.generate_full_report()
-```
-
-### runtimes/codex/invoke_runtime.py
-```
-# backend/runtimes/codex/invoke_runtime.py
-import asyncio
-import re
-from typing import Dict, Any, List, Optional, Set
-import pprint  # 导入 pprint 以便美观地打印字典
-
-from pydantic import ValidationError
-
-from backend.core.interfaces import RuntimeInterface
-from backend.core.state import ExecutionContext
-from backend.core.evaluation import evaluate_data, build_evaluation_context
-from backend.core.utils import DotAccessibleDict
-from backend.core.registry import runtime_registry
-
-from .models import CodexCollection, ActivatedEntry
-
-from .models import TriggerMode
-
-@runtime_registry.register("system.invoke")
-class InvokeRuntime(RuntimeInterface):
-    """
-    system.invoke 运行时的实现。
-    """
-    async def execute(
-        self,
-        config: Dict[str, Any],
-        context: ExecutionContext,
-        **kwargs
-    ) -> Dict[str, Any]:
-        # --- 0. 准备工作 ---
-        from_sources = config.get("from", [])
-        recursion_enabled = config.get("recursion_enabled", False)
-        debug_mode = config.get("debug", False)
-        lock = context.shared.global_write_lock
-
-        codices_data = context.shared.world_state.get("codices", {})
-        try:
-            codex_collection = CodexCollection.model_validate(codices_data).root
-        except ValidationError as e:
-            raise ValueError(f"Invalid codex structure in world.codices: {e}")
-
-        # --- 1. 阶段一：选择与过滤 (Structural Evaluation) ---
-        initial_pool: List[ActivatedEntry] = []
-        rejected_entries_trace = []
-        initial_activation_trace = []
-        
-        structural_eval_context = build_evaluation_context(context)
-
-        for source_config in from_sources:
-            codex_name = source_config.get("codex")
-            if not codex_name: continue
-            
-            codex_model = codex_collection.get(codex_name)
-            if not codex_model:
-                raise ValueError(f"Codex '{codex_name}' not found in world.codices.")
-
-            source_text_macro = source_config.get("source", "")
-            source_text = await evaluate_data(source_text_macro, structural_eval_context, lock) if source_text_macro else ""
-
-            for entry in codex_model.entries:
-                is_enabled = await evaluate_data(entry.is_enabled, structural_eval_context, lock)
-                if not is_enabled:
-                    rejected_entries_trace.append({"id": entry.id, "reason": "is_enabled macro returned false"})
-                    continue
-
-                keywords = await evaluate_data(entry.keywords, structural_eval_context, lock)
-                priority = await evaluate_data(entry.priority, structural_eval_context, lock)
-
-                matched_keywords = []
-                is_activated = False
-                if entry.trigger_mode == TriggerMode.ALWAYS_ON:
-                    is_activated = True
-                elif entry.trigger_mode == TriggerMode.ON_KEYWORD and source_text and keywords:
-                    for keyword in keywords:
-                        if re.search(re.escape(str(keyword)), source_text, re.IGNORECASE):
-                            matched_keywords.append(keyword)
-                    if matched_keywords:
-                        is_activated = True
-                
-                if is_activated:
-                    activated = ActivatedEntry(
-                        entry_model=entry, codex_name=codex_name, codex_config=codex_model.config,
-                        priority_val=int(priority), keywords_val=keywords, is_enabled_val=bool(is_enabled),
-                        source_text=source_text, matched_keywords=matched_keywords
-                    )
-                    initial_pool.append(activated)
-                    initial_activation_trace.append({
-                        "id": entry.id, "priority": int(priority),
-                        "reason": entry.trigger_mode.value,
-                        "matched_keywords": matched_keywords
-                    })
-        
-        # --- 2. 阶段二：渲染与注入 (Content Evaluation) ---
-        final_text_parts = []
-        rendered_entry_ids: Set[str] = set()
-        rendering_pool = sorted(initial_pool, key=lambda x: x.priority_val, reverse=True)
-        evaluation_log = []
-        recursive_activations = []
-
-        recursion_depth_counter = 0
-        max_depth = max((act.codex_config.recursion_depth for act in rendering_pool), default=3) if rendering_pool else 3
-
-        loop_count = 0
-        while rendering_pool and (not recursion_enabled or recursion_depth_counter < max_depth):
-            loop_count += 1
-            rendering_pool.sort(key=lambda x: x.priority_val, reverse=True)
-            
-            entry_to_render = rendering_pool.pop(0)
-
-            if entry_to_render.entry_model.id in rendered_entry_ids:
-                continue
-
-            content_eval_context = build_evaluation_context(context)
-            content_eval_context['trigger'] = DotAccessibleDict({
-                "source_text": entry_to_render.source_text,
-                "matched_keywords": entry_to_render.matched_keywords
-            })
-
-            rendered_content = await evaluate_data(entry_to_render.entry_model.content, content_eval_context, lock)
-            
-            final_text_parts.append(str(rendered_content))
-            rendered_entry_ids.add(entry_to_render.entry_model.id)
-            evaluation_log.append({"id": entry_to_render.entry_model.id, "status": "rendered"})
-            
-            if recursion_enabled:
-                recursion_depth_counter += 1
-                new_source_text = str(rendered_content)
-                
-                for codex_name, codex_model in codex_collection.items():
-                    for entry in codex_model.entries:
-                        if entry.id in rendered_entry_ids or any(p.entry_model.id == entry.id for p in rendering_pool):
-                            continue
-                        
-                        if entry.trigger_mode == TriggerMode.ON_KEYWORD:
-                            is_enabled = await evaluate_data(entry.is_enabled, structural_eval_context, lock)
-                            if not is_enabled: continue
-
-                            keywords = await evaluate_data(entry.keywords, structural_eval_context, lock)
-                            new_matched_keywords = [kw for kw in keywords if re.search(re.escape(str(kw)), new_source_text, re.IGNORECASE)]
-                            
-                            if new_matched_keywords:
-                                priority = await evaluate_data(entry.priority, structural_eval_context, lock)
-                                activated = ActivatedEntry(
-                                    entry_model=entry, codex_name=codex_name, codex_config=codex_model.config,
-                                    priority_val=int(priority), keywords_val=keywords, is_enabled_val=is_enabled,
-                                    source_text=new_source_text, matched_keywords=new_matched_keywords
-                                )
-                                rendering_pool.append(activated)
-                                recursive_activations.append({
-                                    "id": entry.id, "priority": int(priority),
-                                    "reason": "recursive_keyword_match", "triggered_by": entry_to_render.entry_model.id
-                                })
-        
-        # --- 3. 构造输出 ---
-        final_text = "\n\n".join(final_text_parts)
-        
-        if debug_mode:
-            trace_data = {
-                "initial_activation": initial_activation_trace,
-                "recursive_activations": recursive_activations,
-                "evaluation_log": evaluation_log,
-                "rejected_entries": rejected_entries_trace,
-            }
-            return {
-                "output": {
-                    "final_text": final_text,
-                    "trace": trace_data
-                }
-            }
-        
-        return {"output": final_text}
-
-```
-
-### runtimes/codex/models.py
-```
-# backend/runtimes/codex/models.py
-from enum import Enum
-from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field, RootModel, ConfigDict, field_validator
-
-class TriggerMode(str, Enum):
-    ALWAYS_ON = "always_on"
-    ON_KEYWORD = "on_keyword"
-
-class CodexEntry(BaseModel):
-    """定义单个知识条目的结构。"""
-    id: str
-    content: str  # [Macro]
-    is_enabled: Any = Field(default=True)  # [Macro] bool or str
-    trigger_mode: TriggerMode = Field(default=TriggerMode.ALWAYS_ON)
-    keywords: Any = Field(default_factory=list)  # [Macro] List[str] or str
-    priority: Any = Field(default=0)  # [Macro] int or str
-    
-    model_config = ConfigDict(extra='forbid') # 确保没有多余字段
-
-class CodexConfig(BaseModel):
-    """定义单个法典级别的配置。"""
-    recursion_depth: int = Field(default=3, ge=0, description="此法典参与递归时的最大深度。")
-    
-    model_config = ConfigDict(extra='forbid')
-
-class Codex(BaseModel):
-    """定义一个完整的法典。"""
-    description: Optional[str] = None
-    config: CodexConfig = Field(default_factory=CodexConfig)
-    entries: List[CodexEntry]
-    metadata: Dict[str, Any] = Field(default_factory=dict) 
-
-    model_config = ConfigDict(extra='forbid')
-
-class CodexCollection(RootModel[Dict[str, Codex]]):
-    """
-    代表 world.codices 的顶层结构。
-    模型本身是一个 `Dict[str, Codex]`。
-    """
-    pass
-
-# 用于运行时内部处理的数据结构
-class ActivatedEntry(BaseModel):
-    entry_model: CodexEntry
-    codex_name: str
-    codex_config: CodexConfig
-    
-    # 结构性宏求值后的结果
-    priority_val: int
-    keywords_val: List[str]
-    is_enabled_val: bool
-    
-    # 触发信息
-    source_text: str
-    matched_keywords: List[str] = Field(default_factory=list)
-    
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-```
-
-### runtimes/codex/__init__.py
-```
-
-```
-
-### llm/providers/__init__.py
-```
-
-```
-
-### llm/providers/gemini.py
-```
-# backend/llm/providers/gemini.py
-
-from typing import Dict, Any
-
-import google.generativeai as genai
-from google.api_core import exceptions as google_exceptions
-from google.generativeai import types as generation_types
-
-from backend.llm.providers.base import LLMProvider
-from backend.llm.models import (
-    LLMResponse,
-    LLMError,
-    LLMResponseStatus,
-    LLMErrorType,
-)
-from backend.llm.registry import provider_registry
-
-@provider_registry.register("gemini", key_env_var="GEMINI_API_KEYS")
-class GeminiProvider(LLMProvider):
-    """
-    针对 Google Gemini API 的 LLMProvider 实现。
-    """
-
-    async def generate(
-        self,
-        *,
-        prompt: str,
-        model_name: str,
-        api_key: str,
-        **kwargs: Any
-    ) -> LLMResponse:
-        """
-        使用 Gemini API 生成内容。
-        """
-        try:
-            # 每次调用都独立配置，以支持多密钥轮换
-            genai.configure(api_key=api_key)
-
-            model = genai.GenerativeModel(model_name)
-
-            # 提取支持的生成配置
-            generation_config = {
-                "temperature": kwargs.get("temperature"),
-                "top_p": kwargs.get("top_p"),
-                "top_k": kwargs.get("top_k"),
-                "max_output_tokens": kwargs.get("max_tokens"),
-            }
-            # 清理 None 值
-            generation_config = {k: v for k, v in generation_config.items() if v is not None}
-
-            response: generation_types.GenerateContentResponse = await model.generate_content_async(
-                contents=prompt,
-                generation_config=generation_config
-            )
-
-            # 检查是否因安全策略被阻止
-            # 这是 Gemini 的“软失败”，不会抛出异常
-            if not response.parts:
-                if response.prompt_feedback.block_reason:
-                    error_message = f"Request blocked due to {response.prompt_feedback.block_reason.name}"
-                    return LLMResponse(
-                        status=LLMResponseStatus.FILTERED,
-                        model_name=model_name,
-                        error_details=LLMError(
-                            error_type=LLMErrorType.INVALID_REQUEST_ERROR,
-                            message=error_message,
-                            is_retryable=False # 内容过滤不应重试
-                        )
-                    )
-
-            # 提取 token 使用情况
-            usage = {
-                "prompt_tokens": response.usage_metadata.prompt_token_count,
-                "completion_tokens": response.usage_metadata.candidates_token_count,
-                "total_tokens": response.usage_metadata.total_token_count,
-            }
-            
-            return LLMResponse(
-                status=LLMResponseStatus.SUCCESS,
-                content=response.text,
-                model_name=model_name,
-                usage=usage
-            )
-
-        except generation_types.StopCandidateException as e:
-            # 这种情况也属于内容过滤
-            return LLMResponse(
-                status=LLMResponseStatus.FILTERED,
-                model_name=model_name,
-                error_details=LLMError(
-                    error_type=LLMErrorType.INVALID_REQUEST_ERROR,
-                    message=f"Generation stopped due to safety settings: {e}",
-                    is_retryable=False,
-                )
-            )
-        # 注意: 其他 google_exceptions 将会在此处被抛出，由上层服务捕获并传递给 translate_error
-
-    def translate_error(self, ex: Exception) -> LLMError:
-        """
-        将 Google API 的异常转换为标准的 LLMError。
-        """
-        error_details = {"provider": "gemini", "exception": type(ex).__name__, "message": str(ex)}
-
-        if isinstance(ex, google_exceptions.PermissionDenied):
-            return LLMError(
-                error_type=LLMErrorType.AUTHENTICATION_ERROR,
-                message="Invalid API key or insufficient permissions.",
-                is_retryable=False,  # 使用相同密钥重试是无意义的
-                provider_details=error_details,
-            )
-        
-        if isinstance(ex, google_exceptions.ResourceExhausted):
-            return LLMError(
-                error_type=LLMErrorType.RATE_LIMIT_ERROR,
-                message="Rate limit exceeded. Please try again later or use a different key.",
-                is_retryable=False,  # 对于单个密钥，应立即切换，而不是等待重试
-                provider_details=error_details,
-            )
-
-        if isinstance(ex, google_exceptions.InvalidArgument):
-            return LLMError(
-                error_type=LLMErrorType.INVALID_REQUEST_ERROR,
-                message=f"Invalid argument provided to the API. Check model name and parameters. Details: {ex}",
-                is_retryable=False,
-                provider_details=error_details,
-            )
-
-        if isinstance(ex, (google_exceptions.ServiceUnavailable, google_exceptions.DeadlineExceeded)):
-            return LLMError(
-                error_type=LLMErrorType.PROVIDER_ERROR,
-                message="The service is temporarily unavailable or the request timed out. Please try again.",
-                is_retryable=True,
-                provider_details=error_details,
-            )
-            
-        if isinstance(ex, google_exceptions.GoogleAPICallError):
-            return LLMError(
-                error_type=LLMErrorType.NETWORK_ERROR,
-                message=f"A network-level error occurred while communicating with Google API: {ex}",
-                is_retryable=True,
-                provider_details=error_details,
-            )
-
-        return LLMError(
-            error_type=LLMErrorType.UNKNOWN_ERROR,
-            message=f"An unknown error occurred with the Gemini provider: {ex}",
-            is_retryable=False, # 默认未知错误不可重试，以防造成死循环
-            provider_details=error_details,
+            filenames = zf.namelist()
+            # 应该包含 manifest, sandbox.json, 和 2 个快照 (genesis + 1 step)
+            assert "manifest.json" in filenames
+            assert "data/sandbox.json" in filenames
+            snapshot_files = [f for f in filenames if f.startswith("data/snapshots/")]
+            assert len(snapshot_files) == 2
+
+            # 验证 manifest 内容
+            manifest_content = zf.read("manifest.json").decode('utf-8')
+            manifest = json.loads(manifest_content)
+            assert manifest["package_type"] == "sandbox_archive"
+            assert manifest["entry_point"] == "sandbox.json"
+
+        # --- 步骤 4: 清理状态，模拟新环境 ---
+        # 注意：test_client fixture 会在测试结束后清理，但我们需要在测试中途清理
+        sandbox_store: dict = test_client.app.state.sandbox_store
+        snapshot_store: SnapshotStore = test_client.app.state.snapshot_store
+        sandbox_store.clear()
+        snapshot_store.clear()
+
+        # --- 步骤 5: 导入 ZIP 文件 ---
+        import_response = test_client.post(
+            "/api/sandboxes/import",
+            files={"file": ("imported_sandbox.hevno.zip", zip_bytes, "application/zip")}
         )
+        
+        assert import_response.status_code == 200
+        imported_sandbox_data = import_response.json()
+        
+        # --- 步骤 6: 验证恢复的状态 ---
+        assert imported_sandbox_data["id"] == sandbox_id
+        assert imported_sandbox_data["name"] == "Export-Test-Sandbox"
+        
+        # 检查新环境中的 sandbox store
+        assert len(sandbox_store) == 1
+        assert UUID(sandbox_id) in sandbox_store
+        
+        # 调用 history 端点来验证快照是否已全部恢复
+        history_response = test_client.get(f"/api/sandboxes/{sandbox_id}/history")
+        assert history_response.status_code == 200
+        history_data = history_response.json()
+        assert len(history_data) == 2 # 确认两个快照都被恢复
+
+    def test_import_invalid_file_type(self, test_client: TestClient):
+        """测试上传非 .hevno.zip 文件时应被拒绝。"""
+        response = test_client.post(
+            "/api/sandboxes/import",
+            files={"file": ("test.txt", b"this is not a zip", "text/plain")}
+        )
+        assert response.status_code == 400
+        assert "Invalid file type" in response.json()["detail"]
+
+    def test_import_zip_missing_manifest(self, test_client: TestClient):
+        """测试导入缺少 manifest.json 的 zip 文件。"""
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w') as zf:
+            zf.writestr("data/somefile.txt", "hello")
+        
+        zip_bytes = zip_buffer.getvalue()
+
+        response = test_client.post(
+            "/api/sandboxes/import",
+            files={"file": ("no_manifest.hevno.zip", zip_bytes, "application/zip")}
+        )
+        assert response.status_code == 400
+        assert "missing 'manifest.json'" in response.json()["detail"]
+
+    def test_import_conflicting_sandbox_id(self, test_client: TestClient, linear_collection: GraphCollection):
+        """测试当导入的沙盒 ID 已存在时，应返回 409 Conflict。"""
+        # 1. 先创建一个沙盒并导出，得到一个合法的 zip 文件
+        create_response = test_client.post(
+            "/api/sandboxes",
+            json={"name": "Existing Sandbox", "graph_collection": linear_collection.model_dump()}
+        )
+        assert create_response.status_code == 200
+        sandbox_id = create_response.json()["id"]
+
+        export_response = test_client.get(f"/api/sandboxes/{sandbox_id}/export")
+        assert export_response.status_code == 200
+        zip_bytes = export_response.content
+
+        # 2. 此时沙盒已存在，再次尝试导入同一个 zip 文件
+        import_response = test_client.post(
+            "/api/sandboxes/import",
+            files={"file": ("conflict.hevno.zip", zip_bytes, "application/zip")}
+        )
+        
+        # 3. 验证是否返回冲突错误
+        assert import_response.status_code == 409
+        assert "already exists" in import_response.json()["detail"]
 ```
 
-### llm/providers/base.py
+### test_03_engine_integration.py
 ```
-# backend/llm/providers/base.py
+# tests/test_03_engine_integration.py
+import pytest
+from uuid import uuid4
 
-from abc import ABC, abstractmethod
-from typing import Dict, Any
-
-from backend.llm.models import LLMResponse, LLMError
+from backend.core.state import StateSnapshot
+from backend.core.models import GraphCollection
 
 
-class LLMProvider(ABC):
+@pytest.mark.asyncio
+class TestEngineCoreFlows:
+    """测试引擎的核心执行流程，使用新的宏系统。"""
+
+    
+    async def test_engine_linear_flow(self, test_engine, linear_collection: GraphCollection):
+        # --- 测试逻辑保持不变 ---
+        initial_snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=linear_collection)
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        output = final_snapshot.run_output
+        assert "A" in output and "output" in output["A"]
+        assert output["A"]["output"] == "a story about a cat"
+        
+        assert "B" in output and "llm_output" in output["B"]
+        b_prompt = "The story is: a story about a cat"
+        assert output["B"]["llm_output"] == f"[MOCK RESPONSE for mock/model] - Prompt received: '{b_prompt[:50]}...'"
+
+        assert "C" in output and "llm_output" in output["C"]
+        c_prompt = output['B']['llm_output']
+        assert output["C"]["llm_output"] == f"[MOCK RESPONSE for mock/model] - Prompt received: '{c_prompt[:50]}...'"
+
+    
+    async def test_engine_runtime_pipeline(self, test_engine, pipeline_collection: GraphCollection):
+        # --- 测试逻辑保持不变 ---
+        initial_snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=pipeline_collection)
+        
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+
+        assert final_snapshot.world_state["main_character"] == "Sir Reginald"
+
+        node_a_result = final_snapshot.run_output["A"]
+        
+        expected_prompt = "Tell a story about Sir Reginald. He just received this message: A secret message"
+        assert node_a_result["llm_output"] == f"[MOCK RESPONSE for mock/model] - Prompt received: '{expected_prompt[:50]}...'"
+
+        assert node_a_result["output"] == "A secret message"
+
+
+@pytest.mark.asyncio
+class TestEngineStateAndMacros:
+    
+    async def test_world_state_persists_and_macros_read_it(self, test_engine, world_vars_collection: GraphCollection):
+        # --- 测试逻辑保持不变 ---
+        initial_snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=world_vars_collection)
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        assert final_snapshot.world_state == {"theme": "cyberpunk"}
+
+        expected_reader_output_start = "The theme is: cyberpunk and some data from setter"
+        reader_output = final_snapshot.run_output["reader"]["output"]
+        assert reader_output.startswith(expected_reader_output_start)
+
+    
+    async def test_graph_evolution(self, test_engine, graph_evolution_collection: GraphCollection):
+        # --- 测试逻辑保持不变 ---
+        genesis_snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=graph_evolution_collection)
+        snapshot_after_evolution = await test_engine.step(genesis_snapshot, {})
+        
+        new_graph_def = snapshot_after_evolution.graph_collection
+        assert new_graph_def.root["main"].nodes[0].id == "new_node"
+        
+        final_snapshot = await test_engine.step(snapshot_after_evolution, {})
+        assert final_snapshot.run_output["new_node"]["output"] == "This is the evolved graph!"
+
+    
+    async def test_execute_runtime_integration(self, test_engine, execute_runtime_collection: GraphCollection):
+        # --- 测试逻辑保持不变 ---
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(), 
+            graph_collection=execute_runtime_collection,
+            world_state={"player_status": "normal"}
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        assert final_snapshot.world_state["player_status"] == "empowered"
+
+@pytest.mark.asyncio
+class TestEngineErrorHandling:
+    
+    async def test_engine_detects_cycle(self, test_engine, cyclic_collection: GraphCollection):
+        # --- 测试逻辑保持不变 ---
+        initial_snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=cyclic_collection)
+        with pytest.raises(ValueError, match="Cycle detected"):
+            await test_engine.step(initial_snapshot, {})
+
+    
+    async def test_engine_handles_failure_and_skips_downstream(self, test_engine, failing_node_collection: GraphCollection):
+        # --- 测试逻辑保持不变 ---
+        initial_snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=failing_node_collection)
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        output = final_snapshot.run_output
+        assert "error" not in output["A_ok"]
+        assert "error" not in output["D_independent"]
+
+        assert "error" in output["B_fail"]
+        assert "non_existent_variable" in output["B_fail"]["error"]
+
+        assert "status" in output["C_skip"] and output["C_skip"]["status"] == "skipped"
+        assert "reason" in output["C_skip"] and output["C_skip"]["reason"] == "Upstream failure of node B_fail."
+
+@pytest.mark.asyncio
+class TestAdvancedMacroIntegration:
+    """测试引擎中更高级的宏功能，如动态函数定义和二次求值链。"""
+
+    
+    async def test_dynamic_function_definition_and_usage(self, test_engine, advanced_macro_collection: GraphCollection):
+        # --- 测试逻辑保持不变 ---
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=advanced_macro_collection,
+            world_state={"game_difficulty": "easy"}
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        assert "math_utils" in final_snapshot.world_state
+        assert callable(final_snapshot.world_state["math_utils"]["hypot"])
+
+        run_output = final_snapshot.run_output
+        assert "use_skill" in run_output
+        assert run_output["use_skill"]["output"] == 5.0
+
+    
+    async def test_llm_code_generation_and_execution(self, test_engine, advanced_macro_collection: GraphCollection):
+        # --- 测试逻辑保持不变 ---
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=advanced_macro_collection,
+            world_state={"game_difficulty": "easy"}
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        run_output = final_snapshot.run_output
+        assert run_output["llm_propose_change"]["output"] == "world.game_difficulty = 'hard'"
+        assert "execute_change" in run_output
+        assert final_snapshot.world_state["game_difficulty"] == "hard"
+
+@pytest.mark.asyncio
+class TestEngineSubgraphExecution:
+    """测试引擎的子图执行功能 (system.call)。"""
+
+    
+    async def test_basic_subgraph_call(self, test_engine, subgraph_call_collection: GraphCollection):
+        # --- 测试逻辑保持不变 ---
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=subgraph_call_collection,
+            world_state={"global_setting": "Alpha"}
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        output = final_snapshot.run_output
+        
+        subgraph_result = output["main_caller"]["output"]
+        assert isinstance(subgraph_result, dict)
+        
+        processor_output = subgraph_result["processor"]["output"]
+        expected_str = "Processed: Hello from main with world state: Alpha"
+        assert processor_output == expected_str
+        
+    
+    async def test_nested_subgraph_call(self, test_engine, nested_subgraph_collection: GraphCollection):
+        # --- 测试逻辑保持不变 ---
+        initial_snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=nested_subgraph_collection)
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        output = final_snapshot.run_output
+
+        sub1_result = output["main_caller"]["output"]
+        sub2_result = sub1_result["sub1_caller"]["output"]
+        final_output = sub2_result["final_processor"]["output"]
+        
+        assert final_output == "Reached level 2 from: level 0"
+
+    
+    async def test_call_to_nonexistent_subgraph_fails_node(self, test_engine, subgraph_call_to_nonexistent_graph_collection: GraphCollection):
+        # --- 测试逻辑保持不变 ---
+        initial_snapshot = StateSnapshot(sandbox_id=uuid4(), graph_collection=subgraph_call_to_nonexistent_graph_collection)
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        output = final_snapshot.run_output
+        bad_caller_result = output["bad_caller"]
+        
+        assert "error" in bad_caller_result
+        error_message = bad_caller_result["error"]
+        assert "Failed at step 1 ('system.call')" in error_message
+        assert "Graph 'i_do_not_exist' not found" in error_message
+
+    
+    async def test_subgraph_can_modify_world_state(self, test_engine, subgraph_modifies_world_collection: GraphCollection):
+        # --- 测试逻辑保持不变 ---
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=subgraph_modifies_world_collection,
+            world_state={"counter": 100}
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+
+        assert final_snapshot.world_state["counter"] == 110
+
+        reader_output = final_snapshot.run_output["reader"]["output"]
+        assert "Final counter: 110" in reader_output
+        assert "incrementer" in reader_output
+    
+    
+    async def test_subgraph_failure_propagates_to_caller(self, test_engine, subgraph_with_failure_collection: GraphCollection):
+        # --- 测试逻辑保持不变，但对断言行为的解释被保留和强调 ---
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=subgraph_with_failure_collection,
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        output = final_snapshot.run_output
+        
+        # 1. 验证调用节点本身成功，因为它成功地“捕获”了子图的运行结果
+        # 这个断言是正确的，因为 system.call 本身没有抛出异常
+        assert "error" not in output["caller"]
+        
+        # 2. 验证调用节点的输出包含了子图失败的结果
+        caller_result = output["caller"]["output"]
+        assert "B_fail" in caller_result
+        assert "error" in caller_result["B_fail"]
+        assert "non_existent" in caller_result["B_fail"]["error"]
+
+        # 3. 验证依赖于 caller 的下游节点被执行，而不是被跳过
+        # 这是预期的行为，因为 caller 节点本身的状态是 SUCCEEDED。
+        assert "downstream_of_fail" in output
+        assert "error" not in output.get("downstream_of_fail", {})
+        
+        downstream_output = output["downstream_of_fail"]["output"]
+        # 验证下游节点成功地接收了包含错误信息的字典
+        assert isinstance(downstream_output._data, dict)
+        assert "B_fail" in downstream_output
+        assert "error" in downstream_output["B_fail"]
+
+    
+    async def test_dynamic_subgraph_call_by_macro(self, test_engine, dynamic_subgraph_call_collection: GraphCollection):
+        # --- 测试逻辑保持不变 ---
+        # 场景1: 调用 sub_a
+        initial_snapshot_a = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=dynamic_subgraph_call_collection,
+            world_state={"target_graph": "sub_a"}
+        )
+        final_snapshot_a = await test_engine.step(initial_snapshot_a, {})
+        output_a = final_snapshot_a.run_output["dynamic_caller"]["output"]
+        assert output_a["processor_a"]["output"] == "Processed by A: dynamic data"
+
+        # 场景2: 调用 sub_b
+        initial_snapshot_b = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=dynamic_subgraph_call_collection,
+            world_state={"target_graph": "sub_b"}
+        )
+        final_snapshot_b = await test_engine.step(initial_snapshot_b, {})
+        output_b = final_snapshot_b.run_output["dynamic_caller"]["output"]
+        assert "processor_a" not in output_b
+        assert output_b["processor_b"]["output"] == "Processed by B: dynamic data"
+```
+
+### test_07_codex_system.py
+```
+# tests/test_07_codex_system.py
+
+import pytest
+from uuid import uuid4
+
+from backend.core.state import StateSnapshot
+from backend.core.models import GraphCollection
+
+@pytest.mark.asyncio
+class TestCodexSystem:
     """
-    一个抽象基-类，定义了所有 LLM 提供商适配器的标准接口。
+    对 Hevno Codex 系统的集成测试 (system.invoke 运行时)。
+    这个测试类现在完全依赖 conftest.py 来提供配置好的 test_engine。
     """
 
-    @abstractmethod
-    async def generate(
+    async def test_basic_invoke_always_on(
         self,
-        *,
-        prompt: str,
-        model_name: str,
-        api_key: str,
-        **kwargs: Any
-    ) -> LLMResponse:
+        test_engine, 
+        codex_basic_data: dict
+    ):
         """
-        与 LLM 提供商进行交互以生成内容。
-
-        这个方法必须处理所有可能的成功和“软失败”（如内容过滤）场景，
-        并将它们封装在标准的 LLMResponse 对象中。
-        如果发生无法处理的硬性错误（如网络问题、认证失败），它应该抛出原始异常，
-        以便上层服务可以捕获并使用 translate_error 进行处理。
-
-        :param prompt: 发送给模型的提示。
-        :param model_name: 要使用的具体模型名称 (e.g., 'gemini-1.5-pro-latest')。
-        :param api_key: 用于本次请求的 API 密钥。
-        :param kwargs: 其他特定于提供商的参数 (e.g., temperature, max_tokens)。
-        :return: 一个标准的 LLMResponse 对象。
-        :raises Exception: 任何未被处理的、需要由 translate_error 解析的硬性错误。
+        测试 `system.invoke` 的基本功能：
+        - 从 `world.codices` 加载法典。
+        - 激活 `always_on` 条目。
+        - 渲染内容并按优先级拼接。
         """
-        pass
+        graph_collection = GraphCollection.model_validate(codex_basic_data["graph"])
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=graph_collection,
+            world_state={"codices": codex_basic_data["codices"]}
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
 
-    @abstractmethod
-    def translate_error(self, ex: Exception) -> LLMError:
+        output = final_snapshot.run_output
+        invoke_output = output["invoke_test"]["output"]
+
+        assert isinstance(invoke_output, str)
+        # 优先级: greeting (10) > intro (5)。顺序是确定的。
+        expected_text = "你好，冒险者！\n\n欢迎来到这个奇幻的世界。"
+        assert invoke_output == expected_text
+
+    async def test_invoke_keyword_and_priority(
+        self,
+        test_engine, 
+        codex_keyword_and_priority_data: dict
+    ):
         """
-        将特定于提供商的原始异常转换为我们标准化的 LLMError 对象。
-
-        这个方法是解耦的关键，它将具体的 SDK 错误与我们系统的内部错误处理逻辑分离开。
-
-        :param ex: 从 generate 方法捕获的原始异常。
-        :return: 一个标准的 LLMError 对象。
+        测试 `on_keyword` 触发模式和 `priority` 排序。
         """
-        pass
+        graph_collection = GraphCollection.model_validate(codex_keyword_and_priority_data["graph"])
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=graph_collection,
+            world_state={"codices": codex_keyword_and_priority_data["codices"]}
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+
+        output = final_snapshot.run_output
+
+        # --- Test invoke_weather ---
+        weather_output = output["invoke_weather"]["output"]
+        assert isinstance(weather_output, str)
+        # source: "今天的魔法天气怎么样？" 匹配 "魔法天气" (priority 30)
+        assert "魔法能量今天异常活跃" in weather_output
+        assert "阳光明媚" not in weather_output
+        assert "下着大雨" not in weather_output
+
+        # --- Test invoke_mood ---
+        mood_output = output["invoke_mood"]["output"]
+        assert isinstance(mood_output, str)
+        # source: "我很开心，因为天气很好。" 匹配 "开心" (priority 5)
+        assert "你看起来很高兴。" in mood_output
+        assert "你似乎有些低落。" not in mood_output
+
+    async def test_invoke_macro_evaluation_and_trigger_context(
+        self,
+        test_engine, 
+        codex_macro_eval_data: dict
+    ):
+        """
+        测试条目内部宏的正确求值和 `trigger` 上下文的访问。
+        还测试 `debug` 模式的输出结构。
+        """
+        graph_collection = GraphCollection.model_validate(codex_macro_eval_data["graph"])
+        initial_world_state = {
+            "codices": codex_macro_eval_data["codices"],
+            "is_night": False,  # night_info 将被禁用
+            "player_level": 5,  # level_message 将被启用，高优先级
+            "hidden_keyword": "秘密" # secret_keyword_entry 将被启用
+        }
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=graph_collection,
+            world_state=initial_world_state
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+
+        output = final_snapshot.run_output
+        invoke_result = output["get_weather_report"]["output"]
+
+        # 1. 验证是调试模式输出
+        assert isinstance(invoke_result, dict)
+        assert "final_text" in invoke_result
+        assert "trace" in invoke_result
+
+        final_text = invoke_result["final_text"]
+        trace = invoke_result["trace"]
+
+        # 2. 验证内容
+        assert "现在是白天" not in final_text # is_enabled 宏求值为 False
+        assert "你的等级是：5级。" in final_text
+        assert "你提到了'秘密'，这是一个秘密信息。" in final_text
+        assert "原始输入是：'请告诉我关于秘密和夜幕下的世界。'。" in final_text
+
+        # 3. 验证优先级和顺序 (最高优先级在最前面)
+        # priority: level_message (100) > secret_keyword_entry (50) > always_on (1)
+        assert final_text.find("你的等级是：5级。") < final_text.find("你提到了'秘密'")
+        assert final_text.find("你提到了'秘密'") < final_text.find("原始输入是：'请告诉我")
+
+        # 4. 验证 trace 信息
+        rejected_ids = {entry["id"] for entry in trace["rejected_entries"]}
+        assert "night_info" in rejected_ids
+        assert any("is_enabled macro returned false" in e["reason"] for e in trace["rejected_entries"] if e["id"] == "night_info")
+        
+        activated_ids = {entry["id"] for entry in trace["initial_activation"]}
+        assert activated_ids == {"level_message", "secret_keyword_entry", "always_on_with_trigger_info"}
+
+        secret_entry_trace = next(e for e in trace["initial_activation"] if e["id"] == "secret_keyword_entry")
+        assert secret_entry_trace["matched_keywords"] == ["秘密"]
+
+    async def test_invoke_recursion_enabled(
+        self,
+        test_engine, 
+        codex_recursion_data: dict
+    ):
+        """
+        测试 `recursion_enabled` 模式下，条目内容能触发新的条目，
+        且遵循优先级规则。
+        """
+        graph_collection = GraphCollection.model_validate(codex_recursion_data["graph"])
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=graph_collection,
+            world_state={"codices": codex_recursion_data["codices"]}
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+
+        output = final_snapshot.run_output
+        invoke_result = output["recursive_invoke"]["output"]
+
+        assert isinstance(invoke_result, dict)
+        final_text = invoke_result["final_text"]
+        trace = invoke_result["trace"]
+        
+        # 【修正】根据您的 codex_recursion_data fixture 的具体内容，我重新推导了正确的输出顺序。
+        # 初始池: [A(10), D(5)] -> 渲染 A (内容 "引出B")
+        # 递归触发 B -> 当前池: [B(20), D(5)] -> 渲染 B (内容 "引出C")
+        # 递归触发 C -> 当前池: [C(30), D(5)] -> 渲染 C
+        # 当前池: [D(5)] -> 渲染 D
+        # 最终拼接时，是按渲染顺序来的。所以正确的渲染顺序是 A -> B -> C -> D
+        expected_rendered_order = [
+            "这是关于A的信息，它引出B。",
+            "B被A触发了，它又引出C。",
+            "C被B触发了，这是最终信息。",
+            "这是一个总是存在的背景信息。",
+        ]
+        
+        # 断言最终的文本拼接顺序
+        assert final_text.split("\n\n") == expected_rendered_order
+
+        # Trace 日志中的渲染顺序也应该是 A -> B -> C -> D
+        rendered_order_ids = [e["id"] for e in trace["evaluation_log"] if e["status"] == "rendered"]
+        assert rendered_order_ids == ["entry_A", "entry_B", "entry_C", "entry_D_always_on"]
+        
+        # 验证 trace 的激活记录
+        assert len(trace["initial_activation"]) == 2 # A 和 D
+        assert len(trace["recursive_activations"]) == 2 # B 和 C
+
+    async def test_invoke_invalid_codex_structure_error(
+        self,
+        test_engine, 
+        codex_invalid_structure_data: dict
+    ):
+        """
+        测试 `world.codices` 结构无效时，`system.invoke` 能捕获错误。
+        """
+        graph_collection = GraphCollection.model_validate(codex_invalid_structure_data["graph"])
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=graph_collection,
+            world_state={"codices": codex_invalid_structure_data["codices"]}
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        output = final_snapshot.run_output
+        invoke_result = output["invoke_invalid"]
+
+        assert "error" in invoke_result
+        assert "Invalid codex structure" in invoke_result["error"]
+        assert "Input should be a valid string" in invoke_result["error"]
+
+    async def test_invoke_nonexistent_codex_error(
+        self,
+        test_engine, 
+        codex_nonexistent_codex_data: dict
+    ):
+        """
+        测试 `system.invoke` 尝试从不存在的法典中读取时能捕获错误。
+        """
+        graph_collection = GraphCollection.model_validate(codex_nonexistent_codex_data["graph"])
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=graph_collection,
+            world_state={"codices": codex_nonexistent_codex_data["codices"]}
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+        
+        output = final_snapshot.run_output
+        invoke_result = output["invoke_nonexistent"]
+
+        assert "error" in invoke_result
+        assert "Codex 'nonexistent_codex' not found" in invoke_result["error"]
+        
+    async def test_invoke_concurrent_world_writes(
+        self,
+        test_engine, 
+        codex_concurrent_world_write_data: dict
+    ):
+        """
+        测试 `system.invoke` 内部宏对 `world_state` 的并发写入是否原子安全。
+        """
+        graph_collection = GraphCollection.model_validate(codex_concurrent_world_write_data["graph"])
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=graph_collection,
+            world_state={
+                "codices": codex_concurrent_world_write_data["codices"],
+                "counter": 0
+            }
+        )
+        final_snapshot = await test_engine.step(initial_snapshot, {})
+
+        output = final_snapshot.run_output
+        
+        assert "error" not in output["invoke_and_increment"]
+
+        # 由于所有条目共享同一个关键字，它们会被并发求值。
+        # 即使它们有优先级，在渲染阶段（content evaluation）的求值是并发的，
+        # 依赖于宏级原子锁来保证最终结果的正确性。
+        # 初始 0 + 3 + 2 + 1 = 6。
+        expected_counter = 6
+        assert final_snapshot.world_state["counter"] == expected_counter
+        assert output["read_counter"]["output"] == expected_counter
+
+        # 最终文本的拼接顺序依然由优先级决定
+        invoke_text = output["invoke_and_increment"]["output"]
+        assert invoke_text.find("Incremented 3.") < invoke_text.find("Incremented 2.")
+        assert invoke_text.find("Incremented 2.") < invoke_text.find("Incremented 1.")
 ```

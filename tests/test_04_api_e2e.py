@@ -32,6 +32,10 @@ class TestApiSandboxLifecycle:
         assert response.status_code == 200, response.text
         step1_snapshot_data = response.json()
         step1_snapshot_id = step1_snapshot_data["id"]
+
+        assert "plugin_metadata" in step1_snapshot_data["world_state"]
+        assert "example_logger" in step1_snapshot_data["world_state"]["plugin_metadata"]
+        assert "This snapshot was processed" in step1_snapshot_data["world_state"]["plugin_metadata"]["example_logger"]["message"]
         
         # 验证图执行成功，并且最终节点 'C' 存在于输出中
         run_output = step1_snapshot_data.get("run_output", {})
