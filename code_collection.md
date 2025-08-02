@@ -390,6 +390,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set, TypeVar
 from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, RootModel, ConfigDict, field_validator
+from abc import ABC, abstractmethod
 
 # --- 1. 核心服务接口与类型别名 (用于类型提示) ---
 
@@ -534,6 +535,8 @@ class Reportable(ABC): # 如果还没定义成抽象类，现在定义
     
     @abstractmethod
     async def generate_report(self) -> Any: pass
+
+
 ```
 
 # Directory: plugins
@@ -926,6 +929,9 @@ provider_registry = ProviderRegistry()
 
 import logging
 import os
+import pkgutil 
+import importlib
+from typing import List
 
 # 从平台核心导入接口和类型
 from backend.core.contracts import Container, HookManager
@@ -937,21 +943,44 @@ from .registry import provider_registry
 from .runtime import LLMRuntime
 from .reporters import LLMProviderReporter
 
-# 动态加载所有 provider
-from backend.core.loader import load_modules
-load_modules(["plugins.core_llm.providers"])
-
 logger = logging.getLogger(__name__)
 
+# --- 插件内部的辅助函数 ---
+def _load_plugin_modules(directories: List[str]):
+    """
+    一个内聚于本插件的辅助函数，用于动态加载其子模块（如此处的 providers）。
+    """
+    logger.debug(f"Core-LLM: Dynamically loading sub-modules from: {directories}")
+    for package_name in directories:
+        try:
+            package = importlib.import_module(package_name)
+            
+            for _, module_name, _ in pkgutil.walk_packages(package.__path__, package.__name__ + '.'):
+                try:
+                    importlib.import_module(module_name)
+                    logger.debug(f"  - Loaded sub-module: {module_name}")
+                except Exception as e:
+                    logger.error(f"  - Failed to load sub-module '{module_name}': {e}")
+        except ImportError as e:
+            logger.warning(f"Core-LLM: Could not import package '{package_name}'. Skipping. Error: {e}")
+
+
+# --- 动态加载所有 provider ---
+# 现在调用我们自己插件内部的辅助函数
+_load_plugin_modules(["plugins.core_llm.providers"])
+
+
 # --- 服务工厂 (Service Factories) ---
-def _create_llm_service(container: Container) -> LLMService:
+def _create_llm_service(container: Container) -> LLMService | MockLLMService:
     """这个工厂函数封装了创建 LLMService 的复杂逻辑。"""
     is_debug_mode = os.getenv("HEVNO_LLM_DEBUG_MODE", "false").lower() == "true"
     if is_debug_mode:
         logger.warning("LLM Gateway is in MOCK/DEBUG mode.")
         return MockLLMService()
 
+    # 实例化所有已通过装饰器注册的 provider
     provider_registry.instantiate_all()
+    
     cred_manager = CredentialManager()
     key_manager = KeyPoolManager(credential_manager=cred_manager)
     
@@ -1077,7 +1106,7 @@ class LLMRuntime(RuntimeInterface):
 ```
 # plugins/core_llm/reporters.py
 from typing import Any
-from plugins.core_api.auditor import Reportable 
+from backend.core.contracts import Reportable 
 from .registry import provider_registry
 
 
@@ -1481,29 +1510,9 @@ async def revert_sandbox_to_snapshot(
 # plugins/core_api/auditor.py
 
 import asyncio
-from abc import ABC, abstractmethod
+from backend.core.contracts import Reportable
 from typing import Any, Dict, List
 
-class Reportable(ABC):
-    """
-    一个统一的汇报协议 (契约)。
-    任何希望向系统提供状态或元数据的组件都应实现此接口。
-    """
-    @property
-    @abstractmethod
-    def report_key(self) -> str:
-        """返回此报告在最终JSON对象中的唯一键名。"""
-        pass
-
-    @property
-    def is_static(self) -> bool:
-        """指明此报告是否为静态（可缓存）。默认为 True。"""
-        return True
-
-    @abstractmethod
-    async def generate_report(self) -> Any:
-        """生成并返回报告内容。"""
-        pass
 
 class Auditor:
     """
@@ -1708,7 +1717,6 @@ from pathlib import Path
 from typing import Type, TypeVar, Tuple, Dict, Any, List
 from pydantic import BaseModel, ValidationError
 
-# --- 核心修复：从本插件的 models.py 中导入所需的模型 ---
 from .models import PackageManifest, AssetType, FILE_EXTENSIONS
 
 T = TypeVar('T', bound=BaseModel)
@@ -1758,9 +1766,12 @@ class PersistenceService:
             return []
         
         extension = FILE_EXTENSIONS[asset_type]
-        # 使用 .stem 获取不带扩展名的文件名
-        return sorted([p.stem.replace(extension.rsplit('.', 1)[0], '') for p in asset_dir.glob(f"*{extension}")])
-
+        
+        asset_names = [
+            p.name.removesuffix(extension) 
+            for p in asset_dir.glob(f"*{extension}")
+        ]
+        return sorted(asset_names)
 
     def export_package(self, manifest: PackageManifest, data_files: Dict[str, BaseModel]) -> bytes:
         """在内存中创建一个 .hevno.zip 包并返回其字节流。"""
@@ -1880,57 +1891,86 @@ def register_plugin(container: Container, hook_manager: HookManager):
 # plugins/core_persistence/api.py
 
 import logging
-from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
-from fastapi.responses import StreamingResponse
-import io
+from typing import List
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi.responses import JSONResponse
 
+# 从本插件内部导入所需的组件
 from .service import PersistenceService
-from .models import PackageManifest, PackageType
-
-# 注意：为了解耦，我们不从其他插件导入模型，如 Sandbox 或 StateSnapshot
-# 在实际的 API 实现中，我们将处理原始的字典或 Pydantic BaseModel
+from .models import AssetType, PackageManifest
+from .dependencies import get_persistence_service
 
 logger = logging.getLogger(__name__)
 
-# --- 依赖注入函数 ---
-# 这个函数定义了如何为请求获取 PersistenceService 实例
-def get_persistence_service(request: Request) -> PersistenceService:
-    # 从 app.state 获取容器，然后解析服务
-    return request.app.state.container.resolve("persistence_service")
+router = APIRouter(
+    prefix="/api/persistence", 
+    tags=["Core-Persistence"]
+)
 
-# --- API 路由 ---
-router = APIRouter(prefix="/api/persistence", tags=["Core-Persistence"])
-
-@router.get("/assets")
-async def list_all_assets(
-    # service: PersistenceService = Depends(get_persistence_service) # 示例
-):
-    # 这里的逻辑需要根据您希望如何列出资产来具体实现
-    # 例如：service.list_assets(...)
-    return {"message": "Asset listing endpoint for core_persistence."}
-
-
-# 导入/导出功能可以像旧的 api/persistence.py 一样实现
-# 这里只给出一个示例以展示路由的创建
-@router.post("/package/import")
-async def import_package(
-    file: UploadFile = File(...),
+@router.get("/assets/{asset_type}", response_model=List[str])
+async def list_assets_by_type(
+    asset_type: AssetType,
     service: PersistenceService = Depends(get_persistence_service)
 ):
-    logger.info(f"Received package for import: {file.filename}")
-    if not file.filename.endswith(".hevno.zip"):
-        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a .hevno.zip file.")
+    """
+    列出指定类型的所有已保存资产的名称。
     
-    zip_bytes = await file.read()
+    例如，要列出所有图，可以请求 GET /api/persistence/assets/graph
+    """
     try:
-        manifest, _ = service.import_package(zip_bytes)
-        # 在这里，我们可以根据 manifest 的内容，触发其他钩子来处理导入的数据
-        # 例如: await hook_manager.trigger("sandbox_imported", manifest=manifest, data=data_files)
+        asset_names = service.list_assets(asset_type)
+        return asset_names
+    except Exception as e:
+        logger.error(f"Failed to list assets of type '{asset_type.value}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An error occurred while listing assets.")
+
+@router.post("/package/import", response_model=PackageManifest)
+async def import_package(
+    file: UploadFile = File(..., description="A .hevno.zip package file."),
+    service: PersistenceService = Depends(get_persistence_service)
+):
+    """
+    上传并解析一个 .hevno.zip 包文件。
+    
+    此端点负责验证包的结构并返回其清单 (manifest)。
+    它不负责将包的内容（如沙盒或图）实际加载到引擎中。
+    这一过程应由监听 'package_imported' 等钩子的其他插件来完成。
+    """
+    logger.info(f"Received package for import: {file.filename}")
+    if not file.filename or not file.filename.endswith(".hevno.zip"):
+        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a .hevno.zip file.")
+
+    zip_bytes = await file.read()
+    if not zip_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    try:
+        # PersistenceService 负责解压和解析
+        manifest, data_files = service.import_package(zip_bytes)
+        
+        # TODO: (设计决策) 在这里触发一个钩子，让其他插件可以响应这次导入。
+        # hook_manager = request.app.state.container.resolve("hook_manager")
+        # await hook_manager.trigger(
+        #     "package_imported", 
+        #     manifest=manifest, 
+        #     data_files=data_files
+        # )
+        
         logger.info(f"Successfully parsed package '{manifest.package_type}' created at {manifest.created_at}")
         return manifest
+        
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.warning(f"Failed to import package '{file.filename}': {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid package: {e}")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during package import: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred during package import.")
+
+# 注意：
+# 沙盒的导出/导入 API (如 /api/sandboxes/{id}/export) 已被正确地
+# 放置在 core_api 插件的 sandbox_router.py 中，因为它与 'sandbox' 资源紧密相关，
+# 并且需要编排来自多个服务（snapshot_store, persistence_service）的数据。
+# 这种分离保持了此插件的通用性和低耦合性。
 ```
 
 ### core_persistence/manifest.json
@@ -1942,6 +1982,18 @@ async def import_package(
     "author": "Hevno Team",
     "priority": 10
 }
+```
+
+### core_persistence/dependencies.py
+```
+# plugins/core_persistence/dependencies.py (新文件)
+
+from fastapi import Request
+from .service import PersistenceService
+
+def get_persistence_service(request: Request) -> PersistenceService:
+    """FastAPI 依赖注入函数，用于从容器中获取 PersistenceService。"""
+    return request.app.state.container.resolve("persistence_service")
 ```
 
 ### core_codex/invoke_runtime.py
@@ -2596,160 +2648,6 @@ def register_plugin(container: Container, hook_manager: HookManager):
     logger.info("插件 [core-engine] 注册成功。")
 ```
 
-### core_engine/base_runtimes.py
-```
-# plugins/core_engine/runtimes/base_runtimes.py
-
-import logging
-from typing import Dict, Any
-
-
-from ..interfaces import RuntimeInterface
-from backend.core.contracts import ExecutionContext
-
-logger = logging.getLogger(__name__)
-
-
-class InputRuntime(RuntimeInterface):
-    """从 config 中获取 'value'。"""
-    async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
-        return {"output": config.get("value", "")}
-
-
-class SetWorldVariableRuntime(RuntimeInterface):
-    """从 config 中获取变量名和值，并设置一个持久化的世界变量。"""
-    async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
-        variable_name = config.get("variable_name")
-        value_to_set = config.get("value")
-
-        if not variable_name:
-            raise ValueError("SetWorldVariableRuntime requires 'variable_name' in its config.")
-        
-        logger.debug(f"Setting world_state['{variable_name}'] to: {value_to_set}")
-        context.shared.world_state[variable_name] = value_to_set
-        
-        return {}
-```
-
-### core_engine/control_runtimes.py
-```
-# plugins/core_engine/runtimes/control_runtimes.py
-
-from typing import Dict, Any, List, Optional
-import asyncio
-
-
-from ..interfaces import RuntimeInterface, SubGraphRunner
-from ..evaluation import evaluate_data, evaluate_expression, build_evaluation_context
-from ..utils import DotAccessibleDict
-from backend.core.contracts import ExecutionContext
-
-
-class ExecuteRuntime(RuntimeInterface):
-    """
-    一个特殊的运行时，用于二次执行代码。
-    它接收一个 'code' 字段，并对其内容进行求值。
-    """
-    async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
-        code_to_execute = config.get("code")
-
-        if not isinstance(code_to_execute, str):
-            return {"output": code_to_execute}
-
-        eval_context = build_evaluation_context(context)
-        # --- 修正: 从共享上下文中获取并传递锁 ---
-        lock = context.shared.global_write_lock
-        result = await evaluate_expression(code_to_execute, eval_context, lock)
-        return {"output": result}
-
-
-class CallRuntime(RuntimeInterface):
-    """执行一个子图。"""
-    async def execute(self, config: Dict[str, Any], context: ExecutionContext, subgraph_runner: Optional[SubGraphRunner] = None, **kwargs) -> Dict[str, Any]:
-        if not subgraph_runner:
-            raise ValueError("CallRuntime requires a SubGraphRunner.")
-            
-        graph_name = config.get("graph")
-        using_inputs = config.get("using", {})
-        
-        inherited_inputs = {
-            placeholder_name: {"output": value}
-            for placeholder_name, value in using_inputs.items()
-        }
-
-        # 调用 subgraph_runner，它会负责创建正确的子上下文
-        subgraph_results = await subgraph_runner.execute_graph(
-            graph_name=graph_name,
-            parent_context=context, # 传递当前的上下文
-            inherited_inputs=inherited_inputs
-        )
-        
-        return {"output": subgraph_results}
-
-
-class MapRuntime(RuntimeInterface):
-    """并行迭代。"""
-    template_fields = ["using", "collect"]
-
-    async def execute(self, config: Dict[str, Any], context: ExecutionContext, subgraph_runner: Optional[SubGraphRunner] = None, **kwargs) -> Dict[str, Any]:
-        if not subgraph_runner:
-            raise ValueError("MapRuntime requires a SubGraphRunner.")
-
-        list_to_iterate = config.get("list")
-        graph_name = config.get("graph")
-        using_template = config.get("using", {})
-        collect_template = config.get("collect")
-
-        if not isinstance(list_to_iterate, list):
-            raise TypeError(f"system.map 'list' field must be a list...")
-
-        tasks = []
-        base_eval_context = build_evaluation_context(context)
-        lock = context.shared.global_write_lock
-
-        for index, item in enumerate(list_to_iterate):
-            # a. 创建包含 `source` 的临时上下文，用于求值 `using`
-            using_eval_context = {
-                **base_eval_context,
-                "source": DotAccessibleDict({"item": item, "index": index})
-            }
-            
-            # b. 求值 `using` 字典 (需要传递锁)
-            evaluated_using = await evaluate_data(using_template, using_eval_context, lock)
-            inherited_inputs = {
-                placeholder: {"output": value}
-                for placeholder, value in evaluated_using.items()
-            }
-            
-            # c. 创建子图执行任务
-            #    subgraph_runner.execute_graph 会处理子上下文的创建
-            task = asyncio.create_task(
-                subgraph_runner.execute_graph(
-                    graph_name=graph_name,
-                    parent_context=context,
-                    inherited_inputs=inherited_inputs
-                )
-            )
-            tasks.append(task)
-        
-        subgraph_results: List[Dict[str, Any]] = await asyncio.gather(*tasks)
-        
-        # d. 聚合阶段
-        if collect_template:
-            collected_outputs = []
-            for result in subgraph_results:
-                # `nodes` 指向当前子图的结果
-                collect_eval_context = build_evaluation_context(context)
-                collect_eval_context["nodes"] = DotAccessibleDict(result)
-                
-                collected_value = await evaluate_data(collect_template, collect_eval_context, lock)
-                collected_outputs.append(collected_value)
-            
-            return {"output": collected_outputs}
-        else:
-            return {"output": subgraph_results}
-```
-
 ### core_engine/engine.py
 ```
 # plugins/core_engine/engine.py 
@@ -2757,6 +2655,7 @@ class MapRuntime(RuntimeInterface):
 import asyncio
 import logging
 from enum import Enum, auto
+from fastapi import Request
 from typing import Dict, Any, Set, List, Optional
 from collections import defaultdict
 import traceback
@@ -3486,199 +3385,173 @@ def get_snapshot_store(request: Request) -> SnapshotStore:
 
 ```
 
+### core_engine/runtimes/__init__.py
+```
+
+```
+
+### core_engine/runtimes/base_runtimes.py
+```
+# plugins/core_engine/runtimes/base_runtimes.py
+
+import logging
+from typing import Dict, Any
+
+
+from ..interfaces import RuntimeInterface
+from backend.core.contracts import ExecutionContext
+
+logger = logging.getLogger(__name__)
+
+
+class InputRuntime(RuntimeInterface):
+    """从 config 中获取 'value'。"""
+    async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
+        return {"output": config.get("value", "")}
+
+
+class SetWorldVariableRuntime(RuntimeInterface):
+    """从 config 中获取变量名和值，并设置一个持久化的世界变量。"""
+    async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
+        variable_name = config.get("variable_name")
+        value_to_set = config.get("value")
+
+        if not variable_name:
+            raise ValueError("SetWorldVariableRuntime requires 'variable_name' in its config.")
+        
+        logger.debug(f"Setting world_state['{variable_name}'] to: {value_to_set}")
+        context.shared.world_state[variable_name] = value_to_set
+        
+        return {}
+```
+
+### core_engine/runtimes/control_runtimes.py
+```
+# plugins/core_engine/runtimes/control_runtimes.py
+
+from typing import Dict, Any, List, Optional
+import asyncio
+
+
+from ..interfaces import RuntimeInterface, SubGraphRunner
+from ..evaluation import evaluate_data, evaluate_expression, build_evaluation_context
+from ..utils import DotAccessibleDict
+from backend.core.contracts import ExecutionContext
+
+
+class ExecuteRuntime(RuntimeInterface):
+    """
+    一个特殊的运行时，用于二次执行代码。
+    它接收一个 'code' 字段，并对其内容进行求值。
+    """
+    async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
+        code_to_execute = config.get("code")
+
+        if not isinstance(code_to_execute, str):
+            return {"output": code_to_execute}
+
+        eval_context = build_evaluation_context(context)
+        # --- 修正: 从共享上下文中获取并传递锁 ---
+        lock = context.shared.global_write_lock
+        result = await evaluate_expression(code_to_execute, eval_context, lock)
+        return {"output": result}
+
+
+class CallRuntime(RuntimeInterface):
+    """执行一个子图。"""
+    async def execute(self, config: Dict[str, Any], context: ExecutionContext, subgraph_runner: Optional[SubGraphRunner] = None, **kwargs) -> Dict[str, Any]:
+        if not subgraph_runner:
+            raise ValueError("CallRuntime requires a SubGraphRunner.")
+            
+        graph_name = config.get("graph")
+        using_inputs = config.get("using", {})
+        
+        inherited_inputs = {
+            placeholder_name: {"output": value}
+            for placeholder_name, value in using_inputs.items()
+        }
+
+        # 调用 subgraph_runner，它会负责创建正确的子上下文
+        subgraph_results = await subgraph_runner.execute_graph(
+            graph_name=graph_name,
+            parent_context=context, # 传递当前的上下文
+            inherited_inputs=inherited_inputs
+        )
+        
+        return {"output": subgraph_results}
+
+
+class MapRuntime(RuntimeInterface):
+    """并行迭代。"""
+    template_fields = ["using", "collect"]
+
+    async def execute(self, config: Dict[str, Any], context: ExecutionContext, subgraph_runner: Optional[SubGraphRunner] = None, **kwargs) -> Dict[str, Any]:
+        if not subgraph_runner:
+            raise ValueError("MapRuntime requires a SubGraphRunner.")
+
+        list_to_iterate = config.get("list")
+        graph_name = config.get("graph")
+        using_template = config.get("using", {})
+        collect_template = config.get("collect")
+
+        if not isinstance(list_to_iterate, list):
+            raise TypeError(f"system.map 'list' field must be a list...")
+
+        tasks = []
+        base_eval_context = build_evaluation_context(context)
+        lock = context.shared.global_write_lock
+
+        for index, item in enumerate(list_to_iterate):
+            # a. 创建包含 `source` 的临时上下文，用于求值 `using`
+            using_eval_context = {
+                **base_eval_context,
+                "source": DotAccessibleDict({"item": item, "index": index})
+            }
+            
+            # b. 求值 `using` 字典 (需要传递锁)
+            evaluated_using = await evaluate_data(using_template, using_eval_context, lock)
+            inherited_inputs = {
+                placeholder: {"output": value}
+                for placeholder, value in evaluated_using.items()
+            }
+            
+            # c. 创建子图执行任务
+            #    subgraph_runner.execute_graph 会处理子上下文的创建
+            task = asyncio.create_task(
+                subgraph_runner.execute_graph(
+                    graph_name=graph_name,
+                    parent_context=context,
+                    inherited_inputs=inherited_inputs
+                )
+            )
+            tasks.append(task)
+        
+        subgraph_results: List[Dict[str, Any]] = await asyncio.gather(*tasks)
+        
+        # d. 聚合阶段
+        if collect_template:
+            collected_outputs = []
+            for result in subgraph_results:
+                # `nodes` 指向当前子图的结果
+                collect_eval_context = build_evaluation_context(context)
+                collect_eval_context["nodes"] = DotAccessibleDict(result)
+                
+                collected_value = await evaluate_data(collect_template, collect_eval_context, lock)
+                collected_outputs.append(collected_value)
+            
+            return {"output": collected_outputs}
+        else:
+            return {"output": subgraph_results}
+```
+
 ### core_persistence/tests/conftest.py
 ```
 
 ```
 
-### core_persistence/tests/test_service.py
-```
-# plugins/core_persistence/tests/test_service.py
-import pytest
-import zipfile
-import io
-import json
-from pydantic import BaseModel
-
-from plugins.core_persistence.service import PersistenceService
-from plugins.core_persistence.models import AssetType, PackageManifest, PackageType
-
-# 一个简单的 Pydantic 模型用于测试 save/load
-class MockAsset(BaseModel):
-    name: str
-    value: int
-
-@pytest.fixture
-def persistence_service(tmp_path) -> PersistenceService:
-    """提供一个使用临时目录的 PersistenceService 实例。"""
-    assets_dir = tmp_path / "assets"
-    return PersistenceService(assets_base_dir=str(assets_dir))
-
-# 保持你原有的初始化测试
-def test_persistence_service_initialization(persistence_service: PersistenceService, tmp_path):
-    assets_dir = tmp_path / "assets"
-    assert assets_dir.exists()
-    assert persistence_service.assets_base_dir == assets_dir
-
-# --- 新增的单元测试 ---
-
-def test_save_and_load_asset(persistence_service: PersistenceService):
-    """测试资产的保存和加载往返流程。"""
-    asset = MockAsset(name="test_asset", value=123)
-    asset_type = AssetType.GRAPH # 使用任意一种类型来测试
-    asset_name = "my_first_asset"
-
-    # 保存
-    path = persistence_service.save_asset(asset, asset_type, asset_name)
-    assert path.exists()
-    
-    # 加载
-    loaded_asset = persistence_service.load_asset(asset_type, asset_name, MockAsset)
-    
-    assert isinstance(loaded_asset, MockAsset)
-    assert loaded_asset.name == "test_asset"
-    assert loaded_asset.value == 123
-
-def test_list_assets(persistence_service: PersistenceService):
-    """测试列出指定类型的所有资产。"""
-    # 初始应为空
-    assert persistence_service.list_assets(AssetType.GRAPH) == []
-
-    # 创建一些资产
-    persistence_service.save_asset(MockAsset(name="a", value=1), AssetType.GRAPH, "graph_a")
-    persistence_service.save_asset(MockAsset(name="b", value=2), AssetType.GRAPH, "graph_b")
-    persistence_service.save_asset(MockAsset(name="c", value=3), AssetType.CODEX, "codex_c")
-
-    # 验证列表
-    graph_assets = persistence_service.list_assets(AssetType.GRAPH)
-    assert sorted(graph_assets) == ["graph_a", "graph_b"]
-    
-    codex_assets = persistence_service.list_assets(AssetType.CODEX)
-    assert codex_assets == ["codex_c"]
-
-def test_export_package(persistence_service: PersistenceService):
-    """测试包导出功能。"""
-    manifest = PackageManifest(
-        package_type=PackageType.GRAPH_COLLECTION,
-        entry_point="data/main.graph.hevno.json"
-    )
-    data_files = {
-        "main.graph.hevno.json": MockAsset(name="main_graph", value=1)
-    }
-
-    zip_bytes = persistence_service.export_package(manifest, data_files)
-    
-    # 验证 zip 内容
-    with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
-        assert "manifest.json" in zf.namelist()
-        assert "data/main.graph.hevno.json" in zf.namelist()
-        
-        manifest_data = json.loads(zf.read("manifest.json"))
-        assert manifest_data["package_type"] == "graph_collection"
-
-def test_import_package(persistence_service: PersistenceService):
-    """测试包导入功能。"""
-    # 先创建一个 zip 包
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, 'w') as zf:
-        zf.writestr("manifest.json", '{"package_type": "sandbox_archive", "entry_point": "sb.json"}')
-        zf.writestr("data/sb.json", '{"name": "test"}')
-        zf.writestr("data/snapshots/snap1.json", '{"id": "uuid"}')
-
-    manifest, data_files = persistence_service.import_package(zip_buffer.getvalue())
-
-    assert manifest.package_type == PackageType.SANDBOX_ARCHIVE
-    assert "sb.json" in data_files
-    assert "snapshots/snap1.json" in data_files
-    assert data_files["sb.json"] == '{"name": "test"}'
-```
-
 ### core_persistence/tests/__init__.py
 ```
 
-```
-
-### core_persistence/tests/test_api.py
-```
-# plugins/core_persistence/tests/test_api.py
-import pytest
-import io
-import zipfile
-from httpx import AsyncClient
-
-# 保持你现有的测试
-@pytest.mark.asyncio
-async def test_persistence_api_exists(async_client):
-    client = await async_client(["core-persistence"])
-    response = await client.get("/api/persistence/assets")
-    assert response.status_code == 200
-    assert response.json() == {"message": "Asset listing endpoint for core_persistence."}
-
-@pytest.mark.asyncio
-async def test_api_does_not_exist_without_plugin(async_client):
-    client = await async_client(["core-logging"]) 
-    response = await client.get("/api/persistence/assets")
-    assert response.status_code == 404
-
-# --- 新增的 API 功能测试 ---
-
-@pytest.mark.asyncio
-async def test_import_package_api_success(async_client):
-    """
-    测试成功导入一个合法的 .hevno.zip 包。
-    """
-    # 1. 动态创建一个合法的 zip 包
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        manifest_content = """
-        {
-            "package_type": "graph_collection",
-            "entry_point": "main.json",
-            "metadata": {"author": "Test"}
-        }
-        """
-        zf.writestr("manifest.json", manifest_content)
-        zf.writestr("data/main.json", '{"name": "test_graph"}')
-
-    zip_bytes = zip_buffer.getvalue()
-
-    # 2. 创建一个只包含 core-persistence 的客户端
-    client = await async_client(["core-persistence"])
-
-    # 3. 发送 POST 请求
-    files = {'file': ('test.hevno.zip', zip_bytes, 'application/zip')}
-    response = await client.post("/api/persistence/package/import", files=files)
-
-    # 4. 断言结果
-    assert response.status_code == 200
-    response_data = response.json()
-    assert response_data['package_type'] == 'graph_collection'
-    assert response_data['metadata']['author'] == 'Test'
-
-
-@pytest.mark.asyncio
-async def test_import_package_api_invalid_file(async_client):
-    """
-    测试上传非 zip 文件或无效 zip 时的错误处理。
-    """
-    client = await async_client(["core-persistence"])
-
-    # 场景1：非 .hevno.zip 文件名
-    files = {'file': ('test.txt', b'hello', 'text/plain')}
-    response = await client.post("/api/persistence/package/import", files=files)
-    assert response.status_code == 400
-    assert "Invalid file type" in response.json()['detail']
-
-    # 场景2：缺少 manifest 的 zip 文件
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, 'w') as zf:
-        zf.writestr("data/main.json", '{"name": "test_graph"}')
-    zip_bytes = zip_buffer.getvalue()
-    
-    files = {'file': ('bad.hevno.zip', zip_bytes, 'application/zip')}
-    response = await client.post("/api/persistence/package/import", files=files)
-    assert response.status_code == 400
-    assert "missing 'manifest.json'" in response.json()['detail']
 ```
 
 ### core_llm/providers/__init__.py
@@ -3705,7 +3578,7 @@ from ..models import (
 )
 from ..registry import provider_registry
 
-
+@provider_registry.register("gemini", key_env_var="GEMINI_API_KEYS")
 class GeminiProvider(LLMProvider):
     """
     针对 Google Gemini API 的 LLMProvider 实现。

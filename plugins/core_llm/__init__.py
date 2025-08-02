@@ -2,6 +2,9 @@
 
 import logging
 import os
+import pkgutil 
+import importlib
+from typing import List
 
 # 从平台核心导入接口和类型
 from backend.core.contracts import Container, HookManager
@@ -13,21 +16,44 @@ from .registry import provider_registry
 from .runtime import LLMRuntime
 from .reporters import LLMProviderReporter
 
-# 动态加载所有 provider
-from backend.core.loader import load_modules
-load_modules(["plugins.core_llm.providers"])
-
 logger = logging.getLogger(__name__)
 
+# --- 插件内部的辅助函数 ---
+def _load_plugin_modules(directories: List[str]):
+    """
+    一个内聚于本插件的辅助函数，用于动态加载其子模块（如此处的 providers）。
+    """
+    logger.debug(f"Core-LLM: Dynamically loading sub-modules from: {directories}")
+    for package_name in directories:
+        try:
+            package = importlib.import_module(package_name)
+            
+            for _, module_name, _ in pkgutil.walk_packages(package.__path__, package.__name__ + '.'):
+                try:
+                    importlib.import_module(module_name)
+                    logger.debug(f"  - Loaded sub-module: {module_name}")
+                except Exception as e:
+                    logger.error(f"  - Failed to load sub-module '{module_name}': {e}")
+        except ImportError as e:
+            logger.warning(f"Core-LLM: Could not import package '{package_name}'. Skipping. Error: {e}")
+
+
+# --- 动态加载所有 provider ---
+# 现在调用我们自己插件内部的辅助函数
+_load_plugin_modules(["plugins.core_llm.providers"])
+
+
 # --- 服务工厂 (Service Factories) ---
-def _create_llm_service(container: Container) -> LLMService:
+def _create_llm_service(container: Container) -> LLMService | MockLLMService:
     """这个工厂函数封装了创建 LLMService 的复杂逻辑。"""
     is_debug_mode = os.getenv("HEVNO_LLM_DEBUG_MODE", "false").lower() == "true"
     if is_debug_mode:
         logger.warning("LLM Gateway is in MOCK/DEBUG mode.")
         return MockLLMService()
 
+    # 实例化所有已通过装饰器注册的 provider
     provider_registry.instantiate_all()
+    
     cred_manager = CredentialManager()
     key_manager = KeyPoolManager(credential_manager=cred_manager)
     

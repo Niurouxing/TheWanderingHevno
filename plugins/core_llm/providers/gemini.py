@@ -15,7 +15,7 @@ from ..models import (
 )
 from ..registry import provider_registry
 
-
+@provider_registry.register("gemini", key_env_var="GEMINI_API_KEYS")
 class GeminiProvider(LLMProvider):
     """
     针对 Google Gemini API 的 LLMProvider 实现。
