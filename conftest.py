@@ -462,12 +462,11 @@ def map_collection_basic() -> GraphCollection:
                 }}}]}
             ]},
         "process_character": {"nodes": [{"id": "generate_bio", "run": [{"runtime": "llm.default", "config": {
-            # 【修正】添加 model 字段
-            "model": "mock/model",
-            "prompt": "{{ f'Create a bio for {nodes.character_input.output} in the context of {nodes.global_story_setting.output}. Index: {nodes.character_index.output}' }}"
-            }}]}]}
+        "model": "mock/model",
+        "prompt": "{{ f'Create a bio for {nodes.character_input.output} in the context of {nodes.global_story_setting.output}. Index: {nodes.character_index.output}' }}"
+        }}]}]}
     }
-    return GraphCollection.model_validate(base)
+return GraphCollection.model_validate(base)
 
 
 @pytest.fixture

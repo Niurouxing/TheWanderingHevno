@@ -59,12 +59,9 @@ def test_engine() -> Generator[ExecutionEngine, None, None]:
     register_codex_plugin(container, hook_manager)
 
     # 5. 手动触发异步钩子来填充 RuntimeRegistry
-    async def populate_runtimes():
-        external_runtimes = await hook_manager.filter("collect_runtimes", {})
-        for name, runtime_class in external_runtimes.items():
-            runtime_registry.register(name, runtime_class)
-
-    asyncio.run(populate_runtimes())
+    external_runtimes = await hook_manager.filter("collect_runtimes", {})
+    for name, runtime_class in external_runtimes.items():
+        runtime_registry.register(name, runtime_class)
 
     # 6. 从容器中解析出最终配置好的引擎实例
     engine = container.resolve("execution_engine")

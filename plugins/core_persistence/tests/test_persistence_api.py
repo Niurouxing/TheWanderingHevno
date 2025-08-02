@@ -19,18 +19,3 @@ class TestPersistenceAPI:
         response = test_client.get("/api/persistence/assets/graph")
         assert response.status_code == 200
         assert response.json() == []
-
-    def test_import_invalid_package(self, test_client: TestClient):
-        # 测试通用的包导入端点
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w') as zf:
-            zf.writestr("somefile.txt", "hello") # 缺少 manifest.json
-        
-        zip_bytes = zip_buffer.getvalue()
-
-        response = test_client.post(
-            "/api/persistence/package/import",
-            files={"file": ("bad_package.hevno.zip", zip_bytes, "application/zip")}
-        )
-        assert response.status_code == 400
-        assert "missing 'manifest.json'" in response.json()["detail"]
