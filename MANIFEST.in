@@ -1,0 +1,9 @@
+# Hevno/MANIFEST.in
+
+# 递归地包含 plugins 目录下的所有 .json 和 .yaml 文件
+graft plugins
+global-include *.json *.yaml
+
+# 你也可以更精确地指定
+# recursive-include plugins *.json
+# recursive-include plugins *.yaml

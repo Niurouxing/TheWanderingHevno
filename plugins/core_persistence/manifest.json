@@ -1,0 +1,7 @@
+{
+    "name": "core-persistence",
+    "version": "1.0.0",
+    "description": "Provides file system persistence, asset management, and package import/export.",
+    "author": "Hevno Team",
+    "priority": 10
+}

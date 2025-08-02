@@ -1,76 +1,102 @@
 # backend/core/loader.py
-import os
-import pkgutil
+
+import json
+import logging
 import importlib
-from typing import List
-from pathlib import Path
+import importlib.resources
+import traceback
+from typing import List, Dict
 
-# 从新模块导入 HookManager 类型提示
-from backend.core.hooks import HookManager
+from backend.core.contracts import Container, HookManager, PluginRegisterFunc
 
-def load_modules(directories: List[str]):
-    """
-    动态地扫描并导入指定目录下的所有 Python 模块。
+# 在模块级别获取 logger
+logger = logging.getLogger(__name__)
 
-    :param directories: 一个包含要扫描的包目录路径的列表 (e.g., ["backend.runtimes", "backend.llm.providers"])
-    """
-    print("\n--- Starting Dynamic Module Loading ---")
-    for package_name in directories:
+class PluginLoader:
+    def __init__(self, container: Container, hook_manager: HookManager):
+        self._container = container
+        self._hook_manager = hook_manager
+
+    def load_plugins(self):
+        """执行插件加载的全过程：发现、排序、注册。"""
+        # 使用 print 是因为此时日志系统可能还未配置
+        print("\n--- Hevno 插件系统：开始加载 ---")
+        
+        # 阶段一：发现
+        all_plugins = self._discover_plugins()
+        if not all_plugins:
+            print("警告：未发现任何插件。")
+            print("--- Hevno 插件系统：加载完成 ---\n")
+            return
+
+        # 阶段二：排序
+        sorted_plugins = sorted(all_plugins, key=lambda p: (p['manifest'].get('priority', 100), p['name']))
+        
+        # 打印加载顺序，这是一个有用的元信息
+        print("插件加载顺序已确定：")
+        for i, p_info in enumerate(sorted_plugins):
+            print(f"  {i+1}. {p_info['name']} (优先级: {p_info['manifest'].get('priority', 100)})")
+
+        # 阶段三：注册
+        self._register_plugins(sorted_plugins)
+        
+        # 使用配置好的 logger 记录最终信息
+        logger.info("所有插件均已加载并注册完毕。")
+        print("--- Hevno 插件系统：加载完成 ---\n")
+
+
+    def _discover_plugins(self) -> List[Dict]:
+        """扫描 'plugins' 包，读取所有子包中的 manifest.json 文件。"""
+        discovered = []
         try:
-            package = importlib.import_module(package_name)
+            plugins_package_path = importlib.resources.files('plugins')
             
-            # 使用 pkgutil.walk_packages 来安全地、递归地查找所有子模块
-            for _, module_name, _ in pkgutil.walk_packages(package.__path__, package.__name__ + '.'):
-                try:
-                    importlib.import_module(module_name)
-                except Exception as e:
-                    print(f"  - Failed to load module '{module_name}': {e}")
-        except ImportError as e:
-            print(f"Warning: Could not import package '{package_name}'. Skipping. Error: {e}")
-    print("--- Finished Dynamic Module Loading ---\n")
+            for plugin_path in plugins_package_path.iterdir():
+                if not plugin_path.is_dir() or plugin_path.name.startswith(('__', '.')):
+                    continue
 
-def load_plugins(hook_manager: HookManager):
-    """
-    动态扫描 `plugins/` 目录，发现并注册所有插件。
-
-    :param hook_manager: 一个 HookManager 实例，插件将向其注册钩子。
-    """
-    print("\n--- Starting Plugin Loading ---")
-    
-    # 假设项目根目录是 backend 目录的父目录
-    project_root = Path(__file__).parent.parent.parent 
-    plugins_dir = project_root / "plugins"
-
-    if not plugins_dir.is_dir():
-        print(f"Plugin directory not found at '{plugins_dir}'. Skipping.")
-        print("--- Finished Plugin Loading ---")
-        return
-
-    # 将插件目录添加到 Python 路径中，以便能够导入它们
-    import sys
-    if str(plugins_dir) not in sys.path:
-        sys.path.insert(0, str(plugins_dir))
-
-    # 遍历 `plugins/` 下的每个子目录（每个子目录是一个插件）
-    for plugin_path in plugins_dir.iterdir():
-        if plugin_path.is_dir():
-            plugin_name = plugin_path.name
-            try:
-                # 动态导入插件的入口模块 (e.g., import example_logger)
-                plugin_module = importlib.import_module(plugin_name)
+                manifest_path = plugin_path / "manifest.json"
+                if not manifest_path.is_file():
+                    continue
                 
-                # 检查插件是否定义了 `register_plugin` 函数
-                if hasattr(plugin_module, "register_plugin"):
-                    register_func = getattr(plugin_module, "register_plugin")
-                    # 调用注册函数，并将 hook_manager 实例传递进去
-                    register_func(hook_manager)
-                    print(f"  - Successfully loaded and registered plugin: '{plugin_name}'")
-                else:
-                    print(f"  - Warning: Plugin '{plugin_name}' found, but it has no 'register_plugin' function.")
+                try:
+                    manifest_content = manifest_path.read_text(encoding='utf-8')
+                    manifest = json.loads(manifest_content)
+                    import_path = f"plugins.{plugin_path.name}"
+                    
+                    plugin_info = { "name": manifest.get('name', plugin_path.name), "manifest": manifest, "import_path": import_path }
+                    discovered.append(plugin_info)
+                except Exception:
+                    # 在发现阶段保持静默，只处理能成功解析的
+                    pass
+        
+        except (ModuleNotFoundError, FileNotFoundError):
+             # 同样保持静默，如果没有 plugins 目录就算了
+            pass
+            
+        return discovered
+    
+    def _register_plugins(self, plugins: List[Dict]):
+        """按顺序导入并调用每个插件的注册函数。"""
+        for plugin_info in plugins:
+            plugin_name = plugin_info['name']
+            import_path = plugin_info['import_path']
+            
+            try:
+                # --- 核心改动：这里不再打印日志 ---
+                # 日志记录的责任已移交插件本身
+                plugin_module = importlib.import_module(import_path)
+                register_func: PluginRegisterFunc = getattr(plugin_module, "register_plugin")
+                register_func(self._container, self._hook_manager)
 
             except Exception as e:
-                print(f"  - Failed to load plugin '{plugin_name}': {e}")
-                import traceback
+                # 只有在发生致命错误时，加载器才需要“发声”
+                # 并且使用 print，因为它不依赖于可能出问题的日志系统
+                print("\n" + "="*80)
+                print(f"!!! 致命错误：加载插件 '{plugin_name}' ({import_path}) 失败 !!!")
+                print("="*80)
                 traceback.print_exc()
-
-    print("--- Finished Plugin Loading ---\n")
+                print("="*80)
+                # 遇到错误时，可以选择停止应用或继续加载其他插件
+                # 这里我们选择停止，因为插件依赖可能被破坏
+                raise RuntimeError(f"无法加载插件 {plugin_name}") from e
