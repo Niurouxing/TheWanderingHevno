@@ -6,6 +6,12 @@ from typing import Dict, Any, Set, List, Optional
 from collections import defaultdict
 from fastapi import Request
 
+from backend.core.hooks import HookManager
+from backend.core.plugin_types import (
+    EngineStepStartContext, EngineStepEndContext,
+    BeforeConfigEvaluationContext, AfterMacroEvaluationContext,
+    NodeExecutionStartContext, NodeExecutionSuccessContext, NodeExecutionErrorContext
+)
 from backend.core.models import GraphCollection, GraphDefinition, GenericNode
 from backend.core.dependency_parser import build_dependency_graph
 from backend.core.registry import RuntimeRegistry
@@ -31,7 +37,8 @@ class GraphRun:
         self.node_map: Dict[str, GenericNode] = {n.id: n for n in self.graph_def.nodes}
         self.node_states: Dict[str, NodeState] = {}
         self.dependencies: Dict[str, Set[str]] = build_dependency_graph(
-            [node.model_dump() for node in self.graph_def.nodes]
+            [node.model_dump() for node in self.graph_def.nodes],
+            self.context.hook_manager 
         )
         self.subscribers: Dict[str, Set[str]] = self._build_subscribers()
         self._detect_cycles()
@@ -99,6 +106,15 @@ class ExecutionEngine(SubGraphRunner):
 
     async def step(self, initial_snapshot, triggering_input: Dict[str, Any] = None):
         if triggering_input is None: triggering_input = {}
+
+
+        await self.hook_manager.trigger(
+            "engine_step_start",
+            context=EngineStepStartContext(
+                initial_snapshot=initial_snapshot,
+                triggering_input=triggering_input
+            )
+        )
         
         # 从 self.services 字典注入服务
         context = ExecutionContext.create_for_main_run(
@@ -112,6 +128,13 @@ class ExecutionEngine(SubGraphRunner):
         
         final_node_states = await self._internal_execute_graph(main_graph_def, context)
         next_snapshot = context.to_next_snapshot(final_node_states, triggering_input)
+
+        await self.hook_manager.trigger(
+            "engine_step_end",
+            context=EngineStepEndContext(final_snapshot=next_snapshot)
+        )
+
+
         return next_snapshot
 
     # --- 实现 SubGraphRunner 接口 ---
@@ -192,11 +215,34 @@ class ExecutionEngine(SubGraphRunner):
             try:
                 node = run.get_node(node_id)
                 context = run.get_execution_context()
+
+                await self.hook_manager.trigger(
+                    "node_execution_start",
+                    context=NodeExecutionStartContext(node=node, execution_context=context)
+                )
                 output = await self._execute_node(node, context)
                 if isinstance(output, dict) and "error" in output:
                     run.set_node_state(node_id, NodeState.FAILED)
+
+                    await self.hook_manager.trigger(
+                        "node_execution_error",
+                        context=NodeExecutionErrorContext(
+                            node=node,
+                            execution_context=context,
+                            exception=ValueError(output["error"]) # 包装为异常
+                        )
+                    )
                 else:
                     run.set_node_state(node_id, NodeState.SUCCEEDED)
+
+                    await self.hook_manager.trigger(
+                        "node_execution_success",
+                        context=NodeExecutionSuccessContext(
+                            node=node,
+                            execution_context=context,
+                            result=output
+                        )
+                    )
                 run.set_node_result(node_id, output)
             except Exception as e:
                 error_message = f"Worker-level error for node {node_id}: {type(e).__name__}: {e}"
@@ -204,6 +250,15 @@ class ExecutionEngine(SubGraphRunner):
                 traceback.print_exc()
                 run.set_node_state(node_id, NodeState.FAILED)
                 run.set_node_result(node_id, {"error": error_message})
+
+                await self.hook_manager.trigger(
+                    "node_execution_error",
+                    context=NodeExecutionErrorContext(
+                        node=node,
+                        execution_context=context,
+                        exception=e
+                    )
+                )
             self._process_subscribers(node_id, run, queue)
             queue.task_done()
 
@@ -238,6 +293,17 @@ class ExecutionEngine(SubGraphRunner):
                 eval_context = build_evaluation_context(context, pipe_vars=pipeline_state)
                 
                 config_to_process = instruction.config.copy()
+
+                config_to_process = await self.hook_manager.filter(
+                    "before_config_evaluation",
+                    config_to_process, # 这是被过滤的数据
+                    context=BeforeConfigEvaluationContext(
+                        node=node,
+                        execution_context=context,
+                        instruction_config=config_to_process
+                    )
+                )
+
                 runtime_instance: RuntimeInterface = self.registry.get_runtime(runtime_name)
                 
                 templates = {}
@@ -247,6 +313,17 @@ class ExecutionEngine(SubGraphRunner):
                         templates[field] = config_to_process.pop(field)
 
                 processed_config = await evaluate_data(config_to_process, eval_context, lock)
+
+
+                processed_config = await self.hook_manager.filter(
+                    "after_macro_evaluation",
+                    processed_config, # 这是被过滤的数据
+                    context=AfterMacroEvaluationContext(
+                        node=node,
+                        execution_context=context,
+                        evaluated_config=processed_config
+                    )
+                )
 
                 if templates:
                     processed_config.update(templates)

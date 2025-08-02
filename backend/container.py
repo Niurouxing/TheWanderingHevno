@@ -3,6 +3,7 @@
 import os
 from dotenv import load_dotenv
 
+from backend.core.hooks import HookManager
 from backend.core.engine import ExecutionEngine
 from backend.core.registry import runtime_registry
 from backend.core.state import SnapshotStore
@@ -25,6 +26,13 @@ class Container:
         self._snapshot_store = None
         self._sandbox_store = None
         self._auditor = None
+        self._hook_manager = None
+
+    @property
+    def hook_manager(self) -> HookManager:
+        if self._hook_manager is None:
+            self._hook_manager = HookManager()
+        return self._hook_manager
 
     @property
     def snapshot_store(self) -> SnapshotStore:
@@ -78,7 +86,8 @@ class Container:
             services = {"llm": self._create_llm_service()}
             self._execution_engine = ExecutionEngine(
                 registry=runtime_registry,
-                services=services
+                services=services,
+                hook_manager=self.hook_manager 
             )
         return self._execution_engine
 

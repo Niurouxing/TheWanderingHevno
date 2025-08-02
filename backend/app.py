@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.core.loader import load_modules
+from backend.core.loader import load_modules, load_plugins
 from backend.container import container
 
 # 导入所有 API 路由
@@ -32,6 +32,10 @@ def create_app() -> FastAPI:
     load_modules(PLUGGABLE_MODULES)
     print("--- Modules Loaded ---")
 
+    # 【新增】加载所有插件
+    hook_manager = container.hook_manager
+    load_plugins(hook_manager)
+
     # 2. 创建 FastAPI 实例
     app = FastAPI(
         title="Hevno Backend Engine",
@@ -47,6 +51,7 @@ def create_app() -> FastAPI:
     app.state.snapshot_store = container.snapshot_store
     app.state.sandbox_store = container.sandbox_store
     app.state.auditor = container.auditor
+    app.state.hook_manager = container.hook_manager
     print("--- Core Services Attached ---")
 
     # 4. 配置中间件

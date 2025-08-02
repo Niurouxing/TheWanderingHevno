@@ -11,6 +11,8 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, ConfigDict, ValidationError
 
 
+from backend.core.hooks import HookManager
+from backend.core.plugin_types import BeforeSnapshotCreateContext
 from backend.core.models import GraphCollection
 from backend.core.utils import DotAccessibleDict
 
@@ -70,9 +72,6 @@ class SnapshotStore:
 # --- 2. 运行时上下文模型 (原 types.py) ---
 # 这些模型定义了在单次图执行期间，存在于内存中的临时状态和上下文
 
-# 【已删除】移除了 ServiceRegistry = Dict[str, Any] 类型别名。
-# 它与 backend/core/services.py 中的 ServiceRegistry 类名冲突。
-# 现在统一使用 ServiceRegistry 类，并在需要的地方使用 Dict[str, Any] 进行类型提示。
 
 class SharedContext(BaseModel):
     """
@@ -94,15 +93,16 @@ class ExecutionContext(BaseModel):
     run_vars: Dict[str, Any] = Field(default_factory=dict)
     shared: SharedContext
     initial_snapshot: StateSnapshot # 引用初始快照以获取图定义等信息
+    hook_manager: HookManager
 
     model_config = {"arbitrary_types_allowed": True}
 
     @classmethod
     def create_for_main_run(
         cls, 
-        snapshot: StateSnapshot, 
-        # 【已修改】将类型提示从冲突的 ServiceRegistry 别名改为明确的字典类型
-        services: Dict[str, Any], 
+        snapshot: StateSnapshot,
+        services: Dict[str, Any],
+        hook_manager: HookManager,
         run_vars: Dict[str, Any] = None
     ) -> 'ExecutionContext':
         """为顶层图执行创建初始上下文。"""
@@ -118,7 +118,8 @@ class ExecutionContext(BaseModel):
         return cls(
             shared=shared_context,
             initial_snapshot=snapshot,
-            run_vars=run_vars or {}
+            run_vars=run_vars or {},
+            hook_manager=hook_manager
         )
 
     @classmethod
@@ -152,14 +153,29 @@ class ExecutionContext(BaseModel):
             except (ValidationError, json.JSONDecodeError) as e:
                 print(f"Warning: Failed to parse evolved graph collection from world_state: {e}")
 
-        return StateSnapshot(
-            sandbox_id=self.initial_snapshot.sandbox_id,
-            graph_collection=current_graphs,
-            world_state=final_world_state,
-            parent_snapshot_id=self.initial_snapshot.id,
-            run_output=final_node_states,
-            triggering_input=triggering_input
+        snapshot_data = {
+            "sandbox_id": self.initial_snapshot.sandbox_id,
+            "graph_collection": current_graphs,
+            "world_state": final_world_state,
+            "parent_snapshot_id": self.initial_snapshot.id,
+            "run_output": final_node_states,
+            "triggering_input": triggering_input
+        }
+
+        filtered_snapshot_data = asyncio.run( # 在非async函数中调用async钩子
+             self.hook_manager.filter(
+                "before_snapshot_create",
+                snapshot_data,
+                context=BeforeSnapshotCreateContext(
+                    snapshot_data=snapshot_data,
+                    execution_context=self
+                )
+            )
         )
+
+        return StateSnapshot(**filtered_snapshot_data)
+
+
 
 def get_sandbox_store(request: Request) -> Dict[UUID, Sandbox]:
     """依赖注入函数，用于获取沙盒存储。"""
