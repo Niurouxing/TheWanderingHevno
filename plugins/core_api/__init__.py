@@ -25,7 +25,7 @@ async def populate_auditor(container: Container):
     hook_manager = container.resolve("hook_manager")
     auditor: Auditor = container.resolve("auditor")
     
-    reporters_list: List[Reportable] = await hook_manager.filter("collect_reporters", [])
+    reporters_list: List[Reportable] = await hook_manager.filter("collect_reporters", [], container=container)
     
     auditor.set_reporters(reporters_list)
     logger.info(f"Auditor populated with {len(reporters_list)} reporter(s).")

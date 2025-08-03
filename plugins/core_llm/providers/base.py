@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any
 
-from ..models import LLMResponse, LLMError
+from ..contracts import LLMResponse, LLMError
 
 
 class LLMProvider(ABC):

@@ -4,56 +4,77 @@ import pytest
 import asyncio
 from unittest.mock import AsyncMock, patch
 
-# 从本插件内部导入所有需要测试的类和模型
-from plugins.core_llm.models import (
+# 从本插件的公共契约中导入所需模型
+from plugins.core_llm.contracts import (
     LLMResponse, LLMError, LLMResponseStatus, LLMErrorType, LLMRequestFailedError
 )
+# 从本插件内部实现中导入待测试的类
 from plugins.core_llm.manager import CredentialManager, KeyPoolManager
 from plugins.core_llm.service import LLMService
-from plugins.core_llm.registry import ProviderRegistry, provider_registry as global_provider_registry
+from plugins.core_llm.registry import ProviderRegistry
+from plugins.core_llm.providers.gemini import GeminiProvider
 
-# 为了测试的隔离性，我们清除全局注册表
-@pytest.fixture(autouse=True)
-def isolated_provider_registry():
-    backup_providers = global_provider_registry._providers.copy()
-    backup_info = global_provider_registry._provider_info.copy()
-    global_provider_registry._providers.clear()
-    global_provider_registry._provider_info.clear()
-    yield
-    global_provider_registry._providers = backup_providers
-    global_provider_registry._provider_info = backup_info
+# --- Fixtures for setting up the test environment ---
 
 @pytest.fixture
 def credential_manager(monkeypatch) -> CredentialManager:
+    """Fixture to provide a CredentialManager with mocked environment variables."""
     monkeypatch.setenv("GEMINI_API_KEYS", "test_key_1, test_key_2")
     return CredentialManager()
 
 @pytest.fixture
 def key_pool_manager(credential_manager: CredentialManager) -> KeyPoolManager:
+    """Fixture to provide a KeyPoolManager with a registered provider."""
     manager = KeyPoolManager(credential_manager)
+    # The key manager needs to know about the provider to create a key pool.
     manager.register_provider("gemini", "GEMINI_API_KEYS")
     return manager
 
-# 【修复】这个 fixture 现在只创建 LLMService，不再 mock provider
-# 因为我们将在测试函数内部 patch 更高层次的方法
 @pytest.fixture
-def llm_service(key_pool_manager: KeyPoolManager) -> LLMService:
-    # 注册一个空的 provider registry，因为我们不会真的调用它
+def provider_registry() -> ProviderRegistry:
+    """
+    Fixture to create a ProviderRegistry instance, populated with a
+    provider, just as the application would do during startup.
+    """
+    registry = ProviderRegistry()
+    # Manually register a provider for testing purposes.
+    registry.register(name="gemini", provider_class=GeminiProvider, key_env_var="GEMINI_API_KEYS")
+    registry.instantiate_all() # Instantiate the registered providers
+    return registry
+
+@pytest.fixture
+def llm_service(key_pool_manager: KeyPoolManager, provider_registry: ProviderRegistry) -> LLMService:
+    """
+
+    Fixture to provide a fully initialized LLMService instance.
+    This service is configured with dependencies provided by other fixtures,
+    following the Dependency Injection pattern.
+    """
     return LLMService(
         key_manager=key_pool_manager, 
-        provider_registry=ProviderRegistry(), 
-        max_retries=2 # 1 initial + 1 retry = 2 total attempts
+        provider_registry=provider_registry, 
+        max_retries=2 # Allows for 1 initial attempt + 1 retry
     )
+
+
+# --- Test Suite ---
 
 @pytest.mark.asyncio
 class TestLLMServiceIntegration:
-    """对 LLMService 的集成测试，测试其重试和故障转移的核心逻辑。"""
+    """
+    Integration tests for LLMService, focusing on its core logic of retries,
+    error handling, and key management, without making real network calls.
+    The lower-level method `_attempt_request` is patched to simulate various outcomes.
+    """
 
     async def test_request_success_on_first_try(self, llm_service: LLMService):
-        """测试在第一次尝试就成功时，方法能正确返回。"""
+        """
+        Verifies that if the first attempt is successful, the service returns
+        the correct response and does not perform unnecessary retries.
+        """
         success_response = LLMResponse(status=LLMResponseStatus.SUCCESS, content="Success!")
         
-        # 使用 patch 直接模拟 _attempt_request 的行为
+        # Patch the internal attempt method to simulate an immediate success.
         with patch.object(llm_service, '_attempt_request', new_callable=AsyncMock) as mock_attempt:
             mock_attempt.return_value = success_response
             
@@ -64,7 +85,8 @@ class TestLLMServiceIntegration:
 
     async def test_retry_on_provider_error_and_succeed(self, llm_service: LLMService):
         """
-        【修复后】测试当 _attempt_request 第一次失败、第二次成功时，tenacity 是否正确重试。
+        Verifies that the service correctly retries a request when a retryable
+        error occurs on the first attempt, and then succeeds.
         """
         retryable_error = LLMRequestFailedError(
             "A retryable error occurred", 
@@ -72,7 +94,7 @@ class TestLLMServiceIntegration:
         )
         success_response = LLMResponse(status=LLMResponseStatus.SUCCESS, content="Success after retry!")
 
-        # 直接 patch _attempt_request，并让它按顺序产生效果
+        # Configure the mock to fail on the first call and succeed on the second.
         with patch.object(llm_service, '_attempt_request', new_callable=AsyncMock) as mock_attempt:
             mock_attempt.side_effect = [
                 retryable_error,
@@ -81,15 +103,16 @@ class TestLLMServiceIntegration:
             
             response = await llm_service.request(model_name="gemini/gemini-1.5-pro", prompt="Hello")
             
-            # 验证最终结果是成功的响应
+            # Assert the final outcome is the successful response.
             assert response == success_response
-            # 验证 _attempt_request 被调用了两次（1次初始 + 1次重试）
+            # Assert that the retry mechanism was triggered (1 initial + 1 retry).
             assert mock_attempt.call_count == 2
 
 
     async def test_final_failure_after_all_retries(self, llm_service: LLMService):
         """
-        【修复后】测试当 _attempt_request 总是失败时，是否在耗尽重试次数后抛出最终异常。
+        Verifies that after exhausting all retry attempts with persistent
+        retryable errors, the service raises a final, informative exception.
         """
         retryable_error = LLMRequestFailedError(
             "A persistent retryable error",
@@ -97,14 +120,36 @@ class TestLLMServiceIntegration:
         )
         
         with patch.object(llm_service, '_attempt_request', new_callable=AsyncMock) as mock_attempt:
-            # 让 mock 的方法总是抛出可重试的异常
+            # Configure the mock to always raise the retryable error.
             mock_attempt.side_effect = retryable_error
             
             with pytest.raises(LLMRequestFailedError) as exc_info:
                 await llm_service.request(model_name="gemini/gemini-1.5-pro", prompt="Hello")
             
-            # 验证最终抛出的异常包含了总结性的信息
+            # Assert that the final exception message indicates permanent failure.
             assert "failed permanently after 2 attempt(s)" in str(exc_info.value)
             
-            # 验证 _attempt_request 被调用了两次（1次初始 + 1次重试）
+            # Assert that the service attempted the call for the configured number of retries.
             assert mock_attempt.call_count == 2
+            
+    async def test_no_retry_on_non_retryable_error(self, llm_service: LLMService):
+        """
+        Verifies that if a non-retryable error occurs, the service fails
+        immediately without attempting any retries.
+        """
+        non_retryable_error = LLMRequestFailedError(
+            "A non-retryable error",
+            last_error=LLMError(error_type=LLMErrorType.INVALID_REQUEST_ERROR, message="Bad prompt", is_retryable=False)
+        )
+        
+        with patch.object(llm_service, '_attempt_request', new_callable=AsyncMock) as mock_attempt:
+            mock_attempt.side_effect = non_retryable_error
+
+            with pytest.raises(LLMRequestFailedError) as exc_info:
+                 await llm_service.request(model_name="gemini/gemini-1.5-pro", prompt="This is a bad prompt")
+
+            # Assert the final exception message indicates permanent failure, but after only one attempt.
+            assert "failed permanently after 2 attempt(s)" in str(exc_info.value)
+            
+            # Assert that the service only made one attempt.
+            mock_attempt.assert_awaited_once()

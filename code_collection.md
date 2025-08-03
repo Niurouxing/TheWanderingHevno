@@ -1989,42 +1989,41 @@ class KeyPoolManager:
 # plugins/core_memoria/tasks.py
 import logging
 from typing import List, Dict, Any
+from uuid import UUID
 
-from backend.core.contracts import Container, BackgroundTaskManager
-from plugins.core_engine.contracts import (
-    Sandbox, 
-    StateSnapshot,
-    SnapshotStoreInterface
-)
-
-from .models import MemoryEntry, MemoryStream, Memoria, AutoSynthesisConfig
+# 从平台核心导入接口和类型
+from backend.core.contracts import Container
+# 从相关插件导入模型和异常，以确保类型安全
+from .models import AutoSynthesisConfig, MemoryEntry
 from plugins.core_llm.service import LLMService
+from plugins.core_llm.contracts import LLMResponse, LLMRequestFailedError
 
 logger = logging.getLogger(__name__)
 
 async def run_synthesis_task(
     container: Container,
-    sandbox_id: str,
+    sandbox_id: UUID,
     stream_name: str,
     synthesis_config: Dict[str, Any],
     entries_to_summarize_dicts: List[Dict[str, Any]]
 ):
     """
-    一个后台任务，负责调用 LLM 生成总结，并创建一个新的状态快照。
+    一个解耦的后台任务。
+    它负责调用 LLM 生成总结，然后将结果作为一个事件提交到
+    memoria 专用的事件队列中。它不再直接操作任何状态或快照。
     """
     logger.info(f"后台任务启动：为沙盒 {sandbox_id} 的流 '{stream_name}' 生成总结。")
     
     try:
-        # --- 1. 解析服务和数据 ---
+        # --- 1. 解析需要的服务和数据 ---
         llm_service: LLMService = container.resolve("llm_service")
-        sandbox_store: Dict = container.resolve("sandbox_store")
-        snapshot_store: SnapshotStoreInterface = container.resolve("snapshot_store")
+        # 解析本插件专用的事件队列
+        event_queue: Dict[UUID, List[Dict[str, Any]]] = container.resolve("memoria_event_queue")
 
         config = AutoSynthesisConfig.model_validate(synthesis_config)
-        entries_to_summarize = [MemoryEntry.model_validate(d) for d in entries_to_summarize_dicts]
 
-        # --- 2. 调用 LLM ---
-        events_text = "\n".join([f"- {entry.content}" for entry in entries_to_summarize])
+        # --- 2. 准备并调用 LLM ---
+        events_text = "\n".join([f"- {entry['content']}" for entry in entries_to_summarize_dicts])
         prompt = config.prompt.format(events_text=events_text)
 
         response: LLMResponse = await llm_service.request(model_name=config.model, prompt=prompt)
@@ -2035,64 +2034,32 @@ async def run_synthesis_task(
             return
 
         summary_content = response.content.strip()
-        logger.info(f"LLM 成功生成总结 for sandbox {sandbox_id} a stream '{stream_name}'.")
+        logger.info(f"LLM 成功生成总结 for sandbox {sandbox_id} of stream '{stream_name}'.")
 
-        # --- 3. 更新世界状态（通过创建新快照）---
-        # 这是关键部分，它以不可变的方式更新世界
-        sandbox: Sandbox = sandbox_store.get(sandbox_id)
-        if not sandbox or not sandbox.head_snapshot_id:
-            logger.error(f"在后台任务中找不到沙盒 {sandbox_id} 或其头快照。")
-            return
-
-        head_snapshot = snapshot_store.get(sandbox.head_snapshot_id)
-        if not head_snapshot:
-            logger.error(f"数据不一致：找不到沙盒 {sandbox_id} 的头快照 {sandbox.head_snapshot_id}。")
-            return
+        # --- 3. 创建事件负载 (Payload) ---
+        # 这是一个简单的字典，包含了所有需要的信息，以便钩子实现函数可以处理它。
+        event_payload = {
+            "type": "memoria_synthesis_completed",
+            "stream_name": stream_name,
+            "content": summary_content,
+            "level": config.level,
+            "tags": ["synthesis", "auto-generated"],
+        }
         
-        # 创建一个新的、可变的 world_state 副本，保留所有其他状态
-        new_world_state = head_snapshot.world_state.copy()
-        memoria_data = new_world_state.get("memoria", {})
+        # --- 4. 将事件推送到队列中 ---
+        # 这种方式是线程安全的，因为 Python 的字典操作是原子的 (CPython GIL)。
+        # 如果未来使用真正的多进程或分布式系统，这里需要换成更健壮的队列（如 Redis）。
+        if sandbox_id not in event_queue:
+            event_queue[sandbox_id] = []
+        event_queue[sandbox_id].append(event_payload)
         
-        memoria = Memoria.model_validate(memoria_data)
-        stream = memoria.get_stream(stream_name)
-        if not stream:
-            # 这理论上不应该发生，因为触发任务时流必然存在
-            logger.warning(f"在后台任务中，流 '{stream_name}' 在 world.memoria 中消失了。")
-            return
-
-        stream.synthesis_trigger_counter = 0
-
-        # 创建并添加新的总结条目
-        summary_entry = MemoryEntry(
-            sequence_id=memoria.get_next_sequence_id(),
-            level=config.level,
-            tags=["synthesis", "auto-generated"],
-            content=summary_content
-        )
-        stream.entries.append(summary_entry)
-        memoria.set_stream(stream_name, stream)
-
-        # 将更新后的 memoria 数据写回到 new_world_state 的 'memoria' 键下
-        new_world_state["memoria"] = memoria.model_dump()
-
-        # 创建一个全新的快照，使用完整的、更新后的 new_world_state
-        new_snapshot = StateSnapshot(
-            sandbox_id=sandbox.id,
-            graph_collection=head_snapshot.graph_collection,
-            world_state=new_world_state,
-            parent_snapshot_id=head_snapshot.id,
-            triggering_input={"_system_event": "memoria_synthesis", "stream": stream_name}
-        )
-        
-        # 保存新快照并更新沙盒的头指针
-        snapshot_store.save(new_snapshot)
-        sandbox.head_snapshot_id = new_snapshot.id
-        logger.info(f"为沙盒 {sandbox_id} 创建了新的头快照 {new_snapshot.id}，包含新总结。")
+        logger.info(f"已为沙盒 {sandbox_id} 成功提交 'memoria_synthesis_completed' 事件。")
 
     except LLMRequestFailedError as e:
         logger.error(f"后台 LLM 请求在多次重试后失败: {e}", exc_info=False)
-    except Exception as e:
-        logger.exception(f"在执行 memoria 综合任务时发生未预料的错误: {e}")
+    except Exception:
+        # 使用 logger.exception 可以自动包含堆栈跟踪信息，非常适合捕获未知错误。
+        logger.exception(f"在执行 memoria 综合任务时发生未预料的错误 for sandbox {sandbox_id}")
 ```
 
 ### core_memoria/models.py
@@ -2165,7 +2132,7 @@ class Memoria(RootModel[Dict[str, Any]]):
 
     def set_stream(self, stream_name: str, stream_model: MemoryStream):
         """将一个 MemoryStream 模型实例写回到根字典中。"""
-        self.root[stream_name] = stream_model.model_dump(exclude_defaults=True)
+        self.root[stream_name] = stream_model.model_dump()
 
     def get_next_sequence_id(self) -> int:
         """获取并递增全局序列号，确保原子性。"""
@@ -2331,16 +2298,37 @@ class MemoriaAggregateRuntime(RuntimeInterface):
 # plugins/core_memoria/__init__.py
 
 import logging
-from backend.core.contracts import Container, HookManager
+from typing import Dict, List, Any
+from uuid import UUID
 
+# 从平台核心导入接口和类型
+from backend.core.contracts import Container, HookManager
+# 从 core_engine 契约中导入所需的上下文模型，以确保类型安全
+from plugins.core_engine.contracts import ExecutionContext
+
+# 导入本插件内部的组件
 from .runtimes import MemoriaAddRuntime, MemoriaQueryRuntime, MemoriaAggregateRuntime
+from .models import Memoria, MemoryEntry
 
 logger = logging.getLogger(__name__)
 
-# --- 钩子实现 (Hook Implementation) ---
+
+# --- 服务工厂 (Service Factory) ---
+def _create_memoria_event_queue() -> Dict[UUID, List[Dict[str, Any]]]:
+    """
+    工厂函数：创建一个简单的、内存中的事件队列。
+    这个队列是 core-memoria 插件私有的，用于暂存后台任务完成的事件。
+    - 键: sandbox_id
+    - 值: 一个包含事件负载字典的列表
+    """
+    logger.debug("创建 memoria_event_queue 单例。")
+    return {}
+
+
+# --- 钩子实现 (Hook Implementations) ---
+
 async def provide_memoria_runtimes(runtimes: dict) -> dict:
     """钩子实现：向引擎注册本插件提供的所有运行时。"""
-    
     memoria_runtimes = {
         "memoria.add": MemoriaAddRuntime,
         "memoria.query": MemoriaQueryRuntime,
@@ -2354,18 +2342,86 @@ async def provide_memoria_runtimes(runtimes: dict) -> dict:
             
     return runtimes
 
+async def apply_pending_synthesis(context: ExecutionContext) -> ExecutionContext:
+    """
+    钩子实现：监听 'before_graph_execution' 钩子。
+    在图的逻辑开始执行之前，检查是否有待处理的综合事件，
+    并以原子方式将它们应用到当前的世界状态中。
+    """
+    # 1. 从容器解析我们自己的事件队列
+    #    这是一个从 ExecutionContext 安全获取容器实例的技巧。
+    #    context.shared.services 是一个代理对象，但我们可以访问其内部的 _container。
+    container: Container = context.shared.services._container 
+    event_queue: Dict[UUID, List[Dict[str, Any]]] = container.resolve("memoria_event_queue")
+    sandbox_id = context.initial_snapshot.sandbox_id
+    
+    # 2. 检查并原子性地获取待处理事件
+    pending_events = event_queue.pop(sandbox_id, [])
+    if not pending_events:
+        return context  # 如果没有事件，快速退出，不做任何操作
+
+    logger.info(f"Memoria: 发现 {len(pending_events)} 个待处理的综合事件，正在应用到 world_state...")
+    
+    # 3. 将事件逻辑应用到 world_state
+    #    我们直接修改 context.shared.world_state，因为它是对真实世界状态的可变引用。
+    world_state = context.shared.world_state
+    
+    memoria_data = world_state.setdefault("memoria", {"__global_sequence__": 0})
+    memoria = Memoria.model_validate(memoria_data)
+    
+    for event in pending_events:
+        if event.get("type") == "memoria_synthesis_completed":
+            stream_name = event.get("stream_name")
+            if not stream_name:
+                continue
+                
+            stream = memoria.get_stream(stream_name)
+            if stream:
+                # 重置触发器计数器
+                stream.synthesis_trigger_counter = 0
+                
+                # 创建并添加新的总结条目
+                summary_entry = MemoryEntry(
+                    sequence_id=memoria.get_next_sequence_id(),
+                    level=event.get("level", "summary"),
+                    tags=event.get("tags", ["synthesis", "auto-generated"]),
+                    content=str(event.get("content", ""))
+                )
+                stream.entries.append(summary_entry)
+                memoria.set_stream(stream_name, stream)
+                logger.debug(f"已将新总结应用到流 '{stream_name}'。")
+    
+    # 将更新后的 memoria 模型写回到世界状态字典中
+    world_state["memoria"] = memoria.model_dump()
+
+    # 4. 返回被修改过的 context，以便后续流程使用更新后的状态
+    return context
+
+
 # --- 主注册函数 (Main Registration Function) ---
 def register_plugin(container: Container, hook_manager: HookManager):
     """这是 core-memoria 插件的注册入口，由平台加载器调用。"""
     logger.info("--> 正在注册 [core-memoria] 插件...")
 
-    # 本插件只提供运行时，它通过钩子与 core-engine 通信。
+    # 1. 注册本插件私有的事件队列服务
+    container.register("memoria_event_queue", _create_memoria_event_queue, singleton=True)
+    logger.debug("服务 'memoria_event_queue' 已注册。")
+
+    # 2. 注册钩子实现，将我们的运行时提供给 core-engine
     hook_manager.add_implementation(
         "collect_runtimes", 
         provide_memoria_runtimes, 
         plugin_name="core-memoria"
     )
-    logger.debug("钩子实现 'collect_runtimes' 已注册。")
+
+    # 3. 注册钩子实现，用于在图执行前处理后台任务的结果
+    hook_manager.add_implementation(
+        "before_graph_execution",
+        apply_pending_synthesis,
+        priority=50,  # 使用默认优先级
+        plugin_name="core-memoria"
+    )
+    logger.debug("钩子实现 'collect_runtimes' 和 'before_graph_execution' 已注册。")
 
     logger.info("插件 [core-memoria] 注册成功。")
 ```
@@ -2474,12 +2530,11 @@ from plugins.core_engine.contracts import (
 )
 
 # 从本插件的依赖注入文件中导入 "getters"
-from .dependencies import get_sandbox_store, get_snapshot_store, get_engine
+from .dependencies import get_sandbox_store, get_snapshot_store, get_engine, get_persistence_service
 
 # 【关键】从依赖插件 core_persistence 导入其服务和模型
-from plugins.core_persistence.service import PersistenceService
+from plugins.core_persistence.contracts import PersistenceServiceInterface
 from plugins.core_persistence.models import PackageManifest, PackageType
-from plugins.core_persistence.dependencies import get_persistence_service
 
 logger = logging.getLogger(__name__)
 
@@ -2593,7 +2648,7 @@ async def export_sandbox(
     sandbox_id: UUID,
     sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
     snapshot_store: SnapshotStoreInterface = Depends(get_snapshot_store),
-    persistence_service: PersistenceService = Depends(get_persistence_service)
+    persistence_service: PersistenceServiceInterface = Depends(get_persistence_service)
 ):
     """将一个沙盒及其完整历史导出为一个 .hevno.zip 包文件。"""
     sandbox = sandbox_store.get(sandbox_id)
@@ -2634,7 +2689,7 @@ async def import_sandbox(
     file: UploadFile = File(..., description="A .hevno.zip package file."),
     sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
     snapshot_store: SnapshotStoreInterface = Depends(get_snapshot_store),
-    persistence_service: PersistenceService = Depends(get_persistence_service)
+    persistence_service: PersistenceServiceInterface = Depends(get_persistence_service)
 ) -> Sandbox:
     """从一个 .hevno.zip 文件导入一个沙盒及其完整历史。"""
     if not file.filename or not file.filename.endswith(".hevno.zip"):
@@ -2817,6 +2872,7 @@ from plugins.core_engine.contracts import (
     ExecutionEngineInterface, 
     SnapshotStoreInterface
 )
+from plugins.core_persistence.contracts import PersistenceServiceInterface
 from .contracts import AuditorInterface
 
 # 每个依赖注入函数现在只做一件事：从容器中解析服务。
@@ -2834,6 +2890,10 @@ def get_sandbox_store(request: Request) -> Dict[UUID, Sandbox]:
 
 def get_auditor(request: Request) -> AuditorInterface:
     return request.app.state.container.resolve("auditor")
+
+def get_persistence_service(request: Request) -> PersistenceServiceInterface:
+    """FastAPI 依赖注入函数，用于从容器中获取 PersistenceService。"""
+    return request.app.state.container.resolve("persistence_service")
 ```
 
 ### core_logging/logging_config.yaml
@@ -2937,12 +2997,13 @@ from pathlib import Path
 from typing import Type, TypeVar, Tuple, Dict, Any, List
 from pydantic import BaseModel, ValidationError
 
+from .contracts import PersistenceServiceInterface
 from .models import PackageManifest, AssetType, FILE_EXTENSIONS
 
 T = TypeVar('T', bound=BaseModel)
 logger = logging.getLogger(__name__)
 
-class PersistenceService:
+class PersistenceService(PersistenceServiceInterface):
     """
     处理所有文件系统和包导入/导出操作的核心服务。
     """
@@ -3154,6 +3215,42 @@ async def list_assets_by_type(
     "author": "Hevno Team",
     "priority": 10
 }
+```
+
+### core_persistence/contracts.py
+```
+# plugins/core_persistence/contracts.py
+
+from __future__ import annotations
+from abc import ABC, abstractmethod
+from typing import Dict, Tuple, TypeVar
+from pydantic import BaseModel
+from .models import PackageManifest
+
+T = TypeVar('T', bound=BaseModel)
+
+class PersistenceServiceInterface(ABC):
+    """
+    定义了持久化服务必须提供的核心能力的抽象接口。
+    其他插件应该依赖于这个接口，而不是具体的 PersistenceService 类。
+    """
+
+    @abstractmethod
+    def export_package(self, manifest: PackageManifest, data_files: Dict[str, BaseModel]) -> bytes:
+        """
+        在内存中创建一个 .hevno.zip 包并返回其字节流。
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def import_package(self, zip_bytes: bytes) -> Tuple[PackageManifest, Dict[str, str]]:
+        """
+        解压包，读取清单和所有数据文件（作为原始字符串）。
+        """
+        raise NotImplementedError
+
+    # 注意：我们可以选择性地将其他方法（如 save_asset, load_asset）也加入接口，
+    # 取决于是否有其他插件需要这些功能。目前 sandbox_router 只用了上面两个。
 ```
 
 ### core_persistence/dependencies.py
@@ -3964,6 +4061,8 @@ class ExecutionEngine(SubGraphRunner):
             run_vars={"triggering_input": triggering_input},
             hook_manager=self.hook_manager
         )
+
+        await self.hook_manager.filter("before_graph_execution", context)
 
         main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
         if not main_graph_def: raise ValueError("'main' 图未找到。")

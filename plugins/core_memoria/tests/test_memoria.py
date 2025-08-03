@@ -25,7 +25,7 @@ from plugins.core_memoria.runtimes import MemoriaAddRuntime, MemoriaQueryRuntime
 from plugins.core_memoria.tasks import run_synthesis_task
 from plugins.core_memoria import apply_pending_synthesis
 # 从依赖插件 (core_llm) 的组件导入
-from plugins.core_llm.models import LLMResponse, LLMResponseStatus, LLMError, LLMErrorType
+from plugins.core_llm.contracts import LLMResponse, LLMResponseStatus, LLMError, LLMErrorType
 
 # Mark all tests in this file as async
 pytestmark = pytest.mark.asyncio

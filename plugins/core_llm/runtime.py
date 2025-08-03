@@ -4,9 +4,9 @@ from typing import Dict, Any
 
 from plugins.core_engine.contracts import ExecutionContext
 from plugins.core_engine.interfaces import RuntimeInterface
-from .models import LLMResponse, LLMRequestFailedError
 
-# --- 核心修改: 移除 @runtime_registry 装饰器 ---
+from .contracts import LLMResponse, LLMRequestFailedError
+
 class LLMRuntime(RuntimeInterface):
     """
     一个轻量级的运行时，它通过 Hevno LLM Gateway 发起 LLM 调用。

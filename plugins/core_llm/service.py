@@ -9,19 +9,22 @@ from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
-    RetryCallState, # 导入 RetryCallState
+    RetryCallState,
 )
 
 # --- 从本插件内部导入组件 ---
 from .manager import KeyPoolManager, KeyInfo
-from .models import (
+from .registry import ProviderRegistry
+
+
+from .contracts import (
+    LLMServiceInterface,
     LLMResponse,
     LLMError,
     LLMErrorType,
     LLMResponseStatus,
     LLMRequestFailedError,
 )
-from .registry import ProviderRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +32,10 @@ logger = logging.getLogger(__name__)
 def is_retryable_llm_error(retry_state: RetryCallState) -> bool:
     """
     一个 tenacity 重试条件函数。
-    【终极修复】它接收一个 RetryCallState 对象，我们需要从中提取真正的异常。
     """
-    # 从 retry_state 中获取导致失败的异常
     exception = retry_state.outcome.exception()
-
     if not exception:
-        return False # 如果没有异常，就不重试
+        return False
 
     return (
         isinstance(exception, LLMRequestFailedError) and
@@ -44,7 +44,8 @@ def is_retryable_llm_error(retry_state: RetryCallState) -> bool:
     )
 
 
-class LLMService:
+
+class LLMService(LLMServiceInterface):
     """
     LLM 网关的核心服务，负责协调所有组件并执行请求。
     实现了带有密钥轮换、状态管理和指数退避的健壮重试逻辑。
@@ -111,7 +112,6 @@ class LLMService:
             final_message = (
                 f"LLM request for model '{model_name}' failed permanently after {self.max_retries} attempt(s)."
             )
-            # exc_info=False 因为我们正在从原始异常链中引发一个新的、更清晰的异常
             logger.error(final_message, exc_info=False)
             raise LLMRequestFailedError(final_message, last_error=self.last_known_error) from e
         
@@ -180,10 +180,9 @@ class LLMService:
         return LLMResponse(status=LLMResponseStatus.ERROR, model_name=model_name, error_details=error)
 
 
-class MockLLMService:
+class MockLLMService(LLMServiceInterface):
     """
     一个 LLMService 的模拟实现，用于调试和测试。
-    它不进行任何网络调用，而是立即返回一个可预测的假响应。
     """
     def __init__(self, *args, **kwargs):
         logger.info("--- MockLLMService Initialized: Real LLM calls are disabled. ---")

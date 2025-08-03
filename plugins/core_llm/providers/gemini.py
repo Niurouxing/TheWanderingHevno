@@ -7,15 +7,13 @@ from google.generativeai import types as generation_types
 
 # --- 核心修改: 导入路径修正 ---
 from .base import LLMProvider
-from ..models import (
+from ..contracts import (
     LLMResponse,
     LLMError,
     LLMResponseStatus,
     LLMErrorType,
 )
-from ..registry import provider_registry
 
-@provider_registry.register("gemini", key_env_var="GEMINI_API_KEYS")
 class GeminiProvider(LLMProvider):
     """
     针对 Google Gemini API 的 LLMProvider 实现。
