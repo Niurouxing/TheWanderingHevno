@@ -30,3 +30,13 @@ class RuntimeRegistry:
             raise ValueError(f"Runtime '{name}' not found in registry.")
         return runtime_class()
 
+    def get_runtime_class(self, name: str) -> Type[RuntimeInterface]:
+        """
+        获取运行时类本身，而不是一个实例。
+        这对于访问类方法 (如 get_dependency_config) 非常有用。
+        """
+        runtime_class = self._registry.get(name)
+        if runtime_class is None:
+            raise ValueError(f"Runtime class for '{name}' not found in registry.")
+        return runtime_class
+

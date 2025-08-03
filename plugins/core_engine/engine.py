@@ -38,27 +38,19 @@ class NodeState(Enum):
     SKIPPED = auto()
 
 class GraphRun:
-    def __init__(self, context: ExecutionContext, graph_def: GraphDefinition):
+    def __init__(self, context: ExecutionContext, graph_def: GraphDefinition, dependencies: Dict[str, Set[str]]):
         self.context = context
         self.graph_def = graph_def
         if not self.graph_def:
             raise ValueError("GraphRun must be initialized with a valid GraphDefinition.")
+        
+        self.dependencies = dependencies
+        
         self.node_map: Dict[str, GenericNode] = {n.id: n for n in self.graph_def.nodes}
         self.node_states: Dict[str, NodeState] = {}
-        self.dependencies: Dict[str, Set[str]] = {}
-        self.subscribers: Dict[str, Set[str]] = {}
-
-    @classmethod
-    async def create(cls, context: ExecutionContext, graph_def: GraphDefinition) -> "GraphRun":
-        run = cls(context, graph_def)
-        run.dependencies = await build_dependency_graph_async(
-            [node.model_dump() for node in run.graph_def.nodes],
-            context.hook_manager
-        )
-        run.subscribers = run._build_subscribers()
-        run._detect_cycles()
-        run._initialize_node_states()
-        return run
+        self.subscribers: Dict[str, Set[str]] = self._build_subscribers()
+        self._detect_cycles()
+        self._initialize_node_states()
 
     def _build_subscribers(self) -> Dict[str, Set[str]]:
         subscribers = defaultdict(set)
@@ -194,7 +186,17 @@ class ExecutionEngine(SubGraphRunner):
         )
 
     async def _internal_execute_graph(self, graph_def: GraphDefinition, context: ExecutionContext, inherited_inputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        run = await GraphRun.create(context=context, graph_def=graph_def)
+        
+        # 1. 提升依赖图构建职责到这里
+        dependencies = await build_dependency_graph_async(
+            nodes=[node.model_dump() for node in graph_def.nodes],
+            runtime_registry=self.registry # <--- 正确地传递 registry
+        )
+
+        # 2. 将预先计算好的依赖图传递给 GraphRun 的构造函数
+        run = GraphRun(context=context, graph_def=graph_def, dependencies=dependencies)
+
+        # 3. 后续逻辑保持不变
         task_queue = asyncio.Queue()
         
         if inherited_inputs:

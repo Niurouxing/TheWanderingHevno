@@ -220,3 +220,43 @@ def codex_concurrent_world_write_data() -> dict:
 @pytest.fixture(scope="session")
 def codex_nonexistent_codex_data() -> dict:
     return {"graph": {"main": {"nodes": [{"id": "invoke_nonexistent", "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "nonexistent_codex"}]}}]}]}}, "codices": {}}
+
+@pytest.fixture(scope="session")
+def map_collection_with_collect_and_subgraph_node_ref() -> GraphCollection:
+    """
+    一个会触发依赖解析器 Bug 的图。
+    它的 'collect' 字段引用了只在子图中才存在的节点 'processor'，
+    这会导致依赖解析器错误地将 'processor' 识别为 'mapper' 的依赖。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "mapper",
+                    "run": [{
+                        "runtime": "system.flow.map",
+                        "config": {
+                            "list": ["apple", "banana"],
+                            "graph": "process_with_index",
+                            "using": {
+                                "fruit": "{{ source.item }}",
+                                "idx": "{{ source.index }}"
+                            },
+                            # 这就是问题的根源
+                            "collect": "{{ nodes.processor.output }}" 
+                        }
+                    }]
+                }
+            ]
+        },
+        "process_with_index": {
+            "nodes": [
+                {
+                    "id": "processor",
+                    "run": [{"runtime": "system.io.input", "config": {
+                        "value": "{{ f'Item: {nodes.fruit.output} at index {nodes.idx.output}' }}"
+                    }}]
+                }
+            ]
+        }
+    })

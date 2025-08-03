@@ -103,3 +103,36 @@ class TestEngineMapExecution:
         failed_item_result = map_result[1]
         assert "error" in failed_item_result["get_name"]
         assert "AttributeError" in failed_item_result["get_name"]["error"]
+
+    async def test_map_with_collect_referencing_subgraph_node(
+        self, 
+        test_engine: Tuple[ExecutionEngineInterface, Container, HookManager], 
+        map_collection_with_collect_and_subgraph_node_ref: GraphCollection
+    ):
+        """
+        测试：验证当 `collect` 宏引用子图内部节点时，依赖解析器不会错误地
+        将其识别为主图依赖，从而导致引擎调度失败。
+        
+        这个测试用例专门用于复现并验证一个已知的 Bug。
+        在 Bug 修复前，此测试会因 KeyError (run_output 为空) 而失败。
+        """
+        engine, _, _ = test_engine
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(), 
+            graph_collection=map_collection_with_collect_and_subgraph_node_ref
+        )
+        final_snapshot = await engine.step(initial_snapshot, {})
+        
+        # 在 Bug 状态下，final_snapshot.run_output 会是 {}
+        # 修复后，它应该包含 'mapper' 节点的结果
+        assert "mapper" in final_snapshot.run_output, \
+            "Engine failed to execute the 'mapper' node, likely due to incorrect dependency parsing."
+            
+        map_result = final_snapshot.run_output["mapper"]["output"]
+        
+        # 验证最终聚合的结果是否正确
+        expected_result = [
+            "Item: apple at index 0",
+            "Item: banana at index 1"
+        ]
+        assert map_result == expected_result

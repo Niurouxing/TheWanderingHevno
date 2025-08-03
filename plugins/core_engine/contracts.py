@@ -131,6 +131,20 @@ class RuntimeInterface(ABC):
     ) -> Dict[str, Any]:
         pass
 
+    @classmethod
+    def get_dependency_config(cls) -> Dict[str, Any]:
+        """
+        一个类方法，允许运行时声明其依赖解析行为。
+        解析器将使用这些元数据来指导其扫描过程。
+
+        返回的字典可以包含：
+        - 'ignore_fields': 一个字段名列表。解析器将完全跳过对这些字段的值进行依赖推断。
+        - 'scan_only_fields': 一个字段名列表。解析器将只扫描这些字段，忽略其他所有字段。
+
+        默认实现返回一个空字典，表示采用标准的全量扫描策略。
+        """
+        return {}
+
 class MacroEvaluationServiceInterface(ABC):
     """为宏求值逻辑定义服务接口。"""
     @abstractmethod

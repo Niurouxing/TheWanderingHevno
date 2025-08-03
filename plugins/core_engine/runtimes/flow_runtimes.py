@@ -58,6 +58,16 @@ class MapRuntime(RuntimeInterface):
     """
     template_fields = ["using", "collect"]
 
+    @classmethod
+    def get_dependency_config(cls) -> Dict[str, Any]:
+        """
+        我们告诉解析器，'using' 和 'collect' 字段包含的 'nodes.xxx' 
+        是在子图的上下文中，不应被视为主图的依赖。
+        """
+        return {
+            "ignore_fields": ["using", "collect"]
+        }
+
     async def execute(self, config: Dict[str, Any], context: ExecutionContext, subgraph_runner: Optional[SubGraphRunner] = None, **kwargs) -> Dict[str, Any]:
         if not subgraph_runner:
             raise ValueError("MapRuntime requires a SubGraphRunner.")

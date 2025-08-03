@@ -2,6 +2,7 @@
 import pytest
 from uuid import uuid4
 
+# --- 修改 imports ---
 # 从平台核心导入
 from backend.core.hooks import HookManager
 
@@ -9,38 +10,56 @@ from backend.core.hooks import HookManager
 from plugins.core_engine.contracts import StateSnapshot
 from plugins.core_engine.dependency_parser import build_dependency_graph_async
 from plugins.core_engine.models import GraphCollection, GenericNode
+from plugins.core_engine.registry import RuntimeRegistry # <-- 新增导入
+from plugins.core_engine.runtimes.io_runtimes import InputRuntime # <-- 新增导入, 用于注册一个真实的运行时
+
 
 @pytest.mark.asyncio
 class TestDependencyParser:
     """测试依赖解析器。"""
 
+    # --- 新增一个 fixture 来提供 RuntimeRegistry ---
     @pytest.fixture
-    def hook_manager(self) -> HookManager:
-        return HookManager()
+    def runtime_registry(self) -> RuntimeRegistry:
+        """
+        创建一个包含一个名为 'test' 的简单运行时的注册表。
+        这样我们的测试用例就能正确解析了。
+        """
+        registry = RuntimeRegistry()
+        # 注册一个真实的运行时类，这样 get_runtime_class 才能工作
+        registry.register("test", InputRuntime)
+        return registry
 
-    async def test_simple_dependency(self, hook_manager: HookManager):
+    # --- 修改所有测试用例的签名和调用 ---
+
+    async def test_simple_dependency(self, runtime_registry: RuntimeRegistry):
         nodes = [{"id": "A", "run": []}, {"id": "B", "run": [{"runtime": "test", "config": {"value": "{{ nodes.A.output }}"}}]}]
-        # 【修正】直接传递字典列表，而不是 GenericNode 对象列表
-        deps = await build_dependency_graph_async(nodes, hook_manager)
+        
+        # 将 runtime_registry 传递给函数
+        deps = await build_dependency_graph_async(nodes, runtime_registry)
+        
         assert deps["B"] == {"A"}
+        assert deps.get("A", set()) == set()
 
-    async def test_explicit_dependency_with_depends_on(self, hook_manager: HookManager):
+    async def test_explicit_dependency_with_depends_on(self, runtime_registry: RuntimeRegistry):
         nodes = [
             {"id": "A", "run": []},
             {"id": "B", "depends_on": ["A"], "run": [{"runtime": "test", "config": {"value": "{{ world.some_var }}"}}]}
         ]
-        # 【修正】直接传递字典列表
-        deps = await build_dependency_graph_async(nodes, hook_manager)
+        
+        deps = await build_dependency_graph_async(nodes, runtime_registry)
+        
         assert deps["B"] == {"A"}
         
-    async def test_combined_dependencies(self, hook_manager: HookManager):
+    async def test_combined_dependencies(self, runtime_registry: RuntimeRegistry):
         nodes = [
             {"id": "A", "run": []},
             {"id": "B", "run": []},
             {"id": "C", "depends_on": ["A"], "run": [{"runtime": "test", "config": {"value": "{{ nodes.B.output }}"}}]}
         ]
-        # 【修正】直接传递字典列表
-        deps = await build_dependency_graph_async(nodes, hook_manager)
+        
+        deps = await build_dependency_graph_async(nodes, runtime_registry)
+        
         assert deps["C"] == {"A", "B"}
 
 @pytest.mark.asyncio
