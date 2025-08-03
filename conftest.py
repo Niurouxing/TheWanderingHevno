@@ -2,20 +2,24 @@
 import os 
 import pytest
 import pytest_asyncio
+import asyncio
 from fastapi.testclient import TestClient
-from typing import Generator, AsyncGenerator
+from typing import Generator, AsyncGenerator, Tuple
 
 # 1. 应用工厂导入
 from backend.app import create_app
 
-# --- MODIFICATION START ---
+
 # Import the concrete implementations for use in fixtures.
 from backend.container import Container
 from backend.core.hooks import HookManager
+from backend.core.tasks import BackgroundTaskManager
 
 # Import the data models and ABCs for type hinting.
-from backend.core.contracts import GraphCollection, Sandbox, StateSnapshot, SnapshotStoreInterface
-
+from backend.core.contracts import (
+    GraphCollection, Sandbox, StateSnapshot, SnapshotStoreInterface,
+    BackgroundTaskManager as BackgroundTaskManagerInterface 
+)
 # Import other components needed for the test_engine fixture
 from plugins.core_engine.engine import ExecutionEngine
 from plugins.core_engine.registry import RuntimeRegistry
@@ -24,7 +28,6 @@ from plugins.core_engine.runtimes.base_runtimes import InputRuntime, SetWorldVar
 from plugins.core_engine.runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
 from plugins.core_llm import register_plugin as register_llm_plugin
 from plugins.core_codex import register_plugin as register_codex_plugin
-# --- MODIFICATION END ---
 
 
 # --- Session-wide Fixtures ---
@@ -59,36 +62,32 @@ def test_client(app) -> Generator[TestClient, None, None]:
     一个函数级别的 fixture，为每个测试提供一个干净的 TestClient 和状态。
     它依赖于会话级别的 app fixture。
     """
-    # The TestClient context manager runs the app's lifespan events.
-    # We must access app.state *inside* this context.
     with TestClient(app) as client:
-        # Now client.app.state is guaranteed to be populated.
         container: Container = client.app.state.container
         
-        # 获取由插件注册的存储服务
         sandbox_store: dict = container.resolve("sandbox_store")
         snapshot_store: SnapshotStoreInterface = container.resolve("snapshot_store")
         
-        # 在每次测试前清理状态
         sandbox_store.clear()
         snapshot_store.clear()
 
         yield client
-    # No explicit cleanup needed here, as state is cleared before each test.
 
 
-# The test_engine integration fixture is moved here to be accessible by all plugin tests.
-@pytest_asyncio.fixture 
+@pytest_asyncio.fixture
 async def test_engine() -> AsyncGenerator[ExecutionEngine, None]:
     """
-    为集成测试提供一个完全配置好的 ExecutionEngine 实例。
-    这个 fixture 模拟了应用启动时的插件加载和服务装配过程。
+    【修改】这个 fixture 现在将返回一个元组：(engine, container, hook_manager)
+    以便测试可以访问和操作这些核心组件。
     """
     # 1. 创建平台核心服务
-    #    Now using the concrete implementations imported above.
     container = Container()
     hook_manager = HookManager()
-
+    
+    # 【新增】手动创建和注册后台任务管理器
+    task_manager = BackgroundTaskManager(container, max_workers=2) # 使用少量工作者进行测试
+    container.register("task_manager", lambda: task_manager, singleton=True)
+    
     # 2. 手动注册 core_engine 自身的服务
     container.register("snapshot_store", lambda: SnapshotStore(), singleton=True)
     container.register("sandbox_store", lambda: {}, singleton=True)
@@ -110,7 +109,7 @@ async def test_engine() -> AsyncGenerator[ExecutionEngine, None]:
     runtime_registry.register("system.call", CallRuntime)
     runtime_registry.register("system.map", MapRuntime)
 
-    # 4. 手动注册依赖插件 (core_llm, core_codex) 的服务和钩子
+    # 4. 手动注册依赖插件的服务和钩子
     register_llm_plugin(container, hook_manager)
     register_codex_plugin(container, hook_manager)
 
@@ -122,7 +121,15 @@ async def test_engine() -> AsyncGenerator[ExecutionEngine, None]:
     # 6. 从容器中解析出最终配置好的引擎实例
     engine = container.resolve("execution_engine")
     
-    yield engine
+    # 启动后台任务管理器
+    task_manager.start()
+
+    # yield 一个元组，包含所有需要的组件
+    yield engine, container, hook_manager
+    
+    # 在 fixture 结束时，优雅地停止后台任务管理器
+    await task_manager.stop()
+
 
 
 # --- Shared Graph Collection Fixtures ---

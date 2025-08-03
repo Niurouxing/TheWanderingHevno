@@ -3,7 +3,7 @@
 from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Set, TypeVar
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Set, TypeVar # 增加 Coroutine
 from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, RootModel, ConfigDict, field_validator
 from abc import ABC, abstractmethod
@@ -164,3 +164,11 @@ class Reportable(ABC): # 如果还没定义成抽象类，现在定义
     
     @abstractmethod
     async def generate_report(self) -> Any: pass
+
+class BackgroundTaskManager(ABC):
+    @abstractmethod
+    def start(self) -> None: raise NotImplementedError
+    @abstractmethod
+    async def stop(self) -> None: raise NotImplementedError
+    @abstractmethod
+    def submit_task(self, coro_func: Callable[..., Coroutine], *args: Any, **kwargs: Any) -> None: raise NotImplementedError

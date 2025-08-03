@@ -14,7 +14,7 @@ from backend.core.contracts import (
     EngineStepStartContext, EngineStepEndContext,
     BeforeConfigEvaluationContext, AfterMacroEvaluationContext,
     NodeExecutionStartContext, NodeExecutionSuccessContext, NodeExecutionErrorContext,
-    HookManager
+    HookManager, SnapshotStoreInterface
 )
 from .dependency_parser import build_dependency_graph_async
 from .registry import RuntimeRegistry
@@ -142,7 +142,7 @@ class ExecutionEngine(SubGraphRunner):
         )
 
         main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
-        if not main_graph_def: raise ValueError("'main' graph not found.")
+        if not main_graph_def: raise ValueError("'main' 图未找到。")
         
         final_node_states = await self._internal_execute_graph(main_graph_def, context)
         
@@ -150,6 +150,18 @@ class ExecutionEngine(SubGraphRunner):
             context=context, 
             final_node_states=final_node_states, 
             triggering_input=triggering_input
+        )
+
+        # 从容器中解析快照存储服务并保存
+        snapshot_store: SnapshotStoreInterface = self.container.resolve("snapshot_store")
+        snapshot_store.save(next_snapshot)
+
+        # 发布“快照已提交”事件，这是一个“即发即忘”的通知。
+        # 我们将容器实例也传递过去，方便订阅者直接使用，无需再次解析。
+        await self.hook_manager.trigger(
+            "snapshot_committed", 
+            snapshot=next_snapshot,
+            container=self.container
         )
 
         await self.hook_manager.trigger(
