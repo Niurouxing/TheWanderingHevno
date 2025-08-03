@@ -12,10 +12,10 @@ from plugins.core_engine.interfaces import RuntimeInterface
 from plugins.core_engine.evaluation import evaluate_data, build_evaluation_context
 from plugins.core_engine.utils import DotAccessibleDict
 
-# 从平台核心导入数据契约
-from backend.core.contracts import ExecutionContext
+from plugins.core_engine.contracts import ExecutionContext # 依赖 core-engine 的契约
 
-# 从本插件内部导入模型
+
+
 from .models import CodexCollection, ActivatedEntry, TriggerMode
 
 logger = logging.getLogger(__name__)

@@ -4,7 +4,9 @@ import logging
 from typing import List
 from fastapi import APIRouter
 
-from backend.core.contracts import Container, HookManager, Reportable
+from backend.core.contracts import Container, HookManager
+from .contracts import Reportable # 导入本插件的契约
+
 from .auditor import Auditor
 from .base_router import router as base_router
 from .sandbox_router import router as sandbox_router

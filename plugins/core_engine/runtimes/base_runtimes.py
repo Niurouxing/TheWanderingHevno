@@ -5,7 +5,7 @@ from typing import Dict, Any
 
 
 from ..interfaces import RuntimeInterface
-from backend.core.contracts import ExecutionContext
+from ..contracts import ExecutionContext
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,9 @@ import zipfile
 from uuid import UUID
 
 from fastapi.testclient import TestClient
-from backend.core.contracts import GraphCollection, Container, SnapshotStoreInterface
+
+from backend.core.contracts import Container
+from plugins.core_engine.contracts import GraphCollection, SnapshotStoreInterface
 
 @pytest.mark.e2e
 class TestPersistenceAPI:

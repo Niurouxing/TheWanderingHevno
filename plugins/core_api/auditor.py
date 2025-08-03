@@ -1,7 +1,7 @@
 # plugins/core_api/auditor.py
 
 import asyncio
-from backend.core.contracts import Reportable
+from .contracts import Reportable
 from typing import Any, Dict, List
 
 

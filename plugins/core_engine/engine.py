@@ -8,13 +8,14 @@ from typing import Dict, Any, Set, List, Optional
 from collections import defaultdict
 import traceback
 
-from backend.core.contracts import (
-    GraphCollection, GraphDefinition, GenericNode, Container,
+from backend.core.contracts import Container, HookManager
+from .contracts import (
+    GraphDefinition, GenericNode,
     ExecutionContext,
     EngineStepStartContext, EngineStepEndContext,
     BeforeConfigEvaluationContext, AfterMacroEvaluationContext,
     NodeExecutionStartContext, NodeExecutionSuccessContext, NodeExecutionErrorContext,
-    HookManager, SnapshotStoreInterface
+    SnapshotStoreInterface
 )
 from .dependency_parser import build_dependency_graph_async
 from .registry import RuntimeRegistry

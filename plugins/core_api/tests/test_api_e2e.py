@@ -7,8 +7,11 @@ import json
 from fastapi.testclient import TestClient
 from uuid import uuid4, UUID
 
-# 从平台核心契约导入数据模型
-from backend.core.contracts import GraphCollection
+# 从平台核心契约导入
+from backend.core.contracts import Container
+
+# 从依赖插件的契约导入数据模型和接口
+from plugins.core_engine.contracts import GraphCollection, SnapshotStoreInterface
 
 @pytest.mark.e2e
 class TestApiSandboxLifecycle:

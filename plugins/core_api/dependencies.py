@@ -1,17 +1,16 @@
 # plugins/core_api/dependencies.py
 
-from typing import Dict, Any, List
+from typing import Dict, Any
 from uuid import UUID
 from fastapi import Request
 
-# 只从 backend.core.contracts 导入数据模型和接口
-from backend.core.contracts import (
+from plugins.core_engine.contracts import (
     Sandbox, 
     StateSnapshot,
     ExecutionEngineInterface, 
-    SnapshotStoreInterface,
-    AuditorInterface
+    SnapshotStoreInterface
 )
+from .contracts import AuditorInterface
 
 # 每个依赖注入函数现在只做一件事：从容器中解析服务。
 # 类型提示使用我们新定义的接口。

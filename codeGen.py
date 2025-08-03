@@ -119,8 +119,9 @@ if __name__ == "__main__":
     paths = [
         "./backend", 
         "./plugins", 
-        # "./tests", 
-        # "./conftest.py",
+        "./tests", 
+        "./conftest.py",
+        # "./plugins/core_memoria",
     ]
     output_path = "code_collection.md"
     result = main(paths, output_path)

@@ -5,18 +5,25 @@ import uuid
 from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
+
+# 从平台核心契约导入
 from backend.core.contracts import (
+    Container, 
+    BackgroundTaskManager,
+    HookManager
+)
+# 从依赖插件 (core_engine) 的契约中导入
+from plugins.core_engine.contracts import (
     Sandbox, 
     StateSnapshot, 
     GraphCollection, 
     ExecutionContext, 
     SharedContext, 
-    Container, 
-    BackgroundTaskManager,
-    HookManager
 )
+# 从本插件的组件导入
 from plugins.core_memoria.runtimes import MemoriaAddRuntime, MemoriaQueryRuntime, MemoriaAggregateRuntime
 from plugins.core_memoria.tasks import run_synthesis_task
+# 从依赖插件 (core_llm) 的组件导入
 from plugins.core_llm.models import LLMResponse, LLMResponseStatus, LLMError, LLMErrorType
 
 # Mark all tests in this file as async

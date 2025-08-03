@@ -3,9 +3,10 @@
 import logging
 from typing import Dict, Any, List
 
-from backend.core.contracts import ExecutionContext, BackgroundTaskManager
-from plugins.core_engine.interfaces import RuntimeInterface
+from backend.core.contracts import BackgroundTaskManager 
+from plugins.core_engine.contracts import ExecutionContext
 
+from plugins.core_engine.interfaces import RuntimeInterface
 from .models import Memoria, MemoryEntry
 from .tasks import run_synthesis_task
 

@@ -4,8 +4,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 
-# 从平台核心导入共享的数据契约
-from backend.core.contracts import ExecutionContext
+from .contracts import ExecutionContext
 
 class SubGraphRunner(ABC):
     """定义执行子图能力的抽象接口。"""

@@ -2,17 +2,15 @@
 import logging
 from typing import List, Dict, Any
 
-from backend.core.contracts import (
-    Container, 
+from backend.core.contracts import Container, BackgroundTaskManager
+from plugins.core_engine.contracts import (
     Sandbox, 
     StateSnapshot,
-    SnapshotStoreInterface,
-    BackgroundTaskManager
+    SnapshotStoreInterface
 )
+
 from .models import MemoryEntry, MemoryStream, Memoria, AutoSynthesisConfig
 from plugins.core_llm.service import LLMService
-from plugins.core_llm.models import LLMResponse, LLMRequestFailedError
-
 
 logger = logging.getLogger(__name__)
 

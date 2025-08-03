@@ -10,17 +10,10 @@ from typing import Generator, AsyncGenerator, Tuple
 from backend.app import create_app
 
 
-# Import the concrete implementations for use in fixtures.
+# 2. 从具体实现位置导入类，用于在 Fixture 中实例化
 from backend.container import Container
 from backend.core.hooks import HookManager
 from backend.core.tasks import BackgroundTaskManager
-
-# Import the data models and ABCs for type hinting.
-from backend.core.contracts import (
-    GraphCollection, Sandbox, StateSnapshot, SnapshotStoreInterface,
-    BackgroundTaskManager as BackgroundTaskManagerInterface 
-)
-# Import other components needed for the test_engine fixture
 from plugins.core_engine.engine import ExecutionEngine
 from plugins.core_engine.registry import RuntimeRegistry
 from plugins.core_engine.state import SnapshotStore
@@ -29,6 +22,20 @@ from plugins.core_engine.runtimes.control_runtimes import ExecuteRuntime, CallRu
 from plugins.core_llm import register_plugin as register_llm_plugin
 from plugins.core_codex import register_plugin as register_codex_plugin
 
+
+# 3. 从契约导入接口和数据模型，主要用于类型提示
+# 平台核心契约
+from backend.core.contracts import (
+    BackgroundTaskManager as BackgroundTaskManagerInterface,
+    Container as ContainerInterface
+)
+# 依赖插件 (core-engine) 的契约
+from plugins.core_engine.contracts import (
+    GraphCollection, 
+    Sandbox, 
+    StateSnapshot, 
+    SnapshotStoreInterface
+)
 
 # --- Session-wide Fixtures ---
 

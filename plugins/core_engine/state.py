@@ -9,17 +9,19 @@ from typing import Dict, Any, List, Optional
 from fastapi import Request
 from pydantic import ValidationError
 
-from backend.core.contracts import (
+
+from backend.core.contracts import HookManager, Container
+from .contracts import (
     Sandbox, 
     StateSnapshot, 
     ExecutionContext, 
     SharedContext,
     BeforeSnapshotCreateContext,
-    GraphCollection,
-    HookManager,
-    Container
+    GraphCollection
 )
+
 from .utils import DotAccessibleDict, ServiceResolverProxy 
+
 
 # --- Section 1: 状态存储类 (包含逻辑) ---
 

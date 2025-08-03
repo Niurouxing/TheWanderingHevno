@@ -6,15 +6,13 @@ from uuid import uuid4
 
 
 from backend.container import Container
-from backend.core.contracts import ExecutionContext, StateSnapshot, GraphCollection
 from backend.core.hooks import HookManager
 
-# 从本插件导入
+from plugins.core_engine.contracts import ExecutionContext, StateSnapshot, GraphCollection
 from plugins.core_engine.evaluation import evaluate_expression, evaluate_data, build_evaluation_context
 from plugins.core_engine.state import create_main_execution_context
 from plugins.core_engine.runtimes.base_runtimes import SetWorldVariableRuntime
 
-# 从依赖插件导入
 from plugins.core_llm.service import MockLLMService
 
 @pytest.fixture

@@ -4,8 +4,8 @@ import pytest
 from pydantic import ValidationError
 from uuid import uuid4
 
-# 从平台核心导入最基础的数据模型
-from backend.core.contracts import (
+
+from plugins.core_engine.contracts import (
     GraphCollection,
     GenericNode,
     RuntimeInstruction,

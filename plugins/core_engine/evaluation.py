@@ -12,7 +12,7 @@ import json
 import re as re_module
 
 from .utils import DotAccessibleDict
-from backend.core.contracts import ExecutionContext
+from .contracts import ExecutionContext
 
 INLINE_MACRO_REGEX = re.compile(r"{{\s*(.+?)\s*}}", re.DOTALL)
 MACRO_REGEX = re.compile(r"^{{\s*(.+)\s*}}$", re.DOTALL)

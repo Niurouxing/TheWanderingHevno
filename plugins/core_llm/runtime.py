@@ -2,7 +2,7 @@
 
 from typing import Dict, Any
 
-from backend.core.contracts import ExecutionContext
+from plugins.core_engine.contracts import ExecutionContext
 from plugins.core_engine.interfaces import RuntimeInterface
 from .models import LLMResponse, LLMRequestFailedError
 

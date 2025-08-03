@@ -7,7 +7,7 @@ import asyncio
 from ..interfaces import RuntimeInterface, SubGraphRunner
 from ..evaluation import evaluate_data, evaluate_expression, build_evaluation_context
 from ..utils import DotAccessibleDict
-from backend.core.contracts import ExecutionContext
+from ..contracts import ExecutionContext
 
 
 class ExecuteRuntime(RuntimeInterface):

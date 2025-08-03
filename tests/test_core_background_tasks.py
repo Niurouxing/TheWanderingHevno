@@ -5,21 +5,21 @@ import asyncio
 from uuid import uuid4, UUID
 from typing import Tuple
 
-# --- 核心修改：修正导入路径 ---
-# 从核心契约中导入接口和数据模型
 from backend.core.contracts import (
-    HookManager, StateSnapshot,
+    HookManager,
     BackgroundTaskManager as BackgroundTaskManagerInterface,
+    Container as ContainerInterface 
+)
+
+from plugins.core_engine.contracts import (
+    StateSnapshot,
     SnapshotStoreInterface,
     GraphCollection,
     ExecutionEngineInterface,
-    # 【修改】从契约中只导入抽象的 Container 接口，用于类型提示
-    Container as ContainerInterface 
 )
-# 从具体实现位置导入具体的类
-from backend.container import Container # 【新增】导入具体的 Container 实现
+
+from backend.container import Container
 from plugins.core_engine.engine import ExecutionEngine
-# ------------------------------------
 
 # pytest 标记，表示此文件中的所有测试都是异步的
 pytestmark = pytest.mark.asyncio

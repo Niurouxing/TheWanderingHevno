@@ -10,7 +10,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 
 # 从平台核心契约导入数据模型和接口
-from backend.core.contracts import (
+from plugins.core_engine.contracts import (
     Sandbox, 
     StateSnapshot, 
     GraphCollection,
