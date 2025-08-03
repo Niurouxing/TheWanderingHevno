@@ -1,0 +1,8 @@
+{
+    "name": "core-memoria",
+    "version": "1.0.0",
+    "description": "Provides a dynamic memory system for storing, synthesizing, and querying events, enabling short-term memory and long-term reflection for AI agents.",
+    "author": "Hevno Team",
+    "priority": 40,
+    "dependencies": ["core-engine", "core-llm"]
+}
