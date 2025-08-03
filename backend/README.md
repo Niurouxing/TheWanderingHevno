@@ -790,3 +790,217 @@ uvicorn backend.main:app --reload
 
 通过这个系统，Hevno 的世界可以像乐高积木一样被无限组合和扩展。我们期待看到您创造的精彩插件！
 
+
+## `core-memoria` 插件文档
+
+### 1. 简介：赋予世界记忆与反思的能力
+
+`core-memoria` 是 Hevno 引擎中的一个核心插件，其使命是为您的 AI 世界提供一个强大、持久且可查询的记忆系统。它不仅仅是一个日志记录器，更是一个能让 AI 代理和世界本身从历史中学习、演化和反思的动态知识库。
+
+通过 `core-memoria`，您可以轻松实现：
+*   **短期记忆**：为 LLM 提供最近发生的事件，确保对话和行为的连贯性。
+*   **长期反思**：自动将一系列零散事件**综合**成更高层次的“里程碑”或“章节总结”。
+*   **情境感知**：根据标签或层级检索相关的历史记忆，让 AI 能够将新旧信息联系起来。
+*   **角色心路历程**：为每个角色或主题维护独立的“记忆回廊”，追踪他们的成长与变化。
+
+`core-memoria` 将离散的事件流，编织成一张富有深度和因果关系的智慧之网，是构建真正动态、可交互 AI 世界的关键。
+
+### 2. 核心概念：世界状态中的“记忆宫殿”
+
+遵循 Hevno“状态先行”的哲学，所有记忆的最终真相都驻留在持久化的 `world_state` 中一个名为 `memoria` 的结构里。您可以将 `world.memoria` 想象成一个可扩展的“记忆宫殿”。
+
+#### 2.1 记忆回廊 (Memory Stream)
+
+“记忆宫殿” (`world.memoria`) 是一个字典，它的每一个键都代表一个独立的“记忆回廊”（Stream）。这允许您为不同的实体或主题（如主线故事、特定角色的思想、某个组织的历史）分别记录记忆。
+
+```json
+// world.memoria 的结构
+"world": {
+  "memoria": {
+    "__global_sequence__": 12, // 内部使用的全局序列号
+    "main_story": { /* ... 主线故事的 MemoryStream 对象 ... */ },
+    "character_thoughts_humphrey": { /* ... 汉弗莱爵士心路历程的 MemoryStream 对象 ... */ }
+  }
+}
+```
+
+#### 2.2 记忆条目 (Memory Entry)
+
+每个“记忆回廊”中都包含一个按时间顺序排列的 `entries` 列表，列表中的每一项都是一个结构化的“记忆条目”。
+
+```json
+// 一个 MemoryEntry 对象的示例
+{
+  "id": "a9b1c2d3-...",
+  "sequence_id": 5, // 全局唯一的、严格递增的因果序列号
+  "level": "event",
+  "tags": ["combat", "goblin"],
+  "content": "玩家在森林入口遭遇并击败了三只哥布林。"
+}
+```
+
+*   `sequence_id`：**这至关重要**。它是一个在**所有**记忆流中都单调递增的整数，精确地记录了事件在游戏世界内的**因果顺序**。它不受现实时间影响，确保了读档和回滚的确定性。
+*   `level`: 记忆的层级，如 `"event"`, `"dialogue"`, `"milestone"`, `"thought"`。用于分层检索。
+*   `tags`: 一个关键词列表，用于实现强大的相关性检索。
+*   `content`: 记忆的文本内容。
+
+### 3. 使用指南：运行时 (Runtimes)
+
+`core-memoria` 插件提供了一套简洁、强大的运行时（积木块），让您可以轻松地与记忆系统交互，而无需编写复杂的代码。
+
+#### 3.1 `memoria.add`：烙印新记忆
+
+这是将一个新事件转化为持久记忆的核心指令。
+
+*   **功能**：向指定的记忆流中添加一条新的条目。
+*   **配置参数**：
+    *   `stream` (必需): `string` - 要添加到的记忆流的名称。
+    *   `content` (必需): `any` - 记忆的内容。宏求值后会被转换为字符串。
+    *   `level` (可选): `string` - 该条目的层级，默认为 `"event"`。
+    *   `tags` (可选): `List[string]` - 与该条目关联的标签列表。
+
+*   **示例**：
+    ```json
+    {
+      "id": "player_enters_cave",
+      "run": [{
+        "runtime": "memoria.add",
+        "config": {
+          "stream": "main_story",
+          "level": "exploration_event",
+          "tags": ["dungeon", "cave", "danger"],
+          "content": "{{ f'玩家 {world.player_name} 小心地进入了那个散发着恶臭的洞穴。' }}"
+        }
+      }]
+    }
+    ```
+
+#### 3.2 `memoria.query`：检索历史片段
+
+这个运行时允许您根据多种条件，以声明式的方式从记忆流中检索信息。
+
+*   **功能**：查询一个记忆流并返回一个符合条件的记忆条目列表。
+*   **配置参数**：
+    *   `stream` (必需): `string` - 要查询的记忆流的名称。
+    *   `latest` (可选): `int` - 只返回最新的 N 条记忆。
+    *   `levels` (可选): `List[string]` - 只返回 `level` 在此列表中的条目。
+    *   `tags` (可选): `List[string]` - 返回至少包含**一个**指定标签的条目。
+    *   `order` (可选): `"ascending"` 或 `"descending"` - 返回结果的排序顺序，基于 `sequence_id`。默认为 `"ascending"`。
+
+*   **示例：为 LLM 获取最近的 3 个事件作为短期记忆**
+    ```json
+    {
+      "id": "gather_short_term_memory",
+      "run": [{
+        "runtime": "memoria.query",
+        "config": {
+          "stream": "main_story",
+          "latest": 3,
+          "order": "ascending"
+        }
+      }]
+    }
+    // 指令执行后，pipe.output 将会是一个包含最多3个记忆条目对象的列表
+    ```
+
+#### 3.3 `memoria.aggregate`：呈现记忆文本
+
+这个运行时是一个便利工具，用于将 `memoria.query` 返回的结构化列表，格式化为一段单一、可读的文本。
+
+*   **功能**：将一个记忆条目列表聚合成一个字符串。
+*   **配置参数**：
+    *   `entries` (必需): `List[dict]` - 一个记忆条目对象的列表，通常直接来自上一步的 `pipe.output`。
+    *   `template` (可选): `string` - 一个格式化字符串，用于处理列表中的每一个条目。您可以使用 `{content}`, `{level}`, `{tags}`, `{sequence_id}` 等占位符。默认为 `"{content}"`。
+    *   `joiner` (可选): `string` - 用于连接所有格式化后部分的字符串。默认为 `"\n\n"`。
+
+*   **示例：将查询结果格式化为 LLM 的背景提要**
+    ```json
+    {
+      "id": "format_memory_for_llm",
+      "depends_on": ["gather_short_term_memory"],
+      "run": [{
+        "runtime": "memoria.aggregate",
+        "config": {
+          "entries": "{{ nodes.gather_short_term_memory.output }}",
+          "template": "- {content} (Tags: {tags})",
+          "joiner": "\\n"
+        }
+      }]
+    }
+    // 指令执行后，pipe.output 将是一段格式化好的文本，例如：
+    // - 玩家进入了洞穴 (Tags: dungeon, cave)
+    // - 玩家点燃了火把 (Tags: light, safety)
+    ```
+> **【未来规划】**
+> `memoria.aggregate` 的功能（将列表格式化为字符串）非常通用。在未来的版本中，我们计划推出一个更强大的、系统级的 `system.format` 或 `system.join` 运行时来处理所有类似的格式化任务。届时，`memoria.aggregate` 将被视为一个便利的别名，但我们鼓励用户迁移到更通用的 `system` 运行时，以保持图逻辑的清晰和一致。
+
+### 4. 自动化功能：记忆的自动综合
+
+`core-memoria` 最强大的功能之一是它能够自动进行“记忆综合”——即在后台调用 LLM，将一系列零散的事件总结成一个更高层次的“里程碑”或“章节概要”。
+
+这个过程是**完全异步和非阻塞的**，不会影响主图的执行性能。
+
+#### 4.1 如何配置
+
+您可以通过修改 `world.memoria` 中特定流的 `config` 对象来启用和配置此功能。这可以在图的任何地方，使用 `system.execute` 或 `system.set_world_var` 来完成。
+
+```json
+// 使用 system.execute 在游戏开始时配置 main_story 流
+{
+  "id": "setup_memory_synthesis",
+  "run": [{
+    "runtime": "system.execute",
+    "config": {
+      "code": "{{
+        # 确保 memoria 和 main_story 流存在
+        if 'memoria' not in world: world.memoria = {}
+        if 'main_story' not in world.memoria: world.memoria.main_story = {}
+        if 'config' not in world.memoria.main_story: world.memoria.main_story.config = {}
+
+        # 定义自动综合的行为
+        world.memoria.main_story.config.auto_synthesis = {
+            'enabled': True,
+            'trigger_count': 10,  // 每发生 10 次事件
+            'level': 'milestone', // 就生成一个“里程碑”级别的总结
+            'model': 'gemini/gemini-1.5-flash',
+            'prompt': '''
+As a master storyteller, synthesize the following sequence of events into a single, cohesive paragraph that captures the key developments and overall tone.
+
+Events:
+{events_text}
+'''
+        }
+      }}"
+    }
+  }]
+}
+```
+
+#### 4.2 工作流程
+
+1.  当 `memoria.add` 被调用时，它会为该流的内部计数器加一。
+2.  如果计数器达到了 `trigger_count`，`memoria.add` 会将最近的 N 条事件连同您的配置（`model`, `prompt`）一起，打包成一个后台任务。
+3.  主图执行继续，**不受任何影响**。
+4.  在后台，任务管理器会执行该任务：调用 LLM，生成总结。
+5.  任务完成后，它会将生成的总结作为一个**待处理事件**放入一个特殊的队列中。
+6.  在**下一次**图执行开始之前，引擎会自动检查该队列，并将所有已完成的总结作为新的记忆条目，原子性地添加到对应的记忆流中。
+
+这种设计确保了系统的响应速度和状态的一致性。
+
+### 5. 高级用法：通过宏直接访问
+
+对于需要高度定制化逻辑的开发者，`world.memoria` 的完整数据结构对宏是完全透明的。您可以随时使用 `system.execute` 来编写任意 Python 代码，进行标准运行时无法完成的复杂查询和分析。
+
+```json
+// 示例：计算“汉弗莱”的总结中，“背叛”一词在过去24小时内的出现频率
+{
+  "runtime": "system.execute",
+  "config": {
+    "code": "{{
+      # ... 复杂的、定制化的 Python 逻辑 ...
+    }}"
+  }
+}
+```
+
+这种灵活性确保了 `core-memoria` 既是一个易于上手的工具，也是一个功能没有上限的强大平台。
