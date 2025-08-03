@@ -67,7 +67,39 @@ class TestEngineSubgraphExecution:
         assert "error" in final_snapshot.run_output["bad_caller"]
         assert "Graph 'i_do_not_exist' not found" in final_snapshot.run_output["bad_caller"]["error"]
 
+    async def test_call_using_field_dependency_is_correctly_inferred(
+        self,
+        test_engine: Tuple[ExecutionEngineInterface, Container, HookManager],
+        call_collection_with_using_node_ref: GraphCollection
+    ):
+        """
+        测试：验证当 `system.flow.call` 的 `using` 字段引用主图中的节点时，
+        依赖关系能被正确推断，并且执行成功。
 
+        这个测试确保我们对依赖解析的修改（例如，未来可能忽略 'using' 字段）
+        不会破坏 `call` 运行时的基本数据流功能。
+        """
+        engine, _, _ = test_engine
+        initial_snapshot = StateSnapshot(
+            sandbox_id=uuid4(),
+            graph_collection=call_collection_with_using_node_ref
+        )
+        
+        final_snapshot = await engine.step(initial_snapshot, {})
+
+        # 1. 确认 'caller' 节点被成功执行
+        assert "caller" in final_snapshot.run_output, \
+            "The 'caller' node failed to execute. This likely means the dependency on 'data_provider' was not correctly inferred."
+
+        # 2. 深入检查结果，确认数据流是正确的
+        caller_output = final_snapshot.run_output["caller"]
+        subgraph_result = caller_output.get("output", {})
+        
+        assert "processor" in subgraph_result, "The subgraph did not return a result for the 'processor' node."
+        
+        processor_output = subgraph_result["processor"]["output"]
+        assert processor_output == "Processed: External Data"
+        
 @pytest.mark.asyncio
 class TestEngineMapExecution:
     """对 system.flow.map 运行时的集成测试。"""

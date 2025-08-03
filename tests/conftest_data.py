@@ -260,3 +260,54 @@ def map_collection_with_collect_and_subgraph_node_ref() -> GraphCollection:
             ]
         }
     })
+@pytest.fixture(scope="session")
+def call_collection_with_using_node_ref() -> GraphCollection:
+    """
+    这个图专门用于测试一个依赖解析的边界情况。
+    'main' 图中的 'caller' 节点调用子图 'processor_graph'。
+    关键在于，'caller' 的 'using' 字段引用了同在 'main' 图中的 'data_provider' 节点。
+
+    在 Bug 修复前，依赖解析器会错误地认为 'caller' 依赖于 'data_provider'，
+    这是正确的。但如果 'using' 中也包含了一个只存在于子图中的节点名，
+    就会产生和 map runtime 类似的错误。这个 fixture 确保 using 的解析是正确的。
+    
+    更重要的是，它验证了我们对 'using' 字段的处理不会破坏其应有的依赖关系。
+    """
+    return GraphCollection.model_validate({
+        "main": {
+            "nodes": [
+                {
+                    "id": "data_provider",
+                    "run": [{
+                        "runtime": "system.io.input",
+                        "config": {"value": "External Data"}
+                    }]
+                },
+                {
+                    "id": "caller",
+                    "run": [{
+                        "runtime": "system.flow.call",
+                        "config": {
+                            "graph": "processor_graph",
+                            # 'using' 字段引用了主图中的 'data_provider'
+                            # 这是正确的依赖关系，必须被正确推断出来。
+                            "using": {
+                                "input_from_main": "{{ nodes.data_provider.output }}"
+                            }
+                        }
+                    }]
+                }
+            ]
+        },
+        "processor_graph": {
+            "nodes": [
+                {
+                    "id": "processor",
+                    "run": [{"runtime": "system.io.input", "config": {
+                        # 'input_from_main' 是由 'using' 注入的，所以这里引用它
+                        "value": "{{ f'Processed: {nodes.input_from_main.output}' }}"
+                    }}]
+                }
+            ]
+        }
+    })
