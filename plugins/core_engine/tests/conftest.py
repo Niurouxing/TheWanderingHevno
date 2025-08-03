@@ -1,25 +1,318 @@
 # plugins/core_engine/tests/conftest.py
-
 import pytest
-import pytest_asyncio 
-from typing import AsyncGenerator 
+import pytest_asyncio
+import asyncio
+from typing import AsyncGenerator, Tuple, Dict
 
-# 从平台核心导入
+# 1. 从具体实现位置导入类
 from backend.container import Container
 from backend.core.hooks import HookManager
-
-# 从本插件导入
-from plugins.core_engine.engine import ExecutionEngine
-from plugins.core_engine.registry import RuntimeRegistry
-from plugins.core_engine.state import SnapshotStore
-from plugins.core_engine.runtimes.base_runtimes import InputRuntime, SetWorldVariableRuntime
-from plugins.core_engine.runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
-
-# 从其他插件导入，但我们只导入它们的注册函数
+from backend.core.tasks import BackgroundTaskManager
+from plugins.core_engine import register_plugin as register_engine_plugin
 from plugins.core_llm import register_plugin as register_llm_plugin
 from plugins.core_codex import register_plugin as register_codex_plugin
+from plugins.core_engine import populate_runtime_registry
+
+# 2. 从契约导入接口和数据模型
+from backend.core.contracts import Container as ContainerInterface, HookManager as HookManagerInterface
+from plugins.core_engine.contracts import GraphCollection, ExecutionEngineInterface
+
+# --- Engine-Specific Fixtures ---
+
+@pytest_asyncio.fixture
+async def test_engine() -> AsyncGenerator[Tuple[ExecutionEngineInterface, ContainerInterface, HookManagerInterface], None]:
+    """
+    为 core-engine 测试提供一个隔离但功能齐全的 ExecutionEngine 实例。
+    """
+    container = Container()
+    hook_manager = HookManager()
+    task_manager = BackgroundTaskManager(container, max_workers=2)
+
+    container.register("container", lambda: container)
+    container.register("hook_manager", lambda: hook_manager)
+    container.register("task_manager", lambda: task_manager, singleton=True)
+    
+    register_engine_plugin(container, hook_manager)
+    register_llm_plugin(container, hook_manager)
+    register_codex_plugin(container, hook_manager)
+
+    await populate_runtime_registry(container)
+
+    engine = container.resolve("execution_engine")
+    
+    task_manager.start()
+    yield engine, container, hook_manager
+    await task_manager.stop()
+
+
+# --- Test Data Fixtures for the Engine ---
 
 @pytest.fixture
-def hook_manager() -> HookManager:
-    """Provides a basic HookManager for unit tests."""
-    return HookManager()
+def linear_collection() -> GraphCollection:
+    return GraphCollection.model_validate({"main": {"nodes": [
+        {"id": "A", "run": [{"runtime": "system.io.input", "config": {"value": "a story about a cat"}}]},
+        {"id": "B", "run": [{"runtime": "llm.default", "config": {"model": "mock/model", "prompt": "{{ f'The story is: {nodes.A.output}' }}"}}]},
+        {"id": "C", "run": [{"runtime": "llm.default", "config": {"model": "mock/model", "prompt": "{{ nodes.B.llm_output }}"}}]}
+    ]}})
+
+@pytest.fixture
+def parallel_collection() -> GraphCollection:
+    return GraphCollection.model_validate({"main": {"nodes": [
+        {"id": "source_A", "run": [{"runtime": "system.io.input", "config": {"value": "Value A"}}]},
+        {"id": "source_B", "run": [{"runtime": "system.io.input", "config": {"value": "Value B"}}]},
+        {"id": "merger", "run": [{"runtime": "system.io.input", "config": {"value": "{{ f'Merged: {nodes.source_A.output} and {nodes.source_B.output}' }}"}}]}
+    ]}})
+
+@pytest.fixture
+def pipeline_collection() -> GraphCollection:
+    return GraphCollection.model_validate({"main": {"nodes": [{"id": "A", "run": [
+        {"runtime": "system.execute", "config": {"code": "world.main_character = 'Sir Reginald'"}},
+        {"runtime": "system.io.input", "config": {"value": "A secret message"}},
+        {"runtime": "llm.default", "config": {"model": "mock/model", "prompt": "{{ f'Tell a story about {world.main_character}. He just received this message: {pipe.output}' }}"}}
+    ]}]}})
+
+@pytest.fixture
+def world_vars_collection() -> GraphCollection:
+    return GraphCollection.model_validate({"main": {"nodes": [
+        {"id": "setter", "run": [{"runtime": "system.execute", "config": {"code": "world.theme = 'cyberpunk'"}}]},
+        {"id": "reader", "depends_on": ["setter"], "run": [{"runtime": "system.io.input", "config": {"value": "{{ f'The theme is: {world.theme}'}}"}}]}
+    ]}})
+
+@pytest.fixture
+def execute_runtime_collection() -> GraphCollection:
+    return GraphCollection.model_validate({"main": {"nodes": [
+        {"id": "A_generate_code", "run": [{"runtime": "system.io.input", "config": {"value": "world.player_status = 'empowered'"}}]},
+        {"id": "B_execute_code", "run": [{"runtime": "system.execute", "config": {"code": "{{ nodes.A_generate_code.output }}"}}]}
+    ]}})
+
+@pytest.fixture
+def cyclic_collection() -> GraphCollection:
+    return GraphCollection.model_validate({"main": {"nodes": [
+        {"id": "A", "run": [{"runtime": "system.io.input", "config": {"value": "{{ nodes.C.output }}"}}]},
+        {"id": "B", "run": [{"runtime": "system.io.input", "config": {"value": "{{ nodes.A.output }}"}}]},
+        {"id": "C", "run": [{"runtime": "system.io.input", "config": {"value": "{{ nodes.B.output }}"}}]}
+    ]}})
+
+@pytest.fixture
+def failing_node_collection() -> GraphCollection:
+    return GraphCollection.model_validate({"main": {"nodes": [
+        {"id": "A_ok", "run": [{"runtime": "system.io.input", "config": {"value": "start"}}]},
+        {"id": "B_fail", "run": [{"runtime": "system.io.input", "config": {"value": "{{ non_existent_variable }}"}}]},
+        {"id": "C_skip", "run": [{"runtime": "system.io.input", "config": {"value": "{{ nodes.B_fail.output }}"}}]},
+        {"id": "D_independent", "run": [{"runtime": "system.io.input", "config": {"value": "independent"}}]}
+    ]}})
+
+@pytest.fixture
+def invalid_graph_no_main() -> dict:
+    return {"not_main": {"nodes": [{"id": "a", "run": []}]}}
+
+@pytest.fixture
+def graph_evolution_collection() -> GraphCollection:
+    new_graph_dict = {"main": {"nodes": [{"id": "new_node", "run": [{"runtime": "system.io.input", "config": {"value": "This is the evolved graph!"}}]}]}}
+    return GraphCollection.model_validate({"main": {"nodes": [{"id": "graph_generator", "run": [{
+        "runtime": "system.execute",
+        "config": {"code": f"world.__graph_collection__ = {new_graph_dict}"}
+    }]}]}})
+
+@pytest.fixture
+def advanced_macro_collection() -> GraphCollection:
+    return GraphCollection.model_validate({"main": {"nodes": [
+        {"id": "teach_skill", "run": [{"runtime": "system.execute", "config": {"code": """
+import math
+def calculate_hypotenuse(a, b): return math.sqrt(a**2 + b**2)
+if not hasattr(world, 'math_utils'): world.math_utils = {}
+world.math_utils.hypot = calculate_hypotenuse
+"""}}]},
+        {"id": "use_skill", "depends_on": ["teach_skill"], "run": [{"runtime": "system.io.input", "config": {"value": "{{ world.math_utils.hypot(3, 4) }}"}}]},
+        {"id": "llm_propose_change", "run": [{"runtime": "system.io.input", "config": {"value": "world.game_difficulty = 'hard'"}}]},
+        {"id": "execute_change", "run": [{"runtime": "system.execute", "config": {"code": "{{ nodes.llm_propose_change.output }}"}}]}
+    ]}})
+
+# --- Fixtures for Subgraph Call ---
+@pytest.fixture
+def subgraph_call_collection() -> GraphCollection:
+    return GraphCollection.model_validate({
+        "main": {"nodes": [
+            {"id": "data_provider", "run": [{"runtime": "system.io.input", "config": {"value": "Hello from main"}}]},
+            {"id": "main_caller", "run": [{"runtime": "system.flow.call", "config": {"graph": "process_item", "using": {"item_input": "{{ nodes.data_provider.output }}"}}}]}
+        ]},
+        "process_item": {"nodes": [{"id": "processor", "run": [{"runtime": "system.io.input", "config": {"value": "{{ f'Processed: {nodes.item_input.output} with world state: {world.global_setting}' }}"}}]}]}
+    })
+
+@pytest.fixture
+def nested_subgraph_collection() -> GraphCollection:
+    return GraphCollection.model_validate({
+        "main": {"nodes": [{"id": "main_caller", "run": [{"runtime": "system.flow.call", "config": {"graph": "sub1", "using": {"input_from_main": "level 0"}}}]}]},
+        "sub1": {"nodes": [{"id": "sub1_caller", "run": [{"runtime": "system.flow.call", "config": {"graph": "sub2", "using": {"input_from_sub1": "{{ nodes.input_from_main.output }}"}}}]}]},
+        "sub2": {"nodes": [{"id": "final_processor", "run": [{"runtime": "system.io.input", "config": {"value": "{{ f'Reached level 2 from: {nodes.input_from_sub1.output}' }}"}}]}]}
+    })
+
+@pytest.fixture
+def subgraph_call_to_nonexistent_graph_collection() -> GraphCollection:
+    return GraphCollection.model_validate({"main": {"nodes": [{"id": "bad_caller", "run": [{"runtime": "system.flow.call", "config": {"graph": "i_do_not_exist"}}]}]}})
+
+@pytest.fixture
+def subgraph_modifies_world_collection() -> GraphCollection:
+    return GraphCollection.model_validate({
+        "main": {"nodes": [
+            {"id": "caller", "run": [{"runtime": "system.flow.call", "config": {"graph": "modifier", "using": {"amount": 10}}}]},
+            {"id": "reader", "run": [{"runtime": "system.io.input", "config": {"value": "{{ f'Final counter: {world.counter}, Subgraph raw output: {nodes.caller.output}' }}"}}]}
+        ]},
+        "modifier": {"nodes": [{"id": "incrementer", "run": [{"runtime": "system.execute", "config": {"code": "world.counter += nodes.amount.output"}}]}]}
+    })
+
+@pytest.fixture
+def subgraph_with_failure_collection() -> GraphCollection:
+    return GraphCollection.model_validate({
+        "main": {"nodes": [
+            {"id": "caller", "run": [{"runtime": "system.flow.call", "config": {"graph": "failing_subgraph"}}]},
+            {"id": "downstream_of_fail", "run": [{"runtime": "system.io.input", "config": {"value": "{{ nodes.caller.output }}"}}]}
+        ]},
+        "failing_subgraph": {"nodes": [
+            {"id": "A_ok", "run": [{"runtime": "system.io.input", "config": {"value": "ok"}}]},
+            {"id": "B_fail", "run": [{"runtime": "system.io.input", "config": {"value": "{{ non_existent.var }}"}}]}
+        ]}
+    })
+
+@pytest.fixture
+def dynamic_subgraph_call_collection() -> GraphCollection:
+    return GraphCollection.model_validate({
+        "main": {"nodes": [{"id": "dynamic_caller", "run": [{"runtime": "system.flow.call", "config": {"graph": "{{ world.target_graph }}", "using": {"data": "dynamic data"}}}]}]},
+        "sub_a": {"nodes": [{"id": "processor_a", "run": [{"runtime": "system.io.input", "config": {"value": "{{ f'Processed by A: {nodes.data.output}' }}"}}]}]},
+        "sub_b": {"nodes": [{"id": "processor_b", "run": [{"runtime": "system.io.input", "config": {"value": "{{ f'Processed by B: {nodes.data.output}' }}"}}]}]}
+    })
+
+# --- Fixtures for Map ---
+@pytest.fixture
+def map_collection_basic() -> GraphCollection:
+    return GraphCollection.model_validate({"main": {"nodes": [
+        {"id": "char_provider", "run": [{"runtime": "system.io.input", "config": {"value": ["Aragorn", "Gandalf"]}}]},
+        {"id": "map_node", "run": [{"runtime": "system.flow.map", "config": {
+            "list": "{{ nodes.char_provider.output }}",
+            "graph": "process_character",
+            "using": {"character_name": "{{ source.item }}"}
+        }}]}
+    ]}, "process_character": {"nodes": [{"id": "generate_bio", "run": [{"runtime": "system.io.input", "config": {"value": "{{ f'Bio for {nodes.character_name.output}' }}"}}]}]}})
+
+@pytest.fixture
+def map_collection_with_collect(map_collection_basic: GraphCollection) -> GraphCollection:
+    base_data = map_collection_basic.model_dump()
+    map_instruction = base_data["main"]["nodes"][1]["run"][0]
+    map_instruction["config"]["collect"] = "{{ nodes.generate_bio.output }}"
+    return GraphCollection.model_validate(base_data)
+
+@pytest.fixture
+def map_collection_with_failure() -> GraphCollection:
+    return GraphCollection.model_validate({"main": {"nodes": [
+        {"id": "data_provider", "run": [{"runtime": "system.io.input", "config": {"value": [{"name": "Alice"}, "Bob", {"name": "Charlie"}]}}]},
+        {"id": "mapper", "run": [{"runtime": "system.flow.map", "config": {
+            "list": "{{ nodes.data_provider.output }}",
+            "graph": "process_name",
+            "using": {"character_data": "{{ source.item }}"}
+        }}]}
+    ]}, "process_name": {"nodes": [{"id": "get_name", "run": [{"runtime": "system.io.input", "config": {"value": "{{ nodes.character_data.output.name }}"}}]}]}})
+
+# --- Fixtures for Concurrency ---
+@pytest.fixture
+def concurrent_write_collection() -> GraphCollection:
+    increment_code = "for i in range(100):\n    world.counter += 1"
+    return GraphCollection.model_validate({"main": {"nodes": [
+        {"id": "inc_A", "run": [{"runtime": "system.execute", "config": {"code": increment_code}}]},
+        {"id": "inc_B", "run": [{"runtime": "system.execute", "config": {"code": increment_code}}]},
+        {"id": "reader", "depends_on": ["inc_A", "inc_B"], "run": [{"runtime": "system.io.input", "config": {"value": "{{ world.counter }}"}}]}
+    ]}})
+
+@pytest.fixture
+def map_collection_concurrent_write() -> GraphCollection:
+    return GraphCollection.model_validate({"main": {"nodes": [
+        {"id": "task_provider", "run": [{"runtime": "system.io.input", "config": {"value": list(range(10))}}]},
+        {"id": "concurrent_adder_map", "run": [{"runtime": "system.flow.map", "config": {"list": "{{ nodes.task_provider.output }}", "graph": "add_gold"}}]},
+        {"id": "reader", "depends_on": ["concurrent_adder_map"], "run": [{"runtime": "system.io.input", "config": {"value": "{{ world.gold }}"}}]}
+    ]}, "add_gold": {"nodes": [{"id": "add_10_gold", "run": [{"runtime": "system.execute", "config": {"code": "world.gold += 10"}}]}]}})
+
+# --- Fixtures for Codex Runtime ---
+@pytest.fixture
+def codex_basic_data() -> Dict:
+    return {"graph": {"main": {"nodes": [{"id": "invoke", "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "info"}]}}]}]}}, "codices": {"info": {"entries": [
+        {"id": "greeting", "content": "你好!", "priority": 10},
+        {"id": "intro", "content": "欢迎!", "priority": 5}
+    ]}}}
+
+@pytest.fixture
+def codex_keyword_and_priority_data() -> Dict:
+    return {"graph": {"main": {"nodes": [
+        {"id": "invoke_weather", "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "weather", "source": "今天的魔法天气怎么样？"}]}}]},
+        {"id": "invoke_mood", "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "mood", "source": "我很开心。"}]}}]}
+    ]}}, "codices": {
+        "weather": {"entries": [{"id": "magic", "content": "魔法能量活跃", "trigger_mode": "on_keyword", "keywords": ["魔法天气"], "priority": 30}]},
+        "mood": {"entries": [{"id": "happy", "content": "你很高兴", "trigger_mode": "on_keyword", "keywords": ["开心"], "priority": 5}]}
+    }}
+
+@pytest.fixture
+def codex_macro_eval_data() -> Dict:
+    return {"graph": {"main": {"nodes": [{"id": "get_report", "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "dynamic", "source": "告诉我关于秘密"}]}}]}]}}, "codices": {"dynamic": {"entries": [
+        {"id": "night_info", "content": "现在是夜晚", "is_enabled": "{{ world.is_night }}"},
+        {"id": "secret_info", "content": "你提到了秘密", "trigger_mode": "on_keyword", "keywords": "{{ [world.hidden_keyword] }}"}
+    ]}}}
+
+@pytest.fixture
+def codex_recursion_data() -> Dict:
+    return {"graph": {"main": {"nodes": [{"id": "invoke", "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "lore", "source": "A"}], "recursion_enabled": True}}]}]}}, "codices": {"lore": {"entries": [
+        {"id": "entry_A", "content": "A引出B", "trigger_mode": "on_keyword", "keywords": ["A"]},
+        {"id": "entry_B", "content": "B引出C", "trigger_mode": "on_keyword", "keywords": ["B"]},
+        {"id": "entry_C", "content": "C是最终信息", "trigger_mode": "on_keyword", "keywords": ["C"]}
+    ]}}}
+
+@pytest.fixture
+def codex_concurrent_world_write_data() -> Dict:
+    """
+    测试 `codex.invoke` 内部宏对 `world_state` 的并发写入。
+    【修正】确保所有三个条目都存在，并且有正确的 trigger_mode。
+    """
+    return {
+        "graph": {
+            "main": {
+                "nodes": [
+                    {
+                        "id": "invoke",
+                        "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "concurrent_codex", "source": "触发计数"}]}}]
+                    },
+                    {
+                        "id": "reader",
+                        "depends_on": ["invoke"],
+                        "run": [{"runtime": "system.io.input", "config": {"value": "{{ world.counter }}"}}]
+                    }
+                ]
+            }
+        },
+        "codices": {
+            "concurrent_codex": {
+                "entries": [
+                    {
+                        "id": "increment_1",
+                        "content": "{{ world.counter += 1; 'Incremented 1.' }}",
+                        "trigger_mode": "on_keyword",
+                        "keywords": ["计数"],
+                        "priority": 10
+                    },
+                    {
+                        "id": "increment_2",
+                        "content": "{{ world.counter += 2; 'Incremented 2.' }}",
+                        "trigger_mode": "on_keyword",
+                        "keywords": ["计数"],
+                        "priority": 20
+                    },
+                    {
+                        "id": "increment_3",
+                        "content": "{{ world.counter += 3; 'Incremented 3.' }}",
+                        "trigger_mode": "on_keyword",
+                        "keywords": ["计数"],
+                        "priority": 30
+                    }
+                ]
+            }
+        }
+    }
+@pytest.fixture
+def codex_nonexistent_codex_data() -> Dict:
+    return {"graph": {"main": {"nodes": [{"id": "invoke_nonexistent", "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "nonexistent_codex"}]}}]}]}}, "codices": {}}

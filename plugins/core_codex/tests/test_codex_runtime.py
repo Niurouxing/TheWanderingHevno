@@ -29,6 +29,7 @@ class TestCodexSystem:
         assert invoke_output == expected_text
 
 
+    @pytest.mark.asyncio
     async def test_invoke_recursion_enabled(
         self, test_engine: Tuple[ExecutionEngineInterface, Container, HookManager], codex_recursion_data: dict
     ):
@@ -42,10 +43,14 @@ class TestCodexSystem:
         final_snapshot = await engine.step(snapshot, {})
         invoke_result = final_snapshot.run_output["recursive_invoke"]["output"]
         final_text = invoke_result["final_text"]
-        expected_rendered_order = [
-            "这是关于A的信息，它引出B。",
-            "B被A触发了，它又引出C。",
-            "C被B触发了，这是最终信息。",
-            "这是一个总是存在的背景信息。",
-        ]
-        assert final_text.split("\n\n") == expected_rendered_order
+        
+        # 【最终修正】现在引擎行为已修复，断言应该匹配最终按优先级排序的完整结果
+        # 优先级顺序: C(30), B(20), A(10), D(5)
+        expected_output_string = (
+            "C被B触发了，这是最终信息。\n\n"
+            "B被A触发了，它又引出C。\n\n"
+            "这是关于A的信息，它引出B。\n\n"
+            "这是一个总是存在的背景信息。"
+        )
+        
+        assert final_text == expected_output_string

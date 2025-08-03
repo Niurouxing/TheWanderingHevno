@@ -13,6 +13,9 @@ from backend.core.contracts import Container
 # 从依赖插件的契约导入数据模型和接口
 from plugins.core_engine.contracts import GraphCollection, SnapshotStoreInterface
 
+# 注意：这个文件现在只依赖 test_client 和 conftest_data.py 中定义的 fixture
+# 它与 test_engine fixture 完全解耦
+
 @pytest.mark.e2e
 class TestApiSandboxLifecycle:
     """测试沙盒从创建、执行、查询到回滚的完整生命周期。"""
@@ -51,7 +54,7 @@ class TestApiSandboxLifecycle:
             f"/api/sandboxes/{sandbox_id}/revert",
             params={"snapshot_id": genesis_snapshot_id}
         )
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
 
 @pytest.mark.e2e
 class TestSystemReportAPI:
@@ -59,12 +62,11 @@ class TestSystemReportAPI:
 
     def test_get_system_report(self, test_client: TestClient):
         response = test_client.get("/api/system/report")
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         report = response.json()
 
         # 验证报告中包含了由各插件提供的 key
-        assert "llm_providers" in report # from core_llm
-        # assert "runtimes" in report # 运行时报告器尚未迁移，但可以加上
+        assert "llm_providers" in report
         
         # 验证 llm_providers 的内容
         assert isinstance(report["llm_providers"], list)
@@ -80,16 +82,16 @@ class TestApiErrorHandling:
             "/api/sandboxes",
             json={"name": "Invalid Graph", "graph_collection": invalid_graph_no_main}
         )
-        assert response.status_code == 422
+        assert response.status_code == 422, response.text
         error_detail = response.json()["detail"][0]
         assert "A 'main' graph must be defined" in error_detail["msg"]
 
     def test_operations_on_nonexistent_sandbox(self, test_client: TestClient):
         nonexistent_id = uuid4()
         response = test_client.post(f"/api/sandboxes/{nonexistent_id}/step", json={})
-        assert response.status_code == 404
+        assert response.status_code == 404, response.text
         response = test_client.get(f"/api/sandboxes/{nonexistent_id}/history")
-        assert response.status_code == 404
+        assert response.status_code == 404, response.text
 
 
 @pytest.mark.e2e
@@ -99,22 +101,19 @@ class TestSandboxImportExport:
     def test_sandbox_export_import_roundtrip(
         self, test_client: TestClient, linear_collection: GraphCollection
     ):
-        """
-        测试一个完整的沙盒导出和导入流程（往返测试）。
-        """
         # --- 步骤 1 & 2: 创建沙盒，执行一步，然后导出 ---
         create_resp = test_client.post(
             "/api/sandboxes",
             json={"name": "Export-Test-Sandbox", "graph_collection": linear_collection.model_dump()}
         )
-        assert create_resp.status_code == 201
+        assert create_resp.status_code == 201, create_resp.text
         sandbox_id = create_resp.json()["id"]
 
         step_resp = test_client.post(f"/api/sandboxes/{sandbox_id}/step", json={})
-        assert step_resp.status_code == 200
+        assert step_resp.status_code == 200, step_resp.text
         
         export_resp = test_client.get(f"/api/sandboxes/{sandbox_id}/export")
-        assert export_resp.status_code == 200
+        assert export_resp.status_code == 200, export_resp.text
         
         # --- 步骤 3: 验证导出的 ZIP 文件 ---
         zip_bytes = export_resp.content
@@ -138,7 +137,7 @@ class TestSandboxImportExport:
             "/api/sandboxes/import",
             files={"file": ("imported.hevno.zip", zip_bytes, "application/zip")}
         )
-        assert import_resp.status_code == 200
+        assert import_resp.status_code == 200, import_resp.text
         imported_sandbox = import_resp.json()
         
         # --- 步骤 6: 验证恢复的状态 ---
@@ -147,7 +146,7 @@ class TestSandboxImportExport:
         assert len(sandbox_store) == 1
         
         history_resp = test_client.get(f"/api/sandboxes/{sandbox_id}/history")
-        assert history_resp.status_code == 200
+        assert history_resp.status_code == 200, history_resp.text
         assert len(history_resp.json()) == 2
 
     def test_import_invalid_package_type(self, test_client: TestClient):

@@ -28,7 +28,7 @@ handlers:
 
 # 根日志记录器配置
 root:
-  level: INFO # 默认级别
+  level: INFO
   handlers: [console] #, file] # 默认使用控制台处理器
 
 # 可以为特定模块设置不同级别
