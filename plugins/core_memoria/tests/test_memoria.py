@@ -23,6 +23,7 @@ from plugins.core_engine.contracts import (
 # 从本插件的组件导入
 from plugins.core_memoria.runtimes import MemoriaAddRuntime, MemoriaQueryRuntime, MemoriaAggregateRuntime
 from plugins.core_memoria.tasks import run_synthesis_task
+from plugins.core_memoria import apply_pending_synthesis
 # 从依赖插件 (core_llm) 的组件导入
 from plugins.core_llm.models import LLMResponse, LLMResponseStatus, LLMError, LLMErrorType
 
@@ -37,19 +38,19 @@ pytestmark = pytest.mark.asyncio
 def mock_container() -> MagicMock:
     """
     A mock DI container.
-    [FIX] Ensures that resolve() returns the *same* mock instance for a given service name on every call.
+    Ensures that resolve() returns the *same* mock instance for a given service name on every call.
     """
     container = MagicMock(spec=Container)
     
-    # Create the dictionary of mock services ONCE.
+    # 【修改】添加 memoria_event_queue 的 mock
     mock_services = {
         "llm_service": AsyncMock(),
-        "sandbox_store": MagicMock(spec=dict),
-        "snapshot_store": MagicMock(),
-        "task_manager": AsyncMock(spec=BackgroundTaskManager)
+        "sandbox_store": MagicMock(spec=dict), # 不再需要
+        "snapshot_store": MagicMock(),       # 不再需要
+        "task_manager": AsyncMock(spec=BackgroundTaskManager),
+        "memoria_event_queue": MagicMock(spec=dict) # 把它当成一个字典来 mock
     }
     
-    # The lambda now just performs a lookup in the stable, pre-existing dictionary.
     container.resolve.side_effect = lambda name: mock_services.get(name)
     
     return container
@@ -161,54 +162,57 @@ async def test_synthesis_task_trigger(mock_exec_context):
     assert call_args.kwargs['entries_to_summarize_dicts'][0]["content"] == "Event 1"
 
 
-async def test_run_synthesis_task_success(mock_container):
+async def test_run_synthesis_task_submits_event_on_success(mock_container):
     """
-    Test Case 3: (End-to-End for the task)
-    Verify that the background task correctly calls the LLM,
-    creates a new snapshot, and updates the sandbox head.
+    Test Case 3 (REWRITTEN & FIXED):
+    Verify that the background task correctly calls the LLM and submits
+    a 'memoria_synthesis_completed' event to its queue on success.
     """
     # --- Arrange ---
-    # Setup mock services from the container
+    # 1. Setup mock services from the container
     llm_service_mock = mock_container.resolve("llm_service")
-    sandbox_store_mock = mock_container.resolve("sandbox_store")
-    snapshot_store_mock = mock_container.resolve("snapshot_store")
+    event_queue_mock = mock_container.resolve("memoria_event_queue")
 
-    # The mock for the 'request' method is now correctly configured on the stable 'llm_service_mock' instance.
+    # 2. Configure mock responses and behavior
     llm_service_mock.request = AsyncMock(
         return_value=LLMResponse(status=LLMResponseStatus.SUCCESS, content="A summary of events.")
     )
 
-    # Setup initial state
-    sandbox_id = uuid.uuid4()
-    initial_snapshot_id = uuid.uuid4()
+    # 3. 【关键修复】明确配置 event_queue_mock 的行为
+    #    为了模拟 `event_queue[sandbox_id].append(...)` 的完整流程，
+    #    我们需要模拟字典的行为：
+    #    a. 当检查 key 是否存在时，我们假装它不存在，以触发创建新列表的逻辑。
+    #    b. 当通过 key 访问（__getitem__）时，返回一个我们能控制的真实列表。
+    #    c. 当设置 key（__setitem__）时，让它正常工作。
     
-    initial_snapshot = StateSnapshot(
-        id=initial_snapshot_id,
-        sandbox_id=sandbox_id,
-        graph_collection=GraphCollection.model_validate({"main": {"nodes": []}}),
-        world_state={
-            "memoria": {
-                "__global_sequence__": 2,
-                "journal": {
-                    "config": {"auto_synthesis": {"enabled": True, "trigger_count": 2}},
-                    "entries": [
-                        {"id": uuid.uuid4(), "sequence_id": 1, "content": "Entry 1", "level": "event", "tags":[]},
-                        {"id": uuid.uuid4(), "sequence_id": 2, "content": "Entry 2", "level": "event", "tags":[]},
-                    ],
-                    "synthesis_trigger_counter": 2 # Counter is high
-                }
-            }
-        }
-    )
-    sandbox = Sandbox(id=sandbox_id, name="Test Sandbox", head_snapshot_id=initial_snapshot_id)
+    # 我们将要操作的真实列表
+    actual_list_for_sandbox = []
 
-    # Populate stores
-    snapshot_store_mock.get.return_value = initial_snapshot
-    sandbox_store_mock.get.return_value = sandbox
+    # 配置 MagicMock 以正确地模拟字典操作
+    def getitem_side_effect(key):
+        # 只有在请求我们指定的 sandbox_id 时，才返回我们准备的列表
+        if key == sandbox_id:
+            return actual_list_for_sandbox
+        # 否则，返回一个新的 MagicMock，这是默认行为
+        return MagicMock()
 
-    # Task arguments
-    synthesis_config_dict = {"model": "gemini/gemini-pro", "level": "summary", "prompt": "{events_text}", "enabled": True, "trigger_count": 2}
-    entries_to_summarize_dicts = initial_snapshot.world_state["memoria"]["journal"]["entries"]
+    event_queue_mock.__contains__.return_value = False
+    event_queue_mock.__getitem__.side_effect = getitem_side_effect
+
+
+    # 4. Setup task arguments
+    sandbox_id = uuid.uuid4() # 必须在配置 side_effect 之后定义，因为它在 lambda 中被使用了
+    synthesis_config_dict = {
+        "model": "gemini/gemini-pro",
+        "level": "summary",
+        "prompt": "{events_text}",
+        "enabled": True,
+        "trigger_count": 2
+    }
+    entries_to_summarize_dicts = [
+        {"content": "Entry 1"},
+        {"content": "Entry 2"},
+    ]
 
     # --- Act ---
     await run_synthesis_task(
@@ -226,25 +230,21 @@ async def test_run_synthesis_task_success(mock_container):
         prompt="- Entry 1\n- Entry 2"
     )
 
-    # 2. A new snapshot was saved
-    snapshot_store_mock.save.assert_called_once()
-    saved_snapshot: StateSnapshot = snapshot_store_mock.save.call_args[0][0]
-
-    # 3. The new snapshot has the correct data
-    assert saved_snapshot.id != initial_snapshot_id
-    assert saved_snapshot.parent_snapshot_id == initial_snapshot_id
+    # 2. An event was submitted to the queue
     
-    # 4. The world state in the new snapshot contains the summary
-    new_memoria = saved_snapshot.world_state["memoria"]
-    assert len(new_memoria["journal"]["entries"]) == 3
-    summary_entry = new_memoria["journal"]["entries"][-1]
-    assert summary_entry["content"] == "A summary of events."
-    assert summary_entry["level"] == "summary"
-    assert summary_entry["sequence_id"] == 3
+    # 2a. 验证 `event_queue[sandbox_id] = []` 这一行被调用过。
+    event_queue_mock.__setitem__.assert_called_once_with(sandbox_id, [])
 
-    # 5. The sandbox's head was updated to point to the new snapshot
-    assert sandbox.head_snapshot_id == saved_snapshot.id
-
+    # 2b. 【关键修复】现在我们直接检查我们自己创建的那个真实列表的内容，
+    #     因为 `event_queue[sandbox_id].append(...)` 最终会操作到这个列表上。
+    assert len(actual_list_for_sandbox) == 1
+    
+    submitted_event = actual_list_for_sandbox[0]
+    assert submitted_event["type"] == "memoria_synthesis_completed"
+    assert submitted_event["stream_name"] == "journal"
+    assert submitted_event["content"] == "A summary of events."
+    assert submitted_event["level"] == "summary"
+    assert submitted_event["tags"] == ["synthesis", "auto-generated"]
 
 async def test_memoria_add_creates_stream_if_not_exists(mock_exec_context):
     """
@@ -385,3 +385,64 @@ async def test_run_synthesis_task_handles_llm_failure(mock_container):
     snapshot_store_mock.save.assert_not_called()
     # 关键：断言沙盒的头指针没有改变
     assert sandbox.head_snapshot_id == initial_snapshot_id
+
+async def test_apply_pending_synthesis_hook_updates_world_state(mock_exec_context):
+    """
+    Test Case 4: (Unit test for the hook implementation)
+    Verify that the 'apply_pending_synthesis' hook function correctly
+    processes events from its queue and modifies the world_state.
+    """
+    # --- Arrange ---
+    # 1. Manually prepare the event queue and container mock within the context
+    event_queue = {
+        mock_exec_context.initial_snapshot.sandbox_id: [
+            {
+                "type": "memoria_synthesis_completed",
+                "stream_name": "journal",
+                "content": "This is a new summary.",
+                "level": "reflection",
+                "tags": ["auto"]
+            }
+        ]
+    }
+    
+    # 2. Prepare the initial world state
+    mock_exec_context.shared.world_state["memoria"] = {
+        "__global_sequence__": 5,
+        "journal": {
+            "config": {},
+            "entries": [],
+            "synthesis_trigger_counter": 10 # Should be reset
+        }
+    }
+    
+    # 3. Setup the mock container inside the context to resolve the event queue
+    #    这是关键，让钩子函数能找到队列
+    mock_container = MagicMock(spec=Container)
+    mock_container.resolve.return_value = event_queue
+    # 我们可以通过这个后门将 mock container 注入到 context 中
+    mock_exec_context.shared.services._container = mock_container
+
+    # --- Act ---
+    # 直接调用钩子函数，传入准备好的上下文
+    await apply_pending_synthesis(mock_exec_context)
+
+    # --- Assert ---
+    # 1. The event should be removed from the queue
+    assert not event_queue 
+
+    # 2. The world state should be updated
+    new_memoria = mock_exec_context.shared.world_state["memoria"]
+    
+    # 2a. Counter was reset
+    assert new_memoria["journal"]["synthesis_trigger_counter"] == 0
+    
+    # 2b. A new entry was added
+    assert len(new_memoria["journal"]["entries"]) == 1
+    new_entry = new_memoria["journal"]["entries"][0]
+    assert new_entry["content"] == "This is a new summary."
+    assert new_entry["level"] == "reflection"
+    assert new_entry["tags"] == ["auto"]
+    
+    # 2c. Global sequence was incremented
+    assert new_memoria["__global_sequence__"] == 6

@@ -66,7 +66,7 @@ class Memoria(RootModel[Dict[str, Any]]):
 
     def set_stream(self, stream_name: str, stream_model: MemoryStream):
         """将一个 MemoryStream 模型实例写回到根字典中。"""
-        self.root[stream_name] = stream_model.model_dump(exclude_defaults=True)
+        self.root[stream_name] = stream_model.model_dump()
 
     def get_next_sequence_id(self) -> int:
         """获取并递增全局序列号，确保原子性。"""

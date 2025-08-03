@@ -142,6 +142,8 @@ class ExecutionEngine(SubGraphRunner):
             hook_manager=self.hook_manager
         )
 
+        await self.hook_manager.filter("before_graph_execution", context)
+
         main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
         if not main_graph_def: raise ValueError("'main' 图未找到。")
         

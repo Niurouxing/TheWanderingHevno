@@ -19,12 +19,11 @@ from plugins.core_engine.contracts import (
 )
 
 # 从本插件的依赖注入文件中导入 "getters"
-from .dependencies import get_sandbox_store, get_snapshot_store, get_engine
+from .dependencies import get_sandbox_store, get_snapshot_store, get_engine, get_persistence_service
 
 # 【关键】从依赖插件 core_persistence 导入其服务和模型
-from plugins.core_persistence.service import PersistenceService
+from plugins.core_persistence.contracts import PersistenceServiceInterface
 from plugins.core_persistence.models import PackageManifest, PackageType
-from plugins.core_persistence.dependencies import get_persistence_service
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +137,7 @@ async def export_sandbox(
     sandbox_id: UUID,
     sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
     snapshot_store: SnapshotStoreInterface = Depends(get_snapshot_store),
-    persistence_service: PersistenceService = Depends(get_persistence_service)
+    persistence_service: PersistenceServiceInterface = Depends(get_persistence_service)
 ):
     """将一个沙盒及其完整历史导出为一个 .hevno.zip 包文件。"""
     sandbox = sandbox_store.get(sandbox_id)
@@ -179,7 +178,7 @@ async def import_sandbox(
     file: UploadFile = File(..., description="A .hevno.zip package file."),
     sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
     snapshot_store: SnapshotStoreInterface = Depends(get_snapshot_store),
-    persistence_service: PersistenceService = Depends(get_persistence_service)
+    persistence_service: PersistenceServiceInterface = Depends(get_persistence_service)
 ) -> Sandbox:
     """从一个 .hevno.zip 文件导入一个沙盒及其完整历史。"""
     if not file.filename or not file.filename.endswith(".hevno.zip"):
