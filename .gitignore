@@ -37,3 +37,5 @@ pnpm-debug.log*
 .DS_Store
 *.tmp
 *.swp
+
+code_collection.md

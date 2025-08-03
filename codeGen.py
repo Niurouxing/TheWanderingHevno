@@ -24,7 +24,7 @@ def collect_code_files(paths, output_file_path):
     }
     excluded_files = {
         'package-lock.json', 'yarn.lock', '.DS_Store', 'pnpm-lock.yaml',
-        'vite.config.ts', 'vite.config.js'
+        'vite.config.ts', 'vite.config.js', 'conftest.py'
     }
     
     # Define files to always include, regardless of extension
@@ -117,11 +117,12 @@ def main(paths, output_file="code_collection.md"):
 if __name__ == "__main__":
     # Example usage: replace with your paths (can be directories or files)
     paths = [
-        "./backend", 
-        "./plugins", 
+        # "./backend", 
+        # "./plugins", 
         # "./tests", 
         # "./conftest.py",
         # "./plugins/core_memoria",
+        "./",
     ]
     output_path = "code_collection.md"
     result = main(paths, output_path)
