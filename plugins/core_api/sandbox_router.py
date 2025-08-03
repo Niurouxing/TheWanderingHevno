@@ -19,11 +19,14 @@ from plugins.core_engine.contracts import (
 )
 
 # 从本插件的依赖注入文件中导入 "getters"
-from .dependencies import get_sandbox_store, get_snapshot_store, get_engine, get_persistence_service
+from .dependencies import get_snapshot_store, get_engine, get_persistence_service, get_sandbox_store
 
-# 【关键】从依赖插件 core_persistence 导入其服务和模型
-from plugins.core_persistence.contracts import PersistenceServiceInterface
-from plugins.core_persistence.models import PackageManifest, PackageType
+from plugins.core_persistence.contracts import (
+    PersistenceServiceInterface, 
+    PackageManifest, 
+    PackageType
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +63,7 @@ async def create_sandbox(
         graph_collection=request_body.graph_collection,
         world_state=request_body.initial_state or {}
     )
+    # 快照存储现在通过DI获取，不再直接操作
     snapshot_store.save(genesis_snapshot)
     
     sandbox.head_snapshot_id = genesis_snapshot.id
@@ -89,9 +93,10 @@ async def execute_sandbox_step(
         logger.error(f"Data inconsistency for sandbox {sandbox_id}: head snapshot '{sandbox.head_snapshot_id}' not found.")
         raise HTTPException(status_code=500, detail=f"Data inconsistency: head snapshot not found.")
     
+    # 引擎的 step 方法现在应该负责保存新的快照
     new_snapshot = await engine.step(latest_snapshot, user_input)
     
-    snapshot_store.save(new_snapshot)
+    # 更新沙盒的头指针
     sandbox.head_snapshot_id = new_snapshot.id
     
     return new_snapshot
@@ -106,7 +111,6 @@ async def get_sandbox_history(
     if sandbox_id not in sandbox_store:
         raise HTTPException(status_code=404, detail="Sandbox not found.")
         
-    # 如果存在，则继续执行原逻辑
     return snapshot_store.find_by_sandbox(sandbox_id)
 
 @router.put("/{sandbox_id}/revert", status_code=200, summary="Revert to a snapshot")

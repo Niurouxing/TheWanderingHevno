@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Type, TypeVar, Tuple, Dict, Any, List
 from pydantic import BaseModel, ValidationError
 
-from .contracts import PersistenceServiceInterface
-from .models import PackageManifest, AssetType, FILE_EXTENSIONS
+from .contracts import PersistenceServiceInterface, PackageManifest
+from .models import AssetType, FILE_EXTENSIONS
 
 T = TypeVar('T', bound=BaseModel)
 logger = logging.getLogger(__name__)
