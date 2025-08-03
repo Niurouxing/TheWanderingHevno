@@ -57,6 +57,7 @@ class PluginManager:
         """
         url = config["url"]
         ref = config["ref"]
+        subdir = config.get("subdirectory") 
         strategy = config.get("strategy", "pin") # 默认是 "pin"
         target_dir = self.plugins_dir / name
 
