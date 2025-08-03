@@ -8,7 +8,7 @@ from backend.core.contracts import ExecutionEngineInterface
 
 @pytest.mark.asyncio
 class TestCodexSystem:
-    """对 Hevno Codex 系统的集成测试 (system.invoke 运行时)。"""
+    """对 Hevno Codex 系统的集成测试 (codex.invoke 运行时)。"""
 
 
     async def test_basic_invoke_always_on(

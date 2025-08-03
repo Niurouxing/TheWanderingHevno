@@ -663,7 +663,7 @@ def codex_basic_data() -> dict:
         "main": {
             "nodes": [{
                 "id": "invoke_test",
-                "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "basic_info"}]}}]
+                "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "basic_info"}]}}]
             }]
         }
     }
@@ -689,11 +689,11 @@ def codex_keyword_and_priority_data() -> dict:
             "nodes": [
                 {
                     "id": "invoke_weather",
-                    "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "weather_lore", "source": "今天的魔法天气怎么样？"}]}}]
+                    "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "weather_lore", "source": "今天的魔法天气怎么样？"}]}}]
                 },
                 {
                     "id": "invoke_mood",
-                    "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "mood_expressions", "source": "我很开心，因为天气很好。"}]}}]
+                    "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "mood_expressions", "source": "我很开心，因为天气很好。"}]}}]
                 }
             ]
         }
@@ -729,7 +729,7 @@ def codex_macro_eval_data() -> dict:
                 {
                     "id": "get_weather_report",
                     "run": [{
-                        "runtime": "system.invoke",
+                        "runtime": "codex.invoke",
                         "config": {
                             "from": [{"codex": "dynamic_entries", "source": "请告诉我关于秘密和夜幕下的世界。"}],
                             "debug": True
@@ -761,7 +761,7 @@ def codex_recursion_data() -> dict:
     graph_definition = {
         "main": {"nodes": [{
             "id": "recursive_invoke",
-            "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "recursive_lore", "source": "告诉我关于A"}], "recursion_enabled": True, "debug": True}}]
+            "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "recursive_lore", "source": "告诉我关于A"}], "recursion_enabled": True, "debug": True}}]
         }]}
     }
     codices_data = {
@@ -783,7 +783,7 @@ def codex_invalid_structure_data() -> dict:
     """
     测试无效 Codex 结构时的错误处理。
     """
-    graph_definition = {"main": {"nodes": [{"id": "invoke_invalid", "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "bad_codex"}]}}]}]}}
+    graph_definition = {"main": {"nodes": [{"id": "invoke_invalid", "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "bad_codex"}]}}]}]}}
     codices_data = {
         "bad_codex": {
             "entries": [
@@ -798,14 +798,14 @@ def codex_invalid_structure_data() -> dict:
 @pytest.fixture
 def codex_concurrent_world_write_data() -> dict:
     """
-    测试 `system.invoke` 内部宏对 `world_state` 的并发写入。
+    测试 `codex.invoke` 内部宏对 `world_state` 的并发写入。
     """
     graph_definition = {
         "main": {
             "nodes": [
                 {
                     "id": "invoke_and_increment",
-                    "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "concurrent_codex", "source": "触发计数"}]}}]
+                    "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "concurrent_codex", "source": "触发计数"}]}}]
                 },
                 {
                     "id": "read_counter",
@@ -831,7 +831,7 @@ def codex_nonexistent_codex_data() -> dict:
     graph_definition = {
         "main": {"nodes": [{
             "id": "invoke_nonexistent",
-            "run": [{"runtime": "system.invoke", "config": {"from": [{"codex": "nonexistent_codex"}]}}]
+            "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "nonexistent_codex"}]}}]
         }]}
     }
     # codices 是空的，因为我们就是想测试找不到的情况

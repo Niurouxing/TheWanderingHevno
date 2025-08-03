@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 class InvokeRuntime(RuntimeInterface):
     """
-    system.invoke 运行时的实现。
+    codex.invoke 运行时的实现。
     """
     async def execute(
         self,

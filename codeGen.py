@@ -20,7 +20,7 @@ def collect_code_files(paths, output_file_path):
         'node_modules', '.git', '__pycache__', 'dist', 'build', 
         '.vscode', '.idea', 'venv', '.env', 'target', 'out', '.venv',
         'bower_components', 'coverage', '.cache', '.pytest_cache'
-        # , 'tests'
+        , 'tests'
     }
     excluded_files = {
         'package-lock.json', 'yarn.lock', '.DS_Store', 'pnpm-lock.yaml',
@@ -119,8 +119,8 @@ if __name__ == "__main__":
     paths = [
         "./backend", 
         "./plugins", 
-        "./tests", 
-        "./conftest.py",
+        # "./tests", 
+        # "./conftest.py",
     ]
     output_path = "code_collection.md"
     result = main(paths, output_path)

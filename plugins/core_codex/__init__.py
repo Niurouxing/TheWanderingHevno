@@ -8,9 +8,9 @@ logger = logging.getLogger(__name__)
 
 # --- 钩子实现 ---
 async def register_codex_runtime(runtimes: dict) -> dict:
-    """钩子实现：向引擎注册本插件提供的 'system.invoke' 运行时。"""
-    runtimes["system.invoke"] = InvokeRuntime
-    logger.debug("Runtime 'system.invoke' provided to runtime registry.")
+    """钩子实现：向引擎注册本插件提供的 'codex.invoke' 运行时。"""
+    runtimes["codex.invoke"] = InvokeRuntime 
+    logger.debug("Runtime 'codex.invoke' provided to runtime registry.")
     return runtimes
 
 # --- 主注册函数 ---
