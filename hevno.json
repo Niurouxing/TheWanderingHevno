@@ -1,0 +1,11 @@
+{
+  "plugins": {
+    "core_logging": { "source": "local" },
+    "core_persistence": { "source": "local" },
+    "core_engine": { "source": "local" },
+    "core_codex": { "source": "local" },
+    "core_llm": { "source": "local" },
+    "core_memoria": { "source": "local" },
+    "core_api": { "source": "local" }
+  }
+}

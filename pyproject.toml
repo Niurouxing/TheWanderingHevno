@@ -29,18 +29,27 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [ "uvicorn[standard]" ]
+dev = [ 
+    "uvicorn[standard]",
+    "typer[all]"
+]
+
+[project.scripts]
+hevno = "cli:app"
 
 [project.entry-points."hevno.plugins"]
 core_logging = "plugins.core_logging"
 
 [tool.setuptools]
-namespace-packages = ["plugins"]
+include-package-data = true # <-- 使用 MANIFEST.in
+py-modules = ["cli"]
+# namespace-packages 已被移除
+
 [tool.setuptools.packages.find]
 where = ["."]
+# `include` 保持不变，它只是告诉 setuptools 去哪里找包，
+# 而 Python 如何解释这些包是另一回事。
 include = ["backend*", "plugins*"]
-[tool.setuptools.package-data]
-"plugins.*" = ["*.json", "*.yaml"]
 
 
 # --- Pytest 配置 (已修正) ---

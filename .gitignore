@@ -39,3 +39,23 @@ pnpm-debug.log*
 *.swp
 
 code_collection.md
+
+
+/plugins/*
+
+# 但是，重新包含（取消忽略）核心插件，以便它们可以被版本控制
+!/plugins/core_api/
+!/plugins/core_codex/
+!/plugins/core_engine/
+!/plugins/core_llm/
+!/plugins/core_logging/
+!/plugins/core_memoria/
+!/plugins/core_persistence/
+
+# 同样，重新包含 plugins 命名空间包的 __init__.py
+!/plugins/__init__.py
+
+# 如果核心插件内有需要忽略的文件（比如测试产物），可以在这里单独添加
+/plugins/core_*/__pycache__/
+/plugins/core_*/tests/__pycache__/
+/hevno_engine.egg-info/ 
