@@ -4,8 +4,7 @@ import logging
 from typing import Dict, Any
 
 
-from ..interfaces import RuntimeInterface
-from ..contracts import ExecutionContext
+from ..contracts import ExecutionContext, RuntimeInterface
 
 logger = logging.getLogger(__name__)
 

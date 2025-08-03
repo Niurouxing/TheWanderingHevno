@@ -25,7 +25,7 @@ from .state import (
     create_sub_execution_context, 
     create_next_snapshot
 )
-from .interfaces import RuntimeInterface, SubGraphRunner
+from .contracts import RuntimeInterface, SubGraphRunner
 
 logger = logging.getLogger(__name__)
 

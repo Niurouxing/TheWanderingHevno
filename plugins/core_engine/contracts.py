@@ -3,15 +3,15 @@
 from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Callable
 from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, RootModel, ConfigDict, field_validator
+from abc import ABC, abstractmethod
 
 # 从平台核心导入最基础的接口
 from backend.core.contracts import HookManager
 
 # --- 1. 核心持久化状态模型 ---
-
 class RuntimeInstruction(BaseModel):
     runtime: str
     config: Dict[str, Any] = Field(default_factory=dict)
@@ -71,7 +71,6 @@ class ExecutionContext(BaseModel):
 
 
 # --- 3. 系统事件契约 (用于钩子) ---
-
 class NodeContext(BaseModel):
     node: GenericNode
     execution_context: ExecutionContext
@@ -108,7 +107,48 @@ class ResolveNodeDependenciesContext(BaseModel):
 
 
 # --- 4. 核心服务接口契约 (由 core-engine 实现) ---
-from abc import ABC, abstractmethod
+
+class SubGraphRunner(ABC):
+    """定义执行子图能力的抽象接口。"""
+    @abstractmethod
+    async def execute_graph(
+        self,
+        graph_name: str,
+        parent_context: ExecutionContext,
+        inherited_inputs: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        pass
+
+class RuntimeInterface(ABC):
+    """定义所有运行时必须实现的接口。"""
+    @abstractmethod
+    async def execute(
+        self,
+        config: Dict[str, Any],
+        context: ExecutionContext,
+        subgraph_runner: Optional[SubGraphRunner] = None,
+        pipeline_state: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        pass
+
+class MacroEvaluationServiceInterface(ABC):
+    """为宏求值逻辑定义服务接口。"""
+    @abstractmethod
+    def build_context(
+        self,
+        exec_context: ExecutionContext,
+        pipe_vars: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def evaluate(
+        self,
+        data: Any,
+        eval_context: Dict[str, Any],
+        lock: asyncio.Lock
+    ) -> Any:
+        raise NotImplementedError
 
 class ExecutionEngineInterface(ABC):
     @abstractmethod

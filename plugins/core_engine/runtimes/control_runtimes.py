@@ -4,10 +4,9 @@ from typing import Dict, Any, List, Optional
 import asyncio
 
 
-from ..interfaces import RuntimeInterface, SubGraphRunner
 from ..evaluation import evaluate_data, evaluate_expression, build_evaluation_context
-from ..utils import DotAccessibleDict
-from ..contracts import ExecutionContext
+from backend.core.utils import DotAccessibleDict
+from ..contracts import RuntimeInterface, SubGraphRunner, ExecutionContext
 
 
 class ExecuteRuntime(RuntimeInterface):

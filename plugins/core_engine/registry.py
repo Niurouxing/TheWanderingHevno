@@ -3,8 +3,7 @@
 from typing import Dict, Type, Callable
 import logging
 
-# --- 核心修改: 导入路径本地化 ---
-from .interfaces import RuntimeInterface
+from .contracts import RuntimeInterface
 
 logger = logging.getLogger(__name__)
 

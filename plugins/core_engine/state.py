@@ -20,7 +20,8 @@ from .contracts import (
     GraphCollection
 )
 
-from .utils import DotAccessibleDict, ServiceResolverProxy 
+from backend.core.utils import DotAccessibleDict 
+from .utils import ServiceResolverProxy 
 
 
 # --- Section 1: 状态存储类 (包含逻辑) ---

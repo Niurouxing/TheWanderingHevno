@@ -11,7 +11,7 @@ import datetime
 import json
 import re as re_module
 
-from .utils import DotAccessibleDict
+from backend.core.utils import DotAccessibleDict 
 from .contracts import ExecutionContext
 
 INLINE_MACRO_REGEX = re.compile(r"{{\s*(.+?)\s*}}", re.DOTALL)

@@ -7,13 +7,15 @@ from backend.core.contracts import Container, HookManager
 from .engine import ExecutionEngine
 from .registry import RuntimeRegistry
 from .state import SnapshotStore
-from .interfaces import RuntimeInterface
+from .contracts import RuntimeInterface # <- 修改导入
+from .evaluation_service import MacroEvaluationService # <- 新增导入
 from .runtimes.base_runtimes import InputRuntime, SetWorldVariableRuntime
 from .runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
 
 logger = logging.getLogger(__name__)
 
 # --- 服务工厂 ---
+# ... (_create_runtime_registry, _create_execution_engine 保持不变)
 
 def _create_runtime_registry() -> RuntimeRegistry:
     """工厂：仅创建 RuntimeRegistry 的【空】实例，并注册内置运行时。"""
@@ -41,10 +43,12 @@ def _create_execution_engine(container: Container) -> ExecutionEngine:
         hook_manager=container.resolve("hook_manager")
     )
 
+
 # --- 钩子实现 ---
+# ... (populate_runtime_registry 保持不变) ...
 async def populate_runtime_registry(container: Container):
     """
-    【新】钩子实现：监听应用启动事件，【异步地】收集并填充运行时注册表。
+    钩子实现：监听应用启动事件，【异步地】收集并填充运行时注册表。
     """
     logger.debug("Async task: Populating runtime registry from other plugins...")
     hook_manager = container.resolve("hook_manager")
@@ -70,8 +74,10 @@ def register_plugin(container: Container, hook_manager: HookManager):
     # 注册工厂，它只做同步部分
     container.register("runtime_registry", _create_runtime_registry, singleton=True)
     container.register("execution_engine", _create_execution_engine, singleton=True)
+    # 【新】注册宏求值服务
+    container.register("macro_evaluation_service", lambda: MacroEvaluationService(), singleton=True)
     
-    # 【新】注册一个监听器，它将在应用启动的异步阶段被调用
+    # 注册一个监听器，它将在应用启动的异步阶段被调用
     hook_manager.add_implementation(
         "services_post_register", 
         populate_runtime_registry, 

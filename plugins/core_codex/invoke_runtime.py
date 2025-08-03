@@ -7,14 +7,16 @@ from typing import Dict, Any, List, Optional, Set
 
 from pydantic import ValidationError
 
-# 从 core_engine 插件导入接口和组件
-from plugins.core_engine.interfaces import RuntimeInterface
-from plugins.core_engine.evaluation import evaluate_data, build_evaluation_context
-from plugins.core_engine.utils import DotAccessibleDict
-
-from plugins.core_engine.contracts import ExecutionContext # 依赖 core-engine 的契约
-
-
+# --- 【修复】导入路径 ---
+# 从平台核心导入通用工具
+from backend.core.utils import DotAccessibleDict
+# 从 core_engine 的公共契约导入所需接口和模型
+from plugins.core_engine.contracts import (
+    RuntimeInterface, 
+    ExecutionContext,
+    MacroEvaluationServiceInterface
+)
+# --- 结束修复 ---
 
 from .models import CodexCollection, ActivatedEntry, TriggerMode
 
@@ -32,6 +34,9 @@ class InvokeRuntime(RuntimeInterface):
         **kwargs
     ) -> Dict[str, Any]:
         # --- 0. 准备工作 ---
+        # 【修复】通过服务解析器获取宏求值服务
+        macro_service: MacroEvaluationServiceInterface = context.shared.services.macro_evaluation_service
+
         from_sources = config.get("from", [])
         if not from_sources:
             return {"output": ""}
@@ -51,8 +56,8 @@ class InvokeRuntime(RuntimeInterface):
         rejected_entries_trace = []
         initial_activation_trace = []
         
-        # 宏求值的上下文只需要创建一次
-        structural_eval_context = build_evaluation_context(context)
+        # 【修复】使用服务来构建宏求值上下文
+        structural_eval_context = macro_service.build_context(context)
 
         for source_config in from_sources:
             codex_name = source_config.get("codex")
@@ -65,17 +70,19 @@ class InvokeRuntime(RuntimeInterface):
                 continue
 
             source_text_macro = source_config.get("source", "")
-            source_text = await evaluate_data(source_text_macro, structural_eval_context, lock) if source_text_macro else ""
+            # 【修复】使用服务进行求值
+            source_text = await macro_service.evaluate(source_text_macro, structural_eval_context, lock) if source_text_macro else ""
 
             for entry in codex_model.entries:
-                is_enabled = await evaluate_data(entry.is_enabled, structural_eval_context, lock)
+                # 【修复】使用服务进行求值
+                is_enabled = await macro_service.evaluate(entry.is_enabled, structural_eval_context, lock)
                 if not is_enabled:
                     if debug_mode:
                         rejected_entries_trace.append({"id": entry.id, "reason": "is_enabled macro returned false"})
                     continue
-
-                keywords = await evaluate_data(entry.keywords, structural_eval_context, lock)
-                priority = await evaluate_data(entry.priority, structural_eval_context, lock)
+                # 【修复】使用服务进行求值
+                keywords = await macro_service.evaluate(entry.keywords, structural_eval_context, lock)
+                priority = await macro_service.evaluate(entry.priority, structural_eval_context, lock)
 
                 matched_keywords = []
                 is_activated = False
@@ -83,7 +90,6 @@ class InvokeRuntime(RuntimeInterface):
                     is_activated = True
                 elif entry.trigger_mode == TriggerMode.ON_KEYWORD and source_text and keywords:
                     for keyword in keywords:
-                        # 确保 keyword 是字符串以进行正则匹配
                         if re.search(re.escape(str(keyword)), str(source_text), re.IGNORECASE):
                             matched_keywords.append(keyword)
                     if matched_keywords:
@@ -108,11 +114,8 @@ class InvokeRuntime(RuntimeInterface):
         rendered_entry_ids: Set[str] = set()
         rendering_pool = sorted(initial_pool, key=lambda x: x.priority_val, reverse=True)
         
-        # Debugging trace lists
         evaluation_log = []
         recursive_activations = []
-
-        # 确定最大递归深度
         max_depth = max((act.codex_config.recursion_depth for act in rendering_pool), default=3) if rendering_pool else 3
 
         recursion_level = 0
@@ -124,14 +127,14 @@ class InvokeRuntime(RuntimeInterface):
             if entry_to_render.entry_model.id in rendered_entry_ids:
                 continue
             
-            # 为内容求值创建上下文，包含特殊的 'trigger' 对象
-            content_eval_context = build_evaluation_context(context)
+            # 【修复】使用服务来构建宏求值上下文
+            content_eval_context = macro_service.build_context(context)
             content_eval_context['trigger'] = DotAccessibleDict({
                 "source_text": entry_to_render.source_text,
                 "matched_keywords": entry_to_render.matched_keywords
             })
-
-            rendered_content = str(await evaluate_data(entry_to_render.entry_model.content, content_eval_context, lock))
+            # 【修复】使用服务进行求值
+            rendered_content = str(await macro_service.evaluate(entry_to_render.entry_model.content, content_eval_context, lock))
             
             final_text_parts.append(rendered_content)
             rendered_entry_ids.add(entry_to_render.entry_model.id)
@@ -142,24 +145,22 @@ class InvokeRuntime(RuntimeInterface):
                 recursion_level += 1
                 new_source_text = rendered_content
                 
-                # 遍历所有法典，寻找可被新内容递归触发的条目
                 for codex_name, codex_model in codex_collection.items():
                     for entry in codex_model.entries:
-                        # 跳过已处理或已在队列中的条目
                         if entry.id in rendered_entry_ids or any(p.entry_model.id == entry.id for p in rendering_pool):
                             continue
                         
-                        # 递归只对关键词模式有效
                         if entry.trigger_mode == TriggerMode.ON_KEYWORD:
-                            is_enabled = await evaluate_data(entry.is_enabled, structural_eval_context, lock)
+                            # 【修复】使用服务进行求值
+                            is_enabled = await macro_service.evaluate(entry.is_enabled, structural_eval_context, lock)
                             if not is_enabled: 
                                 continue
 
-                            keywords = await evaluate_data(entry.keywords, structural_eval_context, lock)
+                            keywords = await macro_service.evaluate(entry.keywords, structural_eval_context, lock)
                             new_matched_keywords = [kw for kw in keywords if re.search(re.escape(str(kw)), new_source_text, re.IGNORECASE)]
                             
                             if new_matched_keywords:
-                                priority = await evaluate_data(entry.priority, structural_eval_context, lock)
+                                priority = await macro_service.evaluate(entry.priority, structural_eval_context, lock)
                                 activated = ActivatedEntry(
                                     entry_model=entry, codex_name=codex_name, codex_config=codex_model.config,
                                     priority_val=int(priority), keywords_val=keywords, is_enabled_val=is_enabled,
@@ -172,7 +173,7 @@ class InvokeRuntime(RuntimeInterface):
                                         "reason": "recursive_keyword_match", "triggered_by": entry_to_render.entry_model.id
                                     })
         
-        # --- 3. 构造输出 ---
+        # --- 3. 构造输出 (保持不变) ---
         final_text = "\n\n".join(final_text_parts)
         
         if debug_mode:
