@@ -14,11 +14,7 @@ from backend.app import create_app
 from backend.container import Container
 from backend.core.hooks import HookManager
 from backend.core.tasks import BackgroundTaskManager
-from plugins.core_engine.engine import ExecutionEngine
-from plugins.core_engine.registry import RuntimeRegistry
-from plugins.core_engine.state import SnapshotStore
-from plugins.core_engine.runtimes.base_runtimes import InputRuntime, SetWorldVariableRuntime
-from plugins.core_engine.runtimes.control_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
+from plugins.core_engine import register_plugin as register_engine_plugin
 from plugins.core_llm import register_plugin as register_llm_plugin
 from plugins.core_codex import register_plugin as register_codex_plugin
 
@@ -34,7 +30,8 @@ from plugins.core_engine.contracts import (
     GraphCollection, 
     Sandbox, 
     StateSnapshot, 
-    SnapshotStoreInterface
+    SnapshotStoreInterface,
+    ExecutionEngineInterface
 )
 
 # --- Session-wide Fixtures ---
@@ -82,59 +79,41 @@ def test_client(app) -> Generator[TestClient, None, None]:
 
 
 @pytest_asyncio.fixture
-async def test_engine() -> AsyncGenerator[ExecutionEngine, None]:
+async def test_engine() -> AsyncGenerator[Tuple[ExecutionEngineInterface, ContainerInterface, HookManager], None]:
     """
-    【修改】这个 fixture 现在将返回一个元组：(engine, container, hook_manager)
-    以便测试可以访问和操作这些核心组件。
+    这个 fixture 现在返回一个元组：(engine, container, hook_manager)。
+    它通过直接调用插件的注册函数来构建一个更真实的测试环境。
     """
     # 1. 创建平台核心服务
     container = Container()
     hook_manager = HookManager()
     
-    # 【新增】手动创建和注册后台任务管理器
-    task_manager = BackgroundTaskManager(container, max_workers=2) # 使用少量工作者进行测试
+    task_manager = BackgroundTaskManager(container, max_workers=2)
+
+    # 2. 【核心修复】将核心服务注册到容器中，模仿 app.py 的行为
+    container.register("container", lambda: container)
+    container.register("hook_manager", lambda: hook_manager)
     container.register("task_manager", lambda: task_manager, singleton=True)
     
-    # 2. 手动注册 core_engine 自身的服务
-    container.register("snapshot_store", lambda: SnapshotStore(), singleton=True)
-    container.register("sandbox_store", lambda: {}, singleton=True)
-    
-    runtime_registry = RuntimeRegistry()
-    container.register("runtime_registry", lambda: runtime_registry)
-    
-    engine_factory = lambda c: ExecutionEngine(
-        registry=c.resolve("runtime_registry"),
-        container=c,
-        hook_manager=hook_manager
-    )
-    container.register("execution_engine", engine_factory, singleton=True)
-
-    # 3. 手动注册 core_engine 的内置运行时
-    runtime_registry.register("system.input", InputRuntime)
-    runtime_registry.register("system.set_world_var", SetWorldVariableRuntime)
-    runtime_registry.register("system.execute", ExecuteRuntime)
-    runtime_registry.register("system.call", CallRuntime)
-    runtime_registry.register("system.map", MapRuntime)
-
-    # 4. 手动注册依赖插件的服务和钩子
+    # 3. 按顺序调用每个插件的注册函数
+    register_engine_plugin(container, hook_manager)
     register_llm_plugin(container, hook_manager)
     register_codex_plugin(container, hook_manager)
 
-    # 5. 手动触发异步钩子来填充 RuntimeRegistry
-    external_runtimes = await hook_manager.filter("collect_runtimes", {})
-    for name, runtime_class in external_runtimes.items():
-        runtime_registry.register(name, runtime_class)
+    # 4. 手动触发异步钩子来填充服务
+    #    这里模拟的是 app.py 中 lifespan 的 'services_post_register' 钩子触发后的行为。
+    #    对于测试目的，我们可以直接调用 'populate_runtime_registry' 的逻辑。
+    #    从 core_engine/__init__.py 导入并调用异步填充函数
+    from plugins.core_engine import populate_runtime_registry
+    await populate_runtime_registry(container)
 
-    # 6. 从容器中解析出最终配置好的引擎实例
+    # 5. 从容器中解析出最终配置好的引擎实例
     engine = container.resolve("execution_engine")
     
-    # 启动后台任务管理器
     task_manager.start()
 
-    # yield 一个元组，包含所有需要的组件
     yield engine, container, hook_manager
     
-    # 在 fixture 结束时，优雅地停止后台任务管理器
     await task_manager.stop()
 
 
