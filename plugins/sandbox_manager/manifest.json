@@ -1,0 +1,19 @@
+{
+    "name": "sandbox-manager",
+    "version": "1.0.0",
+    "description": "A simple plugin to view and manage sandboxes.",
+    "author": "Hevno Team",
+
+    "frontend": {
+        "entryPoint": "/plugins/sandbox-manager/dist/index.js",
+        "priority": 10,
+        "contributions": {
+            "views": {
+                "workbench.sidebar": [{
+                    "id": "sandbox-manager.sandbox-list",
+                    "component": "SandboxList" 
+                }]
+            }
+        }
+    }
+}
