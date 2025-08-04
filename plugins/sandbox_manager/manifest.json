@@ -1,4 +1,6 @@
+
 {
+    "id": "sandbox-manager",
     "name": "sandbox-manager",
     "version": "1.0.0",
     "description": "A simple plugin to view and manage sandboxes.",

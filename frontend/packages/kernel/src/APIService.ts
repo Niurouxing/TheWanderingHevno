@@ -3,7 +3,7 @@ type Interceptor = (request: Request) => Request | Promise<Request>;
 
 export class APIService {
   private requestInterceptors: Interceptor[] = [];
-  private baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+  private baseUrl = '';
 
   public addRequestInterceptor(interceptor: Interceptor) {
     this.requestInterceptors.push(interceptor);
