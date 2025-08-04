@@ -135,19 +135,19 @@ if __name__ == "__main__":
     #     # "./",
     # ]
 
-    # paths = [
-    #     "./frontend",
-    #     "./plugins/core_layout",
-    #     "./plugins/core_remote_hooks",
-    #     "./plugins/core_websocket",
-    #     "./plugins/sandbox_manager",
-    # ]
-
     paths = [
-        "./backend", 
         "./frontend",
-        "./plugins",
+        "./plugins/core_layout",
+        "./plugins/core_remote_hooks",
+        "./plugins/core_websocket",
+        "./plugins/sandbox_manager",
     ]
+
+    # paths = [
+    #     "./backend", 
+    #     "./frontend",
+    #     "./plugins",
+    # ]
     output_path = "code_collection.md"
     result = main(paths, output_path)
     print(result)

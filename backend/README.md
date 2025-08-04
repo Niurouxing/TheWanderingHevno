@@ -24,7 +24,7 @@
 
 这四条哲学是您作为“世界创造者”与 Hevno 引擎交互的基础。它们定义了您如何通过图（Graph）来描述和构建动态世界的行为逻辑。
 
-> **注意**: 这些哲学描述的是由 `core-engine` 插件实现的**图执行模型**，与后端代码的组织方式（插件架构）是两个不同但互补的概念。
+> **注意**: 这些哲学描述的是由 `core_engine` 插件实现的**图执行模型**，与后端代码的组织方式（插件架构）是两个不同但互补的概念。
 
 #### 1.2.1 哲学一：以运行时为中心，指令式地构建行为
 
@@ -208,13 +208,13 @@ Hevno 的后端架构遵循“微内核 + 插件”的设计模式，其灵感�
     2.  **解析 (Resolution)**: 当系统中任何部分（另一个服务或一个 API 端点）需要一个服务时，它不会自己去 `new` 一个实例，而是向容器请求 `container.resolve("service_name")`。容器会查找对应的工厂，创建实例（如果是第一次请求且是单例），并返回它。
 
 *   **带来的好处**:
-    *   **解耦**: `core-engine` 插件不需要知道 `LLMService` 是如何被创建的，它只需要知道去容器里找一个名为 `"llm_service"` 的服务即可。
+    *   **解耦**: `core_engine` 插件不需要知道 `LLMService` 是如何被创建的，它只需要知道去容器里找一个名为 `"llm_service"` 的服务即可。
     *   **可配置性**: 我们可以轻松地替换实现。例如，在测试环境中，可以注册一个 `MockLLMService` 工厂来代替真实的 `LLMService` 工厂，而使用服务的代码无需任何改动。
     *   **懒加载**: 服务只在第一次被请求时才会被创建，避免了不必要的启动开销。
 
 **示例：`LLMService` 的生命周期**
 ```python
-# 1. 在 core-llm/__init__.py 中，插件注册了一个工厂
+# 1. 在 core_llm/__init__.py 中，插件注册了一个工厂
 def _create_llm_service(container: Container):
     # ...复杂的服务创建逻辑，可能依赖其他服务...
     return LLMService(...)
@@ -240,7 +240,7 @@ services = DotAccessibleDict(ServiceResolverProxy(container))
 如果说 DI 容器解决了“谁来创建服务”的问题，那么钩子系统就解决了“插件如何安全地对话和扩展彼此”的问题。它是一个发布-订阅（Pub/Sub）事件总线。
 
 *   **工作模式**:
-    1.  **触发 (Trigger)**: 一个插件（发布者）在某个关键执行点，会通过 `hook_manager` 触发一个命名的事件（钩子），并传递相关数据。例如，`core-engine` 在需要所有运行时的时候，会触发 `"collect_runtimes"` 钩子。
+    1.  **触发 (Trigger)**: 一个插件（发布者）在某个关键执行点，会通过 `hook_manager` 触发一个命名的事件（钩子），并传递相关数据。例如，`core_engine` 在需要所有运行时的时候，会触发 `"collect_runtimes"` 钩子。
     2.  **实现 (Implementation)**: 其他插件（订阅者）可以向 `hook_manager` 注册一个异步函数，以响应该钩子。
     3.  **执行 (Execution)**: `hook_manager` 负责调用所有已注册的实现函数，并根据钩子类型（如 `filter`）聚合它们的返回值。
 
@@ -248,9 +248,9 @@ services = DotAccessibleDict(ServiceResolverProxy(container))
     *   **通知 (`trigger`)**: “我刚刚做完了这件事，通知大家一下。” 所有实现并发执行，返回值被忽略。
     *   **过滤 (`filter`)**: “我有一份数据，谁想在上面添加或修改一些东西？” 所有实现按优先级顺序链式执行，后一个实现会接收前一个修改过的数据。非常适合用于收集信息。
 
-**示例：`core-engine` 如何从所有插件收集运行时和 API 路由**
+**示例：`core_engine` 如何从所有插件收集运行时和 API 路由**
 ```python
-# 在 core-engine/__init__.py 中...
+# 在 core_engine/__init__.py 中...
 async def populate_runtime_registry(container: Container):
     # 引擎广播：“我需要运行时，请把你们的运行时给我。”
     all_runtimes = await hook_manager.filter("collect_runtimes", {})
@@ -264,12 +264,12 @@ async def lifespan(app: FastAPI):
         app.include_router(router)
 ```
 ```python
-# 在 core-llm/__init__.py 中...
+# 在 core_llm/__init__.py 中...
 async def provide_runtime(runtimes: dict) -> dict:
     runtimes["llm.default"] = LLMRuntime # LLM 插件响应
     return runtimes
 
-# 在 core-api/__init__.py 中...
+# 在 core_api/__init__.py 中...
 async def provide_own_routers(routers: list) -> list:
     routers.append(sandbox_router) # API 插件响应
     return routers
@@ -279,7 +279,7 @@ def register_plugin(container: Container, hook_manager: HookManager):
     hook_manager.add_implementation("collect_runtimes", provide_runtime)
     hook_manager.add_implementation("collect_api_routers", provide_own_routers)
 ```
-通过这种方式，`core-engine` 和 `app.py` 根本不需要知道 `core-llm` 或 `core-api` 插件的存在，但依然能获取它们提供的功能，实现了彻底的解耦。
+通过这种方式，`core_engine` 和 `app.py` 根本不需要知道 `core_llm` 或 `core_api` 插件的存在，但依然能获取它们提供的功能，实现了彻底的解耦。
 
 ### 2.3 插件剖析：如何构建一个插件
 
@@ -307,14 +307,14 @@ plugins/
     a. 扫描 `plugins` 目录并根据 `manifest.json` 的 `priority` 排序。
     b. 按顺序调用每个插件的 `register_plugin` 函数。在此阶段，插件只向容器注册**服务工厂**，和向钩子管理器注册**钩子实现**。服务实例**尚未被创建**。
 3.  **异步初始化阶段**: `lifespan` 触发 `"services_post_register"` 钩子。
-    *   监听此钩子的插件（如 `core-engine` 和 `core-api`）现在可以安全地从容器中解析依赖，并执行需要 `async` 的初始化任务，例如从其他插件收集并填充自己的注册表（如 `RuntimeRegistry`）。
+    *   监听此钩子的插件（如 `core_engine` 和 `core_api`）现在可以安全地从容器中解析依赖，并执行需要 `async` 的初始化任务，例如从其他插件收集并填充自己的注册表（如 `RuntimeRegistry`）。
 4.  **API 路由收集**: `lifespan` 触发 `"collect_api_routers"` 钩子，收集所有插件提供的 FastAPI `APIRouter` 实例，并挂载到主 `app` 上。
 5.  **启动完成**: 触发 `"app_startup_complete"` 钩子，应用正式就绪，开始接受请求。
 
 
 ## 3. 图与宏系统定义
 
-本章节将深入探讨您作为“世界创造者”与 Hevno 引擎交互的核心——**图定义**。这部分内容主要由 `core-engine` 插件实现，但其使用方式对所有插件都是通用的。
+本章节将深入探讨您作为“世界创造者”与 Hevno 引擎交互的核心——**图定义**。这部分内容主要由 `core_engine` 插件实现，但其使用方式对所有插件都是通用的。
 
 ### 3.1 图定义格式与核心概念
 
@@ -653,7 +653,7 @@ Hevno 引擎的核心承诺是：**为所有基于 Python 基础数据类型（�
 
 ## 4. `system` 运行时参考
 
-Hevno 引擎通过 `core-engine` 插件提供了一套功能强大、职责清晰的内置运行时，它们都位于 `system` 命名空间下。这套运行时是构建复杂图逻辑的基础工具。
+Hevno 引擎通过 `core_engine` 插件提供了一套功能强大、职责清晰的内置运行时，它们都位于 `system` 命名空间下。这套运行时是构建复杂图逻辑的基础工具。
 
 ### 4.1. 核心设计原则
 
@@ -821,7 +821,7 @@ Hevno Engine 的核心力量来自于其动态、可插拔的插件系统。我�
 ```json
 {
   "plugins": {
-    "core-engine": {
+    "core_engine": {
       "source": "local"
     },
     "stable-dice-roller": {
@@ -840,7 +840,7 @@ Hevno Engine 的核心力量来自于其动态、可插拔的插件系统。我�
 ```
 
 *   **`plugins`**: 插件字典。
-    *   **键 (`core-engine`, `stable-dice-roller`)**: 插件的唯一标识符。这将是它在 `plugins/` 目录下的文件夹名称。
+    *   **键 (`core_engine`, `stable-dice-roller`)**: 插件的唯一标识符。这将是它在 `plugins/` 目录下的文件夹名称。
     *   **值 (插件配置对象)**:
         *   `source`: 定义插件来源。
             *   `"local"`: 表示这是一个项目本地的核心插件，由主仓库管理，插件管理器会跳过它。
@@ -920,10 +920,10 @@ uvicorn backend.main:app --reload
         "description": "A brief description of what this plugin does.",
         "author": "Your Name",
         "priority": 50,
-        "dependencies": ["core-engine"] 
+        "dependencies": ["core_engine"] 
     }
     ```
-    *   `priority`: 加载优先级，数字越小越先加载。核心插件有预设的优先级（如 `core-logging` 是 -100，`core-engine` 是 50）。
+    *   `priority`: 加载优先级，数字越小越先加载。核心插件有预设的优先级（如 `core_logging` 是 -100，`core_engine` 是 50）。
 
 3.  **入口点 `__init__.py`**: 每个插件必须提供一个 `register_plugin` 函数，这是引擎与插件通信的桥梁。
     ```python
@@ -942,19 +942,19 @@ uvicorn backend.main:app --reload
 通过这个系统，Hevno 的世界可以像乐高积木一样被无限组合和扩展。我们期待看到您创造的精彩插件！
 
 
-## `core-memoria` 插件文档
+## `core_memoria` 插件文档
 
 ### 1. 简介：赋予世界记忆与反思的能力
 
-`core-memoria` 是 Hevno 引擎中的一个核心插件，其使命是为您的 AI 世界提供一个强大、持久且可查询的记忆系统。它不仅仅是一个日志记录器，更是一个能让 AI 代理和世界本身从历史中学习、演化和反思的动态知识库。
+`core_memoria` 是 Hevno 引擎中的一个核心插件，其使命是为您的 AI 世界提供一个强大、持久且可查询的记忆系统。它不仅仅是一个日志记录器，更是一个能让 AI 代理和世界本身从历史中学习、演化和反思的动态知识库。
 
-通过 `core-memoria`，您可以轻松实现：
+通过 `core_memoria`，您可以轻松实现：
 *   **短期记忆**：为 LLM 提供最近发生的事件，确保对话和行为的连贯性。
 *   **长期反思**：自动将一系列零散事件**综合**成更高层次的“里程碑”或“章节总结”。
 *   **情境感知**：根据标签或层级检索相关的历史记忆，让 AI 能够将新旧信息联系起来。
 *   **角色心路历程**：为每个角色或主题维护独立的“记忆回廊”，追踪他们的成长与变化。
 
-`core-memoria` 将离散的事件流，编织成一张富有深度和因果关系的智慧之网，是构建真正动态、可交互 AI 世界的关键。
+`core_memoria` 将离散的事件流，编织成一张富有深度和因果关系的智慧之网，是构建真正动态、可交互 AI 世界的关键。
 
 ### 2. 核心概念：世界状态中的“记忆宫殿”
 
@@ -997,7 +997,7 @@ uvicorn backend.main:app --reload
 
 ### 3. 使用指南：运行时 (Runtimes)
 
-`core-memoria` 插件提供了一套简洁、强大的运行时（积木块），让您可以轻松地与记忆系统交互，而无需编写复杂的代码。
+`core_memoria` 插件提供了一套简洁、强大的运行时（积木块），让您可以轻松地与记忆系统交互，而无需编写复杂的代码。
 
 #### 3.1 `memoria.add`：烙印新记忆
 
@@ -1087,7 +1087,7 @@ uvicorn backend.main:app --reload
 
 ### 4. 自动化功能：记忆的自动综合
 
-`core-memoria` 最强大的功能之一是它能够自动进行“记忆综合”——即在后台调用 LLM，将一系列零散的事件总结成一个更高层次的“里程碑”或“章节概要”。
+`core_memoria` 最强大的功能之一是它能够自动进行“记忆综合”——即在后台调用 LLM，将一系列零散的事件总结成一个更高层次的“里程碑”或“章节概要”。
 
 这个过程是**完全异步和非阻塞的**，不会影响主图的执行性能。
 
@@ -1154,4 +1154,4 @@ Events:
 }
 ```
 
-这种灵活性确保了 `core-memoria` 既是一个易于上手的工具，也是一个功能没有上限的强大平台。
+这种灵活性确保了 `core_memoria` 既是一个易于上手的工具，也是一个功能没有上限的强大平台。

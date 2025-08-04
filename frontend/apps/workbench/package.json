@@ -5,15 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build"
+    "build": " vite build"
   },
-  "dependencies": {
-    "@hevno/kernel": "workspace:*",
-    "@hevno/frontend-sdk": "workspace:*",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0"
-  },
-  "devDependencies": {
-    "rollup": "^4.0.0"
-  }
+    "dependencies": {
+    "@hevno/kernel": "0.1.0",
+    "@hevno/frontend-sdk": "0.1.0"
+    }
 }

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 # --- Router for persistence API ---
 persistence_router = APIRouter(
     prefix="/api/persistence", 
-    tags=["Core-Persistence"]
+    tags=["core_Persistence"]
 )
 
 @persistence_router.get("/assets/{asset_type}", response_model=List[str])

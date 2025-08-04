@@ -1,6 +1,6 @@
 {
     "id": "core_api",
-    "name": "core-api",
+    "name": "core_api",
     "version": "1.0.0",
     "description": "Provides the core RESTful API endpoints and the system reporting auditor.",
     "author": "Hevno Team",

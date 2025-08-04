@@ -106,7 +106,7 @@ class ResolveNodeDependenciesContext(BaseModel):
     auto_inferred_deps: Set[str]
 
 
-# --- 4. 核心服务接口契约 (由 core-engine 实现) ---
+# --- 4. 核心服务接口契约 (由 core_engine 实现) ---
 
 class SubGraphRunner(ABC):
     """定义执行子图能力的抽象接口。"""

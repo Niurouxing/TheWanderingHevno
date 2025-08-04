@@ -27,9 +27,9 @@ from .. import register_plugin as register_memoria_plugin
 @pytest_asyncio.fixture
 async def memoria_test_engine() -> AsyncGenerator[Tuple[ExecutionEngineInterface, ContainerInterface, HookManagerInterface], None]:
     """
-    一个专门为 core-memoria 插件测试定制的 fixture。
+    一个专门为 core_memoria 插件测试定制的 fixture。
     
-    它只加载运行 memoria 功能所必需的插件 (core-engine, core-llm, core-memoria)，
+    它只加载运行 memoria 功能所必需的插件 (core_engine, core_llm, core_memoria)，
     从而提供一个轻量级、隔离的测试环境。
     """
     # 1. 初始化平台核心服务
@@ -49,7 +49,7 @@ async def memoria_test_engine() -> AsyncGenerator[Tuple[ExecutionEngineInterface
     register_memoria_plugin(container, hook_manager) # 注册我们自己
 
     # 3. 手动触发服务初始化钩子
-    #    这对于 core-engine 填充其运行时注册表至关重要。
+    #    这对于 core_engine 填充其运行时注册表至关重要。
     await hook_manager.trigger('services_post_register', container=container)
 
     # 4. 从容器中解析出最终配置好的引擎实例

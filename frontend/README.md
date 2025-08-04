@@ -9,7 +9,7 @@
 
 我们的前端是一个“微型操作系统”，其功能和UI完全由动态加载的**插件**构成。每个插件都是一个独立的包，包含自己的前端代码（如 `dist/index.js`）。
 
-目前，前端内核通过 `/api/plugins/manifest` 端点获取插件列表及其入口文件路径（如 `/plugins/core-layout/dist/index.js`）。然而，当浏览器尝试请求这个URL时，后端无法识别并返回404错误，因为没有一个机制能将 `/plugins/...` 这样的URL路径映射到服务器上实际的插件文件位置。
+目前，前端内核通过 `/api/plugins/manifest` 端点获取插件列表及其入口文件路径（如 `/plugins/core_layout/dist/index.js`）。然而，当浏览器尝试请求这个URL时，后端无法识别并返回404错误，因为没有一个机制能将 `/plugins/...` 这样的URL路径映射到服务器上实际的插件文件位置。
 
 ### 2. 目标与需求 (The Goal)
 
@@ -18,10 +18,10 @@
 #### **具体需求:**
 
 1.  **统一的URL结构**: 所有插件的资源都应通过一个统一的、可预测的URL前缀进行访问。我们建议使用 `/plugins`。
-    *   例如，要访问 `core-layout` 插件的 `dist/bundle.css` 文件，前端将请求 `GET /plugins/core-layout/dist/bundle.css`。
+    *   例如，要访问 `core_layout` 插件的 `dist/bundle.css` 文件，前端将请求 `GET /plugins/core_layout/dist/bundle.css`。
 
 2.  **动态路径解析**: 后端必须能够将上述URL动态地解析到服务器文件系统上的正确路径。
-    *   `GET /plugins/core-layout/dist/bundle.css` -> 应返回 `[项目根目录]/plugins/core-layout/dist/bundle.css` 文件的内容。
+    *   `GET /plugins/core_layout/dist/bundle.css` -> 应返回 `[项目根目录]/plugins/core_layout/dist/bundle.css` 文件的内容。
     *   `GET /plugins/world-viewer/assets/icon.svg` -> 应返回 `[项目根目录]/plugins/world-viewer/assets/icon.svg` 文件的内容。
 
 3.  **极简实现**: 该功能应作为后端核心能力的一部分，避免复杂的配置。理想情况下，它应该能自动发现并服务所有位于 `plugins/` 目录下的插件资源。
@@ -39,10 +39,10 @@
 
 #### **工作流 (Workflow):**
 
-1.  前端浏览器向后端发送请求，例如 `GET /plugins/core-layout/frontend/dist/index.js`。
+1.  前端浏览器向后端发送请求，例如 `GET /plugins/core_layout/frontend/dist/index.js`。
 2.  FastAPI的路由系统匹配到 `/plugins/{plugin_id}/{resource_path:path}`。
 3.  路由处理函数接收到参数:
-    *   `plugin_id = "core-layout"`
+    *   `plugin_id = "core_layout"`
     *   `resource_path = "frontend/dist/index.js"`
 4.  在函数内部，后端执行以下逻辑：
     a.  **构建物理文件路径**: 将插件ID和资源路径拼接成服务器上的绝对文件路径。

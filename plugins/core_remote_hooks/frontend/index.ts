@@ -101,7 +101,7 @@ export default definePlugin({
      * 这是注册静态资源（如组件）的最佳时机。
      */
     onLoad: (context: PluginContext) => {
-        // 注册 ConnectionStatus UI 组件，以便 core-layout 插件可以渲染它。
+        // 注册 ConnectionStatus UI 组件，以便 core_layout 插件可以渲染它。
         context.registerComponent('ConnectionStatus', ConnectionStatus);
     },
 

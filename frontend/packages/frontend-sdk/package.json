@@ -22,17 +22,9 @@
     }
   },
   "scripts": {
-    "dev": "pnpm -r --parallel dev",
     "build": "vite build"
   },
   "peerDependencies": {
     "react": "^18.2.0"
-  },
-  "devDependencies": {
-    "vite": "^5.0.0",
-    "typescript": "^5.0.0",
-    "@vitejs/plugin-react": "^4.0.0",
-    "vite-plugin-dts": "^3.9.1",
-    "rollup": "^4.0.0"
   }
 }

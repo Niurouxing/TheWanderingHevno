@@ -5,7 +5,7 @@ import logging
 from fastapi import WebSocket
 
 from backend.core.contracts import Container, HookManager
-# 依赖 core-websocket 提供的服务
+# 依赖 core_websocket 提供的服务
 from plugins.core_websocket.connection_manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
@@ -54,18 +54,18 @@ async def forward_achievement_hook(container: Container, **kwargs):
 
 # --- 主注册函数 ---
 def register_plugin(container: Container, hook_manager: HookManager):
-    logger.info("--> 正在注册 [core-remote-hooks] 插件...")
+    logger.info("--> 正在注册 [core_remote-hooks] 插件...")
     
     hook_manager.add_implementation(
         "websocket.message_received",
         handle_incoming_hook,
-        plugin_name="core-remote-hooks"
+        plugin_name="core_remote-hooks"
     )
 
     hook_manager.add_implementation(
         "achievement.unlocked",
         forward_achievement_hook,
-        plugin_name="core-remote-hooks"
+        plugin_name="core_remote-hooks"
     )
 
-    logger.info("插件 [core-remote-hooks] 注册成功。")
+    logger.info("插件 [core_remote-hooks] 注册成功。")

@@ -20,7 +20,7 @@ async def provide_router(routers: list) -> list:
     return routers
 
 def register_plugin(container: Container, hook_manager: HookManager):
-    logger.info("--> 正在注册 [core-persistence] 插件...")
+    logger.info("--> 正在注册 [core_persistence] 插件...")
     
     container.register("persistence_service", _create_persistence_service)
     logger.debug("服务 'persistence_service' 已注册。")
@@ -28,4 +28,4 @@ def register_plugin(container: Container, hook_manager: HookManager):
     hook_manager.add_implementation("collect_api_routers", provide_router, plugin_name="core_persistence")
     logger.debug("钩子实现 'collect_api_routers' 已注册。")
     
-    logger.info("插件 [core-persistence] 注册成功。")
+    logger.info("插件 [core_persistence] 注册成功。")

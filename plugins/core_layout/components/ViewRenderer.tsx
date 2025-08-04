@@ -27,7 +27,7 @@ const ViewRenderer: React.FC<ViewRendererProps> = ({ contributionPoint, classNam
       {contributions.map(contrib => {
         const Component = pluginService.getComponent(contrib.pluginId, contrib.component);
         if (!Component) {
-          console.warn(`[core-layout] Component "${contrib.component}" from plugin "${contrib.pluginId}" not found for contribution point "${contributionPoint}".`);
+          console.warn(`[core_layout] Component "${contrib.component}" from plugin "${contrib.pluginId}" not found for contribution point "${contributionPoint}".`);
           return null;
         }
         return <Component key={contrib.id} />;

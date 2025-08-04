@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 def _create_memoria_event_queue() -> Dict[UUID, List[Dict[str, Any]]]:
     """
     工厂函数：创建一个简单的、内存中的事件队列。
-    这个队列是 core-memoria 插件私有的，用于暂存后台任务完成的事件。
+    这个队列是 core_memoria 插件私有的，用于暂存后台任务完成的事件。
     - 键: sandbox_id
     - 值: 一个包含事件负载字典的列表
     """
@@ -96,7 +96,7 @@ async def apply_pending_synthesis(context: ExecutionContext, container: Containe
 
 # --- 主注册函数 (Main Registration Function) ---
 def register_plugin(container: Container, hook_manager: HookManager):
-    logger.info("--> 正在注册 [core-memoria] 插件...")
+    logger.info("--> 正在注册 [core_memoria] 插件...")
 
     container.register("memoria_event_queue", _create_memoria_event_queue, singleton=True)
     logger.debug("服务 'memoria_event_queue' 已注册。")
@@ -104,15 +104,15 @@ def register_plugin(container: Container, hook_manager: HookManager):
     hook_manager.add_implementation(
         "collect_runtimes", 
         provide_memoria_runtimes, 
-        plugin_name="core-memoria"
+        plugin_name="core_memoria"
     )
 
     hook_manager.add_implementation(
         "before_graph_execution",
         apply_pending_synthesis,
         priority=50,
-        plugin_name="core-memoria"
+        plugin_name="core_memoria"
     )
     logger.debug("钩子实现 'collect_runtimes' 和 'before_graph_execution' 已注册。")
 
-    logger.info("插件 [core-memoria] 注册成功。")
+    logger.info("插件 [core_memoria] 注册成功。")

@@ -1,6 +1,6 @@
 {
     "id": "core_remote_hooks",
-    "name": "Core Remote Hooks",
+    "name": "core_remote_hooks",
     "version": "1.0.0",
     "description": "Full-stack plugin bridging backend/frontend hook systems via WebSocket.",
     "author": "Hevno Team",
@@ -16,7 +16,7 @@
             "views": {
                 "workbench.statusbar.left": [
                     {
-                        "id": "core-remote-hooks.connection-status",
+                        "id": "core_remote-hooks.connection-status",
                         "component": "ConnectionStatus"
                     }
                 ]

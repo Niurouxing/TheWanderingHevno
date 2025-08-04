@@ -10,9 +10,9 @@ from backend.core.contracts import Container, HookManager
 PLUGIN_DIR = Path(__file__).parent
 
 def register_plugin(container: Container, hook_manager: HookManager):
-    """这是 core-logging 插件的注册入口。"""
+    """这是 core_logging 插件的注册入口。"""
     # 统一的入口消息
-    print("--> 正在注册 [core-logging] 插件...")
+    print("--> 正在注册 [core_logging] 插件...")
     
     config_path = PLUGIN_DIR / "logging_config.yaml"
     with open(config_path, 'r', encoding='utf-8') as f:
@@ -28,4 +28,4 @@ def register_plugin(container: Container, hook_manager: HookManager):
     logger = logging.getLogger(__name__)
     
     # 统一的成功消息
-    logger.info("插件 [core-logging] 注册成功。")
+    logger.info("插件 [core_logging] 注册成功。")

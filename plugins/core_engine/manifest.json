@@ -1,6 +1,6 @@
 {
     "id": "core_engine",
-    "name": "core-engine",
+    "name": "core_engine",
     "version": "1.0.0",
     "description": "Provides the graph parsing, scheduling, and execution engine.",
     "author": "Hevno Team",

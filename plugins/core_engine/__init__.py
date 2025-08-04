@@ -72,7 +72,7 @@ async def populate_runtime_registry(container: Container):
 
 # --- 主注册函数 ---
 def register_plugin(container: Container, hook_manager: HookManager):
-    logger.info("--> 正在注册 [core-engine] 插件...")
+    logger.info("--> 正在注册 [core_engine] 插件...")
 
     container.register("snapshot_store", lambda: SnapshotStore(), singleton=True)
     container.register("sandbox_store", lambda: {}, singleton=True)
@@ -86,7 +86,7 @@ def register_plugin(container: Container, hook_manager: HookManager):
     hook_manager.add_implementation(
         "services_post_register", 
         populate_runtime_registry, 
-        plugin_name="core-engine"
+        plugin_name="core_engine"
     )
 
-    logger.info("插件 [core-engine] 注册成功。")
+    logger.info("插件 [core_engine] 注册成功。")

@@ -1,4 +1,0 @@
-packages:
-  - 'packages/*'  # @hevno/kernel, @hevno/sdk, ...
-  - 'apps/*'      # @hevno/workbench
-  - '../plugins/*'

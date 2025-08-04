@@ -38,9 +38,9 @@ async def provide_router(routers: list, container: Container, hook_manager: Hook
 
 # --- 主注册函数 ---
 def register_plugin(container: Container, hook_manager: HookManager):
-    logger.info("--> 正在注册 [core-websocket] 插件...")
+    logger.info("--> 正在注册 [core_websocket] 插件...")
     
     container.register("connection_manager", _create_connection_manager, singleton=True)
-    hook_manager.add_implementation("collect_api_routers", provide_router, plugin_name="core-websocket")
+    hook_manager.add_implementation("collect_api_routers", provide_router, plugin_name="core_websocket")
     
-    logger.info("插件 [core-websocket] 注册成功。")
+    logger.info("插件 [core_websocket] 注册成功。")

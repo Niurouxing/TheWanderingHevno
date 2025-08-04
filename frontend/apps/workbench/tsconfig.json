@@ -1,11 +1,14 @@
-// apps/workbench/tsconfig.json
+// frontend/apps/workbench/tsconfig.json (UPDATE)
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "types": ["vite/client"],
-    // Workbench 不会发布，所以不需要 declaration
-    "noEmit": true, 
-    "composite": false
+    "noEmit": true,
+    "composite": true 
   },
-  "include": ["src"]
+  "include": ["src"],
+  "references": [
+    { "path": "../../packages/kernel" },
+    { "path": "../../packages/frontend-sdk" }
+  ]
 }

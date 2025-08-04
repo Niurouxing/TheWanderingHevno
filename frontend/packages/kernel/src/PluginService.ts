@@ -69,6 +69,24 @@ export class PluginService implements IPluginService {
     return this.loadedPlugins.get(pluginId)?.components.get(componentName);
   }
 
+  private loadScript(url: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = url;
+      script.async = true;
+      script.onload = () => {
+        // 脚本已执行，现在可以清理它了。
+        script.remove();
+        resolve();
+      };
+      script.onerror = () => {
+        script.remove();
+        reject(new Error(`Failed to load script: ${url}`));
+      };
+      document.head.appendChild(script);
+    });
+  }
+
   /**
    * [已更新] 启动完整的插件加载和初始化流程。
    * 此方法现在使用新的、更健壮的逻辑来过滤和排序插件。
@@ -99,7 +117,7 @@ export class PluginService implements IPluginService {
       const { entryPoint, priority } = manifest.frontend!;
       console.log(`     - Loading: ${manifest.id} (priority: ${priority})`);
       try {
-        await this.loadModule(entryPoint);
+        await this.loadScript(entryPoint);
         
         const lifecycle = (window as any).__HEVNO_PENDING_PLUGIN__ as PluginLifecycle;
         if (!lifecycle) {
@@ -149,10 +167,4 @@ export class PluginService implements IPluginService {
     this.hooks.trigger('plugins:ready');
   }
 
-  /**
-   * 使用现代的动态 `import()` 语法来加载一个JS模块。
-   */
-  private loadModule(url: string): Promise<any> {
-    return import(/* @vite-ignore */ url);
-  }
 }

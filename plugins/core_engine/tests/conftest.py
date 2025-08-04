@@ -22,7 +22,7 @@ from plugins.core_engine.contracts import GraphCollection, ExecutionEngineInterf
 @pytest_asyncio.fixture
 async def test_engine() -> AsyncGenerator[Tuple[ExecutionEngineInterface, ContainerInterface, HookManagerInterface], None]:
     """
-    为 core-engine 测试提供一个隔离但功能齐全的 ExecutionEngine 实例。
+    为 core_engine 测试提供一个隔离但功能齐全的 ExecutionEngine 实例。
     """
     container = Container()
     hook_manager = HookManager(container)

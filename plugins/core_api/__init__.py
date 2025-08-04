@@ -40,20 +40,20 @@ async def provide_own_routers(routers: List[APIRouter]) -> List[APIRouter]:
 
 # --- 主注册函数 ---
 def register_plugin(container: Container, hook_manager: HookManager):
-    logger.info("--> 正在注册 [core-api] 插件...")
+    logger.info("--> 正在注册 [core_api] 插件...")
 
     container.register("auditor", _create_auditor, singleton=True)
     
     hook_manager.add_implementation(
         "services_post_register",
         populate_auditor,
-        plugin_name="core-api"
+        plugin_name="core_api"
     )
     
     hook_manager.add_implementation(
         "collect_api_routers", 
         provide_own_routers, 
         priority=100, # 保持高优先级，确保这些核心路由被正确注册
-        plugin_name="core-api"
+        plugin_name="core_api"
     )
-    logger.info("插件 [core-api] 注册成功。")
+    logger.info("插件 [core_api] 注册成功。")

@@ -1,6 +1,6 @@
 {
     "id": "core_websocket",
-    "name": "core-websocket",
+    "name": "core_websocket",
     "version": "1.0.0",
     "description": "Provides core WebSocket connection management and broadcast capabilities.",
     "author": "Hevno Team",

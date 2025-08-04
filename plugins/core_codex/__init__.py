@@ -15,15 +15,15 @@ async def register_codex_runtime(runtimes: dict) -> dict:
 
 # --- 主注册函数 ---
 def register_plugin(container: Container, hook_manager: HookManager):
-    logger.info("--> 正在注册 [core-codex] 插件...")
+    logger.info("--> 正在注册 [core_codex] 插件...")
 
     # 本插件只提供运行时，不注册服务。
-    # 它通过钩子与 core-engine 通信。
+    # 它通过钩子与 core_engine 通信。
     hook_manager.add_implementation(
         "collect_runtimes", 
         register_codex_runtime, 
-        plugin_name="core-codex"
+        plugin_name="core_codex"
     )
     logger.debug("钩子实现 'collect_runtimes' 已注册。")
 
-    logger.info("插件 [core-codex] 注册成功。")
+    logger.info("插件 [core_codex] 注册成功。")

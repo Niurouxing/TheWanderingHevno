@@ -109,19 +109,19 @@ async def provide_reporter(reporters: list, container: Container) -> list:
 
 # --- 主注册函数 (Main Registration Function) ---
 def register_plugin(container: Container, hook_manager: HookManager):
-    logger.info("--> 正在注册 [core-llm] 插件...")
+    logger.info("--> 正在注册 [core_llm] 插件...")
 
     container.register("provider_registry", _create_provider_registry)
     container.register("key_pool_manager", _create_key_pool_manager)
     container.register("llm_service", _create_llm_service)
     logger.debug("Services 'provider_registry', 'key_pool_manager', 'llm_service' registered.")
 
-    hook_manager.add_implementation("services_post_register", populate_llm_services, plugin_name="core-llm")
-    hook_manager.add_implementation("collect_llm_providers", provide_llm_providers, plugin_name="core-llm")
-    hook_manager.add_implementation("collect_runtimes", provide_runtime, plugin_name="core-llm")
+    hook_manager.add_implementation("services_post_register", populate_llm_services, plugin_name="core_llm")
+    hook_manager.add_implementation("collect_llm_providers", provide_llm_providers, plugin_name="core_llm")
+    hook_manager.add_implementation("collect_runtimes", provide_runtime, plugin_name="core_llm")
     
     # 移除 lambda，因为 HookManager 现在足够智能
-    hook_manager.add_implementation("collect_reporters", provide_reporter, plugin_name="core-llm")
+    hook_manager.add_implementation("collect_reporters", provide_reporter, plugin_name="core_llm")
 
     logger.debug("Hook implementations registered.")
-    logger.info("插件 [core-llm] 注册成功。")
+    logger.info("插件 [core_llm] 注册成功。")

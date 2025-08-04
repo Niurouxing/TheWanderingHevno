@@ -1,6 +1,6 @@
 {
     "id": "core_logging",
-    "name": "core-logging",
+    "name": "core_logging",
     "version": "1.0.0",
     "description": "Provides centralized, configurable logging for the Hevno platform.",
     "author": "Hevno Team",

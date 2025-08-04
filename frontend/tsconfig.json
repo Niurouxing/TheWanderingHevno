@@ -1,0 +1,11 @@
+// frontend/tsconfig.json (NEW FILE)
+{
+  "files": [], // 这是一个解决方案级别的 tsconfig，不直接编译任何文件
+  "references": [
+    // 引用工作区中的所有可构建包
+    { "path": "./packages/kernel" },
+    { "path": "./packages/frontend-sdk" },
+    // 引用应用
+    { "path": "./apps/workbench" }
+  ]
+}

@@ -104,7 +104,7 @@ export interface PluginManifest {
  */
 export interface PluginContext {
   /**
-   * 注册一个属于该插件的 React 组件，以便其他插件（如 core-layout）
+   * 注册一个属于该插件的 React 组件，以便其他插件（如 core_layout）
    * 可以通过贡献点发现并渲染它。
    */
   registerComponent: (name: string, component: React.ComponentType<any>) => void;

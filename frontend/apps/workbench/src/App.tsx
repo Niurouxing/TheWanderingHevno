@@ -5,9 +5,9 @@ import { PluginService } from '@hevno/frontend-sdk/types';
 function App() {
   const pluginService = useService<PluginService>('plugins');
   
-  // 按照约定，从 'core-layout' 插件获取 'WorkbenchRoot' 组件
+  // 按照约定，从 'core_layout' 插件获取 'WorkbenchRoot' 组件
   const WorkbenchRoot = React.useMemo(
-    () => pluginService.getComponent('core-layout', 'WorkbenchRoot'),
+    () => pluginService.getComponent('core_layout', 'WorkbenchRoot'),
     [pluginService]
   );
 
