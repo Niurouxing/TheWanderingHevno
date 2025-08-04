@@ -1,6 +1,7 @@
 # backend/core/loader.py
 
 import json
+from pathlib import Path
 import logging
 import importlib
 import importlib.resources
@@ -43,39 +44,41 @@ class PluginLoader:
         print("--- Hevno 插件系统：加载完成 ---\n")
 
     def _discover_plugins(self) -> List[Dict]:
-        """扫描 'plugins' 包，读取所有子包中的 manifest.json 文件。"""
         discovered = []
-        try:
-            # 使用现代的 importlib.resources 来安全地访问包数据
-            plugins_package_path = importlib.resources.files('plugins')
+        plugins_root_dir = Path(__file__).parent.parent.parent / 'plugins'
+
+        if not plugins_root_dir.is_dir():
+            print("信息：根目录下的 'plugins' 目录不存在，跳过插件加载。")
+            return []
+
+        for plugin_path in plugins_root_dir.iterdir():
+            if not plugin_path.is_dir() or plugin_path.name.startswith(('__', '.')):
+                continue
+
+            manifest_path = plugin_path / "manifest.json"
+            if not manifest_path.is_file():
+                continue
             
-            for plugin_path in plugins_package_path.iterdir():
-                if not plugin_path.is_dir() or plugin_path.name.startswith(('__', '.')):
+            try:
+                with open(manifest_path, 'r', encoding='utf-8') as f:
+                    manifest = json.load(f)
+                
+                # 检查插件类型，只处理后端插件
+                if manifest.get("type") != "backend":
                     continue
 
-                manifest_path = plugin_path / "manifest.json"
-                if not manifest_path.is_file():
-                    continue
+                # 构造 Python 导入路径 (这部分逻辑不变)
+                import_path = f"plugins.{plugin_path.name}"
                 
-                try:
-                    manifest_content = manifest_path.read_text(encoding='utf-8')
-                    manifest = json.loads(manifest_content)
-                    # 构造 Python 导入路径
-                    import_path = f"plugins.{plugin_path.name}"
-                    
-                    plugin_info = {
-                        "name": manifest.get('name', plugin_path.name),
-                        "manifest": manifest,
-                        "import_path": import_path
-                    }
-                    discovered.append(plugin_info)
-                except Exception as e:
-                    print(f"警告：无法解析插件 '{plugin_path.name}' 的 manifest.json: {e}")
-                    pass
-        
-        except (ModuleNotFoundError, FileNotFoundError):
-            print("信息：'plugins' 目录不存在或为空，跳过插件加载。")
-            pass
+                plugin_info = {
+                    "name": manifest.get('name', plugin_path.name),
+                    "manifest": manifest,
+                    "import_path": import_path
+                }
+                discovered.append(plugin_info)
+            except Exception as e:
+                print(f"警告：无法解析插件 '{plugin_path.name}' 的 manifest.json: {e}")
+                pass
             
         return discovered
     

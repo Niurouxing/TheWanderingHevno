@@ -10,6 +10,7 @@ from .contracts import Reportable # 导入本插件的契约
 from .auditor import Auditor
 from .base_router import router as base_router
 from .sandbox_router import router as sandbox_router
+from .system_router import router as system_router
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +32,11 @@ async def populate_auditor(container: Container):
     logger.info(f"Auditor populated with {len(reporters_list)} reporter(s).")
 
 async def provide_own_routers(routers: List[APIRouter]) -> List[APIRouter]:
-    """钩子实现：将本插件的路由添加到收集中。"""
+    """钩子实现：将本插件的所有路由添加到收集中。"""
     routers.append(base_router)
     routers.append(sandbox_router)
-    logger.debug("Provided own routers (base, sandbox) to the application.")
+    routers.append(system_router)
+    logger.debug("Provided own routers (base, sandbox, system) to the application.")
     return routers
 
 # --- 主注册函数 ---

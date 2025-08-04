@@ -1,0 +1,11 @@
+{
+  "name": "hevno-kernel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/kernel.js",
+  "types": "dist/main.d.ts",
+  "scripts": {
+    "build": "vite build"
+  }
+}

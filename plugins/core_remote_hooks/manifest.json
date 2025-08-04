@@ -1,5 +1,6 @@
 {
     "name": "core-remote-hooks",
+    "type": "backend",
     "version": "1.0.0",
     "description": "Acts as a bridge between the backend hook system and frontend clients via WebSocket.",
     "author": "Hevno Team",

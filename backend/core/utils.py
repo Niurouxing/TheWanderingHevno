@@ -1,6 +1,7 @@
 # backend/core/utils.py
 
 from typing import Any, Dict
+from pathlib import Path
 
 class DotAccessibleDict:
     """
