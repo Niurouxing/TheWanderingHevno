@@ -119,11 +119,20 @@ if __name__ == "__main__":
     paths = [
         "./backend", 
         "./plugins", 
+        "./hevno.json",
+        "./cli.py"
         # "./tests", 
         # "./conftest.py",
         # "./plugins/core_memoria",
         # "./",
     ]
+
+    # paths = [
+    #     "./frontend",
+    #     "./plugins/core_layout",
+    #     "./plugins/core_remote_hooks",
+    #     "./plugins/core_websocket",
+    # ]
     output_path = "code_collection.md"
     result = main(paths, output_path)
     print(result)

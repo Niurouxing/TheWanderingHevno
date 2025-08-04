@@ -4,7 +4,8 @@ import logging
 
 from backend.core.contracts import Container, HookManager
 from .service import PersistenceService
-from .api import router as persistence_router
+# 【修改】导入两个路由器
+from .api import persistence_router, frontend_assets_router
 
 logger = logging.getLogger(__name__)
 
@@ -14,8 +15,11 @@ def _create_persistence_service() -> PersistenceService:
     return PersistenceService(assets_base_dir=assets_dir)
 
 async def provide_router(routers: list) -> list:
-    """钩子实现：提供本插件的 API 路由。"""
+    """钩子实现：提供本插件的所有 API 路由。"""
+    # 【修改】将两个路由器都添加到列表中
     routers.append(persistence_router)
+    routers.append(frontend_assets_router)
+    logger.debug("Provided 'persistence_router' and 'frontend_assets_router' to the application.")
     return routers
 
 def register_plugin(container: Container, hook_manager: HookManager):

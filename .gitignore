@@ -53,7 +53,7 @@ code_collection.md
 !/plugins/core_persistence/
 !/plugins/core_remote_hooks/
 !/plugins/core_websocket/
-
+!/plugins/core_layout/
 # 同样，重新包含 plugins 命名空间包的 __init__.py
 !/plugins/__init__.py
 

@@ -1,0 +1,16 @@
+{
+  "name": "@hevno/workbench",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build"
+  },
+  "dependencies": {
+    "@hevno/kernel": "workspace:*",
+    "@hevno/frontend-sdk": "workspace:*",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}

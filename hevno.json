@@ -6,6 +6,30 @@
     "core_codex": { "source": "local" },
     "core_llm": { "source": "local" },
     "core_memoria": { "source": "local" },
-    "core_api": { "source": "local" }
+    "core_api": { "source": "local" },
+    "core-layout": {
+      "source": "local",
+      "type": "frontend",
+      "config": {
+        "entryPoint": "/plugins/core-layout/dist/index.js",
+        "priority": -10
+      }
+    },
+    "world-state-viewer": {
+      "source": "local",
+      "type": "frontend",
+      "config": {
+        "entryPoint": "/plugins/world-state-viewer/dist/index.js",
+        "priority": 10,
+        "contributions": {
+          "views": {
+            "workbench.sidebar": [{
+              "id": "world-state-viewer.main",
+              "component": "WorldStateViewer" 
+            }]
+          }
+        }
+      }
+    }
   }
 }
