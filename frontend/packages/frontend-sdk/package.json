@@ -1,0 +1,37 @@
+{
+  "name": "@hevno/frontend-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "source": "src/index.ts",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts"
+    },
+    "./types": {
+      "development": "./src/types.ts",
+      "import": "./dist/types.js",
+      "require": "./dist/types.cjs",
+      "types": "./dist/types.d.ts"
+    }
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "build": "vite build"
+  },
+  "peerDependencies": {
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0",
+    "typescript": "^5.0.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "vite-plugin-dts": "^3.9.1"
+  }
+}

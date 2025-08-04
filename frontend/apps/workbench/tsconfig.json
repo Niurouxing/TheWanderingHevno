@@ -1,0 +1,11 @@
+// apps/workbench/tsconfig.json
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["vite/client"],
+    // Workbench 不会发布，所以不需要 declaration
+    "noEmit": true, 
+    "composite": false
+  },
+  "include": ["src"]
+}

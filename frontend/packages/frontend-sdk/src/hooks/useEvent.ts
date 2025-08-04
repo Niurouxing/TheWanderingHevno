@@ -1,7 +1,8 @@
 // frontend/packages/frontend-sdk/src/hooks/useEvent.ts
 import { useEffect } from 'react';
 import { useService } from './useService';
-import { ServiceBus } from '../../../kernel/src/ServiceBus'; // 引用类型
+// [修正] 从 SDK 自己的类型文件中导入
+import type { ServiceBus } from '../types';
 
 export function useEvent(eventName: string, handler: (payload?: any) => void) {
   const bus = useService<ServiceBus>('bus');

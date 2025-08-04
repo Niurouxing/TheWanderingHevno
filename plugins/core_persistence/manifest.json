@@ -1,8 +1,10 @@
 {
+    "id": "core_persistence",
     "name": "core-persistence",
-    "type": "backend",
     "version": "1.0.0",
     "description": "Provides file system persistence, asset management, and package import/export.",
     "author": "Hevno Team",
-    "priority": 10
+    "backend": {
+        "priority": 10
+    }
 }

@@ -24,7 +24,7 @@ def collect_code_files(paths, output_file_path):
     }
     excluded_files = {
         'package-lock.json', 'yarn.lock', '.DS_Store', 'pnpm-lock.yaml',
-        'vite.config.ts', 'vite.config.js', 'conftest.py'
+        'conftest.py'
     }
     
     # Define files to always include, regardless of extension
@@ -115,24 +115,33 @@ def main(paths, output_file="code_collection.md"):
     return save_to_markdown(content, output_file)
 
 if __name__ == "__main__":
-    # Example usage: replace with your paths (can be directories or files)
-    paths = [
-        "./backend", 
-        "./plugins", 
-        "./hevno.json",
-        "./cli.py"
-        # "./tests", 
-        # "./conftest.py",
-        # "./plugins/core_memoria",
-        # "./",
-    ]
-
     # paths = [
-    #     "./frontend",
-    #     "./plugins/core_layout",
+    #     "./backend", 
+    #     "./plugins/core_engine",
+    #     "./plugins/core_api",
+    #     "./plugins/core_codex",
+    #     "./plugins/core_memoria",
     #     "./plugins/core_remote_hooks",
     #     "./plugins/core_websocket",
+    #     "./plugins/core_llm",
+    #     "./plugins/core_logging",
+    #     "./plugins/core_persistence",
+    #     "./hevno.json",
+    #     "./cli.py",
+    #     # "./frontend",
+    #     # "./tests", 
+    #     # "./conftest.py",
+    #     # "./plugins/core_memoria",
+    #     # "./",
     # ]
+
+    paths = [
+        "./frontend",
+        "./plugins/core_layout",
+        "./plugins/core_remote_hooks",
+        "./plugins/core_websocket",
+        "./plugins/sandbox_manager",
+    ]
     output_path = "code_collection.md"
     result = main(paths, output_path)
     print(result)

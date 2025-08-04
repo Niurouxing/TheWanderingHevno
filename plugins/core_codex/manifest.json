@@ -1,9 +1,11 @@
 {
+    "id": "core_codex",
     "name": "core-codex",
-    "type": "backend",
     "version": "1.0.0",
     "description": "Provides the Codex knowledge base system and the 'codex.invoke' runtime.",
     "author": "Hevno Team",
-    "priority": 30,
-    "dependencies": ["core-engine"]
+    "backend": {
+        "priority": 30,
+        "dependencies": ["core-engine"]
+    }
 }

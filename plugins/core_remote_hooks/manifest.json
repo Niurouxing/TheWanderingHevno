@@ -1,25 +1,26 @@
 {
-    "name": "core-remote-hooks",
+    "id": "core_remote_hooks",
+    "name": "Core Remote Hooks",
     "version": "1.0.0",
     "description": "Full-stack plugin bridging backend/frontend hook systems via WebSocket.",
     "author": "Hevno Team",
     
     "backend": {
-      "type": "backend",
-      "priority": 20
+        "priority": -80
     },
-
+    
     "frontend": {
-      "type": "frontend",
-      "priority": -80,
-      "entryPoint": "/plugins/core-remote-hooks/dist/index.js",
-      "contributions": {
-        "views": {
-          "workbench.statusbar.left": [{
-            "id": "core-remote-hooks.connection-status",
-            "component": "ConnectionStatus"
-          }]
+        "entryPoint": "/plugins/core_remote_hooks/frontend/dist/index.js",
+        "priority": 0,
+        "contributions": {
+            "views": {
+                "workbench.statusbar.left": [
+                    {
+                        "id": "core-remote-hooks.connection-status",
+                        "component": "ConnectionStatus"
+                    }
+                ]
+            }
         }
-      }
     }
 }

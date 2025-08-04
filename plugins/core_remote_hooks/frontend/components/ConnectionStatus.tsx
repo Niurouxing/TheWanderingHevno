@@ -1,4 +1,4 @@
-// plugins/core_remote_hooks/fronted/components/ConnectionStatus.tsx
+// plugins/core_remote_hooks/frontend/components/ConnectionStatus.tsx
 import React, { useState, useEffect } from 'react';
 import { useEvent } from '@hevno/frontend-sdk';
 

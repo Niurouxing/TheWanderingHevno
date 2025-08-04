@@ -136,6 +136,26 @@ async def revert_sandbox_to_snapshot(
 
 # --- Sandbox Import/Export API ---
 
+@router.get("", response_model=List[Sandbox], summary="List all Sandboxes")
+async def list_sandboxes(
+    sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store)
+):
+    """
+    获取一个包含系统中所有已创建沙盒对象的列表。
+    默认按创建时间降序排列。
+    """
+    # 将字典中的所有沙盒对象转换为列表
+    all_sandboxes = list(sandbox_store.values())
+    
+    # 根据需求文档，按 created_at 降序排序
+    sorted_sandboxes = sorted(
+        all_sandboxes, 
+        key=lambda s: s.created_at, 
+        reverse=True
+    )
+    
+    return sorted_sandboxes
+
 @router.get("/{sandbox_id}/export", response_class=StreamingResponse, summary="Export a Sandbox")
 async def export_sandbox(
     sandbox_id: UUID,

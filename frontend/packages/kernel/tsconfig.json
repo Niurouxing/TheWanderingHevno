@@ -1,0 +1,10 @@
+// packages/kernel/tsconfig.json
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "."
+  },
+  "include": ["src/**/*.ts", "main.ts"],
+  "exclude": ["node_modules", "dist"]
+}

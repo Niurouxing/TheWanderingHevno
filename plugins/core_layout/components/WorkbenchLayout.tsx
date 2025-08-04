@@ -1,38 +1,88 @@
+/** @jsxImportSource @emotion/react */
+import { css } from '@emotion/react';
 import React from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import ViewRenderer from './ViewRenderer';
 
+// 使用 Emotion 定义样式
+const workbenchStyle = css`
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  background-color: #1f2937; // bg-gray-800
+  color: #d1d5db; // text-gray-200
+  font-family: sans-serif;
+`;
+
+const headerStyle = css`
+  height: 2rem; /* h-8 */
+  background-color: #111827; /* bg-gray-900 */
+  flex-shrink: 0;
+`;
+
+const mainStyle = css`
+  flex-grow: 1;
+  min-height: 0;
+`;
+
+const panelStyle = css`
+  background-color: #374151; /* bg-gray-700 */
+`;
+
+const resizeHandleStyle = css`
+  background-color: #111827; /* bg-gray-900 */
+  transition: background-color 0.2s;
+  &[data-resize-handle-state="hover"],
+  &[data-resize-handle-state="drag"] {
+    background-color: #3b82f6; /* hover:bg-blue-500 */
+  }
+`;
+
+const footerStyle = css`
+  height: 1.5rem; /* h-6 */
+  background-color: #2563eb; /* bg-blue-600 */
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1rem; /* px-4 */
+  font-size: 0.75rem; /* text-xs */
+  color: white;
+`;
+
+// 组件定义
 export default function WorkbenchLayout() {
   return (
-    <div className="flex flex-col h-screen w-screen bg-gray-800 text-gray-200 font-sans">
-      {/* 标题栏区域 */}
-      <header className="h-8 bg-gray-900 flex-shrink-0">
+    <div css={workbenchStyle}>
+      <header css={headerStyle}>
         <ViewRenderer contributionPoint="workbench.titlebar" />
       </header>
 
-      {/* 主工作区 */}
-      <main className="flex-grow min-h-0">
+      <main css={mainStyle}>
         <PanelGroup direction="horizontal">
-          {/* 侧边栏 */}
-          <Panel defaultSize={20} minSize={15} className="bg-gray-800 flex flex-col">
-              <ViewRenderer contributionPoint="workbench.sidebar" className="p-2 space-y-4 flex-grow" />
+          <Panel defaultSize={20} minSize={15}>
+            {/* 你可以直接在 ViewRenderer 上写 css prop */}
+            <ViewRenderer 
+              contributionPoint="workbench.sidebar" 
+              css={css`padding: 0.5rem; display: flex; flex-direction: column; gap: 1rem; flex-grow: 1;`} 
+            />
           </Panel>
-          <PanelResizeHandle className="w-1 bg-gray-900 hover:bg-blue-500 transition-colors" />
+          <PanelResizeHandle css={resizeHandleStyle} style={{ width: '4px' }} />
           
-          {/* 主内容区 */}
           <Panel>
             <PanelGroup direction="vertical">
-              <Panel defaultSize={75} minSize={50} className="bg-gray-700">
+              <Panel defaultSize={75} minSize={50} css={panelStyle}>
                 <ViewRenderer contributionPoint="workbench.main.container">
-                  <div className="flex items-center justify-center h-full text-gray-500">
+                  <div css={css`display: flex; align-items: center; justify-content: center; height: 100%; color: #6b7280;`}>
                     <p>Main Content Area</p>
                   </div>
                 </ViewRenderer>
               </Panel>
-              <PanelResizeHandle className="h-1 bg-gray-900 hover:bg-blue-500 transition-colors" />
-              <Panel defaultSize={25} minSize={10} className="bg-gray-800">
+              <PanelResizeHandle css={resizeHandleStyle} style={{ height: '4px' }}/>
+              <Panel defaultSize={25} minSize={10}>
                 <ViewRenderer contributionPoint="workbench.panel.container">
-                  <div className="p-2 text-gray-500">
+                  <div css={css`padding: 0.5rem; color: #6b7280;`}>
                     <p>Panel Area (e.g., Console, Terminal)</p>
                   </div>
                 </ViewRenderer>
@@ -42,12 +92,11 @@ export default function WorkbenchLayout() {
         </PanelGroup>
       </main>
       
-      {/* 状态栏 */}
-      <footer className="h-6 bg-blue-600 flex-shrink-0 flex items-center justify-between px-4 text-xs text-white">
-        <div className="flex items-center space-x-4">
+      <footer css={footerStyle}>
+        <div css={css`display: flex; align-items: center; gap: 1rem;`}>
             <ViewRenderer contributionPoint="workbench.statusbar.left" />
         </div>
-        <div className="flex items-center space-x-4">
+        <div css={css`display: flex; align-items: center; gap: 1rem;`}>
             <ViewRenderer contributionPoint="workbench.statusbar.right" />
         </div>
       </footer>

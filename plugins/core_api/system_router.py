@@ -5,35 +5,39 @@ from typing import List, Dict, Any
 
 from fastapi import APIRouter, HTTPException
 
-# 这是一个更健壮的寻找项目根目录的方式
-# 假设此文件在 PROJECT_ROOT/plugins/core_api/system_router.py
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-
-HEVNO_JSON_PATH = PROJECT_ROOT / "hevno.json"
+# 解析路径到项目根目录，然后定位到 'plugins' 文件夹
+# __file__ -> plugins/core_api/system_router.py
+# .parent.parent.parent -> project root
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PLUGINS_DIR = PROJECT_ROOT / "plugins"
 
 router = APIRouter(
     prefix="/api/plugins",
     tags=["Plugins", "System"]
 )
 
-@router.get("/manifest", response_model=List[Dict[str, Any]], summary="Get Frontend Plugin Manifests")
-async def get_plugins_manifest_for_frontend():
+@router.get("/manifest", response_model=List[Dict[str, Any]], summary="Get All Plugin Manifests")
+async def get_all_plugins_manifest():
     """
-    从 hevno.json 读取插件定义，并将其格式化为前端内核期望的列表。
-    这是前端动态加载和贡献系统的唯一事实来源。
+    扫描 'plugins' 目录，聚合所有插件的 manifest.json 文件内容。
+    这为前端提供了所有插件元数据的唯一、完整的事实来源。
     """
-    if not HEVNO_JSON_PATH.is_file():
-        raise HTTPException(status_code=404, detail=f"Manifest file 'hevno.json' not found at project root: {HEVNO_JSON_PATH}")
+    if not PLUGINS_DIR.is_dir():
+        return []
 
-    with open(HEVNO_JSON_PATH, "r", encoding='utf-8') as f:
-        manifest_data = json.load(f)
-
-    plugins_list = []
-    for name, plugin_data in manifest_data.get("plugins", {}).items():
-        # 我们将插件名称和其所有数据捆绑在一起
-        plugins_list.append({
-            "id": name,  # 使用字典键作为唯一ID
-            **plugin_data
-        })
-
-    return plugins_list
+    manifests = []
+    for plugin_path in PLUGINS_DIR.iterdir():
+        # 忽略非目录或特殊目录 (如 __pycache__)
+        if not plugin_path.is_dir() or plugin_path.name.startswith(('__', '.')):
+            continue
+        
+        manifest_file = plugin_path / "manifest.json"
+        if manifest_file.is_file():
+            try:
+                with open(manifest_file, 'r', encoding='utf-8') as f:
+                    manifests.append(json.load(f))
+            except json.JSONDecodeError:
+                # 在生产环境中，应该记录一条警告日志
+                # logger.warning(f"Could not parse manifest.json for plugin: {plugin_path.name}")
+                pass
+    return manifests

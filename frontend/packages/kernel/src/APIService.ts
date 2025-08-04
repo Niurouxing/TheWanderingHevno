@@ -25,5 +25,38 @@ export class APIService {
     return response.json();
   }
   
-  // 实现 post, put, delete...
+
+public async post<T>(endpoint: string, body: any): Promise<T> {
+    const request = new Request(`${this.baseUrl}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    const finalRequest = await this.applyInterceptors(request);
+    const response = await fetch(finalRequest);
+    if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
+    // 201 Created 通常也有响应体
+    if (response.status === 204) return null as T; // 204 No Content
+    return response.json();
+}
+
+public async put<T>(endpoint: string, body: any): Promise<T> {
+    const request = new Request(`${this.baseUrl}${endpoint}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    const finalRequest = await this.applyInterceptors(request);
+    const response = await fetch(finalRequest);
+    if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
+    return response.json();
+}
+
+public async delete<T>(endpoint: string): Promise<T> {
+    const request = new Request(`${this.baseUrl}${endpoint}`, { method: 'DELETE' });
+    const finalRequest = await this.applyInterceptors(request);
+    const response = await fetch(finalRequest);
+    if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
+    return response.json();
+}
 }

@@ -30,12 +30,15 @@ class PluginLoader:
             print("--- Hevno 插件系统：加载完成 ---\n")
             return
 
-        # 阶段二：排序 (根据 manifest 中的 priority)
-        sorted_plugins = sorted(all_plugins, key=lambda p: (p['manifest'].get('priority', 100), p['name']))
+        # 阶段二：排序 (根据 manifest['backend']['priority'] 中获取)
+        sorted_plugins = sorted(
+            all_plugins, 
+            key=lambda p: (p['manifest']['backend'].get('priority', 100), p['name'])
+        )
         
         print("插件加载顺序已确定：")
         for i, p_info in enumerate(sorted_plugins):
-            print(f"  {i+1}. {p_info['name']} (优先级: {p_info['manifest'].get('priority', 100)})")
+            print(f"  {i+1}. {p_info['name']} (优先级: {p_info['manifest']['backend'].get('priority', 100)})")
 
         # 阶段三：注册
         self._register_plugins(sorted_plugins)
@@ -63,19 +66,17 @@ class PluginLoader:
                 with open(manifest_path, 'r', encoding='utf-8') as f:
                     manifest = json.load(f)
                 
-                # 检查插件类型，只处理后端插件
-                if manifest.get("type") != "backend":
-                    continue
-
-                # 构造 Python 导入路径 (这部分逻辑不变)
-                import_path = f"plugins.{plugin_path.name}"
-                
-                plugin_info = {
-                    "name": manifest.get('name', plugin_path.name),
-                    "manifest": manifest,
-                    "import_path": import_path
-                }
-                discovered.append(plugin_info)
+                # 【修改点】不再检查 type，而是检查 manifest 中是否存在 "backend" 键
+                if "backend" in manifest:
+                    # 构造 Python 导入路径
+                    import_path = f"plugins.{plugin_path.name}"
+                    
+                    plugin_info = {
+                        "name": manifest.get('id', plugin_path.name), # 使用 'id' 字段作为权威名称
+                        "manifest": manifest,
+                        "import_path": import_path
+                    }
+                    discovered.append(plugin_info)
             except Exception as e:
                 print(f"警告：无法解析插件 '{plugin_path.name}' 的 manifest.json: {e}")
                 pass

@@ -1,26 +1,28 @@
+/** @jsxImportSource @emotion/react */
 import React from 'react';
 import { useService } from '@hevno/frontend-sdk';
-import { PluginService } from '@hevno/frontend-sdk/types'; // 引用类型
+import { PluginService } from '@hevno/frontend-sdk/types';
 
 interface ViewRendererProps {
   contributionPoint: string;
-  className?: string;
-  children?: React.ReactNode; // 允许传递默认内容
+  className?: string; // Emotion 会通过这个 prop 注入样式
+  children?: React.ReactNode;
 }
 
 const ViewRenderer: React.FC<ViewRendererProps> = ({ contributionPoint, className, children }) => {
   const pluginService = useService<PluginService>('plugins');
-  // 使用 useMemo 防止不必要的重计算
   const contributions = React.useMemo(() => 
     pluginService.getAllViewContributions()[contributionPoint] || [],
     [pluginService, contributionPoint]
   );
   
   if (contributions.length === 0) {
-    return <>{children}</>; // 如果没有贡献，渲染默认子节点
+    // 如果没有贡献，渲染默认子节点，并应用 className
+    return <div className={className}>{children}</div>;
   }
   
   return (
+    // 将 className 应用到包裹元素上
     <div className={className}>
       {contributions.map(contrib => {
         const Component = pluginService.getComponent(contrib.pluginId, contrib.component);

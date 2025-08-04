@@ -1,9 +1,11 @@
 {
+    "id": "core_llm",
     "name": "core-llm",
-    "type": "backend",
     "version": "1.0.0",
     "description": "Provides the LLM Gateway, including multi-provider support, key management, and retry logic.",
     "author": "Hevno Team",
-    "priority": 20,
-    "dependencies": ["core-engine"] 
+    "backend": {
+        "priority": 20,
+        "dependencies": ["core-engine"] 
+    }
 }

@@ -1,14 +1,12 @@
 {
-    "name": "core-layout",
+    "id": "core-layout",
+    "name": "Core Layout",
     "version": "1.0.0",
     "description": "Provides the main application shell and defines core view contribution points like sidebars and status bars.",
     "author": "Hevno Team",
     
-    "type": "frontend",
-
-    "config": {
+    "frontend": {
         "entryPoint": "/plugins/core-layout/dist/index.js",
-        "priority": -10,
-        "contributions": {}
+        "priority": -10
     }
 }
