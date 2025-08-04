@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hevno Engine</title>
+    <style>
+      /* 基础样式，确保在插件加载前有良好的视觉反馈 */
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        margin: 0;
+        background-color: #1e1e1e;
+        color: #d4d4d4;
+      }
+      #app::before {
+        content: '🚀 Hevno Engine is loading...';
+        display: block;
+        padding: 2rem;
+        font-size: 1.2rem;
+        text-align: center;
+      }
+    </style>
+</head>
+<body>
+    <!-- 布局插件将在此处渲染UI -->
+    <div id="app"></div>
+
+    <!-- 加载前端内核 -->
+    <script type="module" src="/frontend/main.js"></script>
+</body>
+</html>
