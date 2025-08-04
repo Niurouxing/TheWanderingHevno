@@ -59,17 +59,15 @@ async def provide_llm_providers(providers: Dict[str, Dict[str, any]]) -> Dict[st
     # 如果有其他 providers，也在这里添加
     return providers
 
-async def populate_llm_services(container: Container):
+async def populate_llm_services(container: Container, hook_manager: HookManager):
     """
     钩子实现：监听 'services_post_register'。
     异步地收集所有 provider，填充注册表，并配置密钥管理器。
     """
     logger.debug("Async task: Populating LLM services...")
-    hook_manager = container.resolve("hook_manager")
     provider_registry: ProviderRegistry = container.resolve("provider_registry")
     key_manager: KeyPoolManager = container.resolve("key_pool_manager")
 
-    # 1. 触发钩子，收集所有 provider 的信息
     all_providers: Dict[str, Dict[str, any]] = await hook_manager.filter("collect_llm_providers", {})
     
     if not all_providers:
@@ -96,7 +94,7 @@ async def provide_runtime(runtimes: dict) -> dict:
         logger.debug("Provided 'llm.default' runtime to the engine.")
     return runtimes
 
-async def provide_reporter(reporters: list, *, container: Container) -> list:
+async def provide_reporter(reporters: list, container: Container) -> list:
     """
     钩子实现：向审计员提供本插件的报告器。
     我们在这里从容器解析依赖，并实例化报告器。
@@ -111,40 +109,19 @@ async def provide_reporter(reporters: list, *, container: Container) -> list:
 
 # --- 主注册函数 (Main Registration Function) ---
 def register_plugin(container: Container, hook_manager: HookManager):
-    """这是 core-llm 插件的注册入口，由平台加载器调用。"""
     logger.info("--> 正在注册 [core-llm] 插件...")
 
-    # 1. 注册服务（同步创建空实例或简单实例）
     container.register("provider_registry", _create_provider_registry)
     container.register("key_pool_manager", _create_key_pool_manager)
     container.register("llm_service", _create_llm_service)
     logger.debug("Services 'provider_registry', 'key_pool_manager', 'llm_service' registered.")
 
-    # 2. 注册【异步填充】服务的钩子
-    hook_manager.add_implementation(
-        "services_post_register",
-        populate_llm_services,
-        plugin_name="core-llm"
-    )
-
-    # 3. 注册【提供能力】的钩子
-    hook_manager.add_implementation(
-        "collect_llm_providers",
-        provide_llm_providers,
-        plugin_name="core-llm"
-    )
-    hook_manager.add_implementation(
-        "collect_runtimes", 
-        provide_runtime, 
-        plugin_name="core-llm"
-    )
-    # 修改 'collect_reporters' 的钩子，因为现在它需要容器
-    # 我们用 lambda 来适配钩子签名
-    hook_manager.add_implementation(
-        "collect_reporters",
-        provide_reporter, 
-        plugin_name="core-llm"
-    )
-    logger.debug("Hook implementations registered.")
+    hook_manager.add_implementation("services_post_register", populate_llm_services, plugin_name="core-llm")
+    hook_manager.add_implementation("collect_llm_providers", provide_llm_providers, plugin_name="core-llm")
+    hook_manager.add_implementation("collect_runtimes", provide_runtime, plugin_name="core-llm")
     
+    # 移除 lambda，因为 HookManager 现在足够智能
+    hook_manager.add_implementation("collect_reporters", provide_reporter, plugin_name="core-llm")
+
+    logger.debug("Hook implementations registered.")
     logger.info("插件 [core-llm] 注册成功。")

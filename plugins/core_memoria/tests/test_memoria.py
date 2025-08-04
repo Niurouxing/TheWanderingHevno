@@ -393,7 +393,7 @@ async def test_apply_pending_synthesis_hook_updates_world_state(mock_exec_contex
     processes events from its queue and modifies the world_state.
     """
     # --- Arrange ---
-    # 1. Manually prepare the event queue and container mock within the context
+    # 1. Manually prepare the event queue
     event_queue = {
         mock_exec_context.initial_snapshot.sandbox_id: [
             {
@@ -405,27 +405,26 @@ async def test_apply_pending_synthesis_hook_updates_world_state(mock_exec_contex
             }
         ]
     }
-    
+
     # 2. Prepare the initial world state
     mock_exec_context.shared.world_state["memoria"] = {
         "__global_sequence__": 5,
         "journal": {
-            "config": {},
+            "config": {}, # Pydantic will fill defaults
             "entries": [],
             "synthesis_trigger_counter": 10 # Should be reset
         }
     }
-    
-    # 3. Setup the mock container inside the context to resolve the event queue
-    #    这是关键，让钩子函数能找到队列
+
+    # 3. Setup the mock container to resolve the event queue
     mock_container = MagicMock(spec=Container)
     mock_container.resolve.return_value = event_queue
-    # 我们可以通过这个后门将 mock container 注入到 context 中
-    mock_exec_context.shared.services._container = mock_container
+    # No longer need the private `_container` hack
+    # mock_exec_context.shared.services._container = mock_container
 
     # --- Act ---
-    # 直接调用钩子函数，传入准备好的上下文
-    await apply_pending_synthesis(mock_exec_context)
+    # FIX: Pass the mock_container as the second argument, matching the new signature.
+    await apply_pending_synthesis(mock_exec_context, container=mock_container)
 
     # --- Assert ---
     # 1. The event should be removed from the queue
