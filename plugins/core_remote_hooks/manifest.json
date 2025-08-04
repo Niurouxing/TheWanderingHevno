@@ -7,20 +7,5 @@
     
     "backend": {
         "priority": -80
-    },
-    
-    "frontend": {
-        "entryPoint": "/plugins/core_remote_hooks/frontend/dist/index.js",
-        "priority": 0,
-        "contributions": {
-            "views": {
-                "workbench.statusbar.left": [
-                    {
-                        "id": "core_remote-hooks.connection-status",
-                        "component": "ConnectionStatus"
-                    }
-                ]
-            }
-        }
     }
 }

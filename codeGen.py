@@ -141,6 +141,7 @@ if __name__ == "__main__":
         "./plugins/core_remote_hooks",
         "./plugins/core_websocket",
         "./plugins/sandbox_manager",
+        "./.gitignore"
     ]
 
     # paths = [
