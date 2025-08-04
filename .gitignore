@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 /.pnpm-store
+dist/
 
 __pycache__/
 
