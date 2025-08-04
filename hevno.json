@@ -8,8 +8,6 @@
     "core_memoria": { "source": "local" },
     "core_api": { "source": "local" },
     "core_websocket": { "source": "local" },
-    "core_remote_hooks": { "source": "local" },
-    "core_layout": { "source": "local" },
-    "sandbox_manager": { "source": "local" }
+    "core_remote_hooks": { "source": "local" }
   }
 }
