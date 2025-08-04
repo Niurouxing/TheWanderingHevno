@@ -117,12 +117,12 @@ def main(paths, output_file="code_collection.md"):
 if __name__ == "__main__":
     # Example usage: replace with your paths (can be directories or files)
     paths = [
-        "./backend", 
-        "./plugins", 
+        # "./backend", 
+        # "./plugins", 
         # "./tests", 
         # "./conftest.py",
         # "./plugins/core_memoria",
-        # "./",
+        "./",
     ]
     output_path = "code_collection.md"
     result = main(paths, output_path)
