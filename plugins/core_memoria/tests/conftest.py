@@ -34,7 +34,7 @@ async def memoria_test_engine() -> AsyncGenerator[Tuple[ExecutionEngineInterface
     """
     # 1. 初始化平台核心服务
     container = Container()
-    hook_manager = HookManager()
+    hook_manager = HookManager(container)
     
     # 手动创建并注册后台任务管理器
     task_manager = BackgroundTaskManager(container, max_workers=2)

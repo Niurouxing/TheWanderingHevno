@@ -65,7 +65,7 @@ async def test_engine() -> AsyncGenerator[Tuple[ExecutionEngineInterface, Contai
     【全局共享】为跨插件集成测试提供一个功能齐全的 ExecutionEngine 实例。
     """
     container = Container()
-    hook_manager = HookManager()
+    hook_manager = HookManager(container)
     task_manager = BackgroundTaskManager(container, max_workers=2)
 
     container.register("container", lambda: container)

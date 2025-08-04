@@ -45,28 +45,22 @@ async def provide_memoria_runtimes(runtimes: dict) -> dict:
             
     return runtimes
 
-async def apply_pending_synthesis(context: ExecutionContext) -> ExecutionContext:
+async def apply_pending_synthesis(context: ExecutionContext, container: Container) -> ExecutionContext:
     """
     钩子实现：监听 'before_graph_execution' 钩子。
     在图的逻辑开始执行之前，检查是否有待处理的综合事件，
     并以原子方式将它们应用到当前的世界状态中。
     """
-    # 1. 从容器解析我们自己的事件队列
-    #    这是一个从 ExecutionContext 安全获取容器实例的技巧。
-    #    context.shared.services 是一个代理对象，但我们可以访问其内部的 _container。
-    container: Container = context.shared.services._container 
+
     event_queue: Dict[UUID, List[Dict[str, Any]]] = container.resolve("memoria_event_queue")
     sandbox_id = context.initial_snapshot.sandbox_id
     
-    # 2. 检查并原子性地获取待处理事件
     pending_events = event_queue.pop(sandbox_id, [])
     if not pending_events:
-        return context  # 如果没有事件，快速退出，不做任何操作
+        return context
 
     logger.info(f"Memoria: 发现 {len(pending_events)} 个待处理的综合事件，正在应用到 world_state...")
     
-    # 3. 将事件逻辑应用到 world_state
-    #    我们直接修改 context.shared.world_state，因为它是对真实世界状态的可变引用。
     world_state = context.shared.world_state
     
     memoria_data = world_state.setdefault("memoria", {"__global_sequence__": 0})
@@ -97,31 +91,26 @@ async def apply_pending_synthesis(context: ExecutionContext) -> ExecutionContext
     # 将更新后的 memoria 模型写回到世界状态字典中
     world_state["memoria"] = memoria.model_dump()
 
-    # 4. 返回被修改过的 context，以便后续流程使用更新后的状态
     return context
 
 
 # --- 主注册函数 (Main Registration Function) ---
 def register_plugin(container: Container, hook_manager: HookManager):
-    """这是 core-memoria 插件的注册入口，由平台加载器调用。"""
     logger.info("--> 正在注册 [core-memoria] 插件...")
 
-    # 1. 注册本插件私有的事件队列服务
     container.register("memoria_event_queue", _create_memoria_event_queue, singleton=True)
     logger.debug("服务 'memoria_event_queue' 已注册。")
 
-    # 2. 注册钩子实现，将我们的运行时提供给 core-engine
     hook_manager.add_implementation(
         "collect_runtimes", 
         provide_memoria_runtimes, 
         plugin_name="core-memoria"
     )
 
-    # 3. 注册钩子实现，用于在图执行前处理后台任务的结果
     hook_manager.add_implementation(
         "before_graph_execution",
         apply_pending_synthesis,
-        priority=50,  # 使用默认优先级
+        priority=50,
         plugin_name="core-memoria"
     )
     logger.debug("钩子实现 'collect_runtimes' 和 'before_graph_execution' 已注册。")

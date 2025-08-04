@@ -25,7 +25,7 @@ async def test_engine() -> AsyncGenerator[Tuple[ExecutionEngineInterface, Contai
     为 core-engine 测试提供一个隔离但功能齐全的 ExecutionEngine 实例。
     """
     container = Container()
-    hook_manager = HookManager()
+    hook_manager = HookManager(container)
     task_manager = BackgroundTaskManager(container, max_workers=2)
 
     container.register("container", lambda: container)
