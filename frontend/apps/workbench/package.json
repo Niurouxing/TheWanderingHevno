@@ -12,5 +12,8 @@
     "@hevno/frontend-sdk": "workspace:*",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "rollup": "^4.0.0"
   }
 }
