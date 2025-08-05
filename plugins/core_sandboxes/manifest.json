@@ -1,0 +1,30 @@
+{
+    "id": "core_sandboxes",
+    "name": "Sandbox Management",
+    "version": "1.0.0",
+    "description": "Provides UI for creating, listing, and managing Sandboxes.",
+    "author": "Hevno Team",
+    "frontend": {
+        "type": "view",
+        "priority": 20,
+        "entryPoint": "dist/main.js",
+        "contributions": {
+            "views": {
+                "workbench.sidebar": [
+                    {
+                        "id": "sandboxes.list",
+                        "component": "sandbox-list-element",
+                        "title": "Sandboxes",
+                        "order": 10
+                    }
+                ]
+            },
+            "commands": [
+                {
+                    "id": "sandboxes.create",
+                    "title": "Sandbox: Create New"
+                }
+            ]
+        }
+    }
+}

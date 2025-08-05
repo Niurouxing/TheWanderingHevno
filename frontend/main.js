@@ -1,4 +1,3 @@
-// /frontend/main.js
 
 import { ServiceContainer } from './ServiceContainer.js';
 import { HookManager } from './HookManager.js';
@@ -48,7 +47,7 @@ class FrontendLoader {
     const manifestProvider = this.services.get('manifestProvider');
 
     try {
-      // 任务 4.2: 第一步 - 获取后端钩子清单
+      // 步骤 1: 获取后端钩子清单
       console.log("[Loader] 正在获取后端钩子清单...");
       const hooksResponse = await fetch('/api/system/hooks/manifest');
       if (!hooksResponse.ok) {
@@ -57,10 +56,10 @@ class FrontendLoader {
       const backendHooksData = await hooksResponse.json();
       globalHookRegistry.setBackendHooks(backendHooksData.hooks);
       
-      // 在加载插件之前连接 WebSocket，以便同步消息可以尽早发送
+      // 步骤 2: 建立 WebSocket 连接
       remoteProxy.connect();
 
-      // 任务 4.2: 后续步骤 - 继续执行现有的插件加载逻辑
+      // 步骤 3: 获取并加载所有前端插件
       console.log("[Loader] 正在获取插件清单...");
       const manifestResponse = await fetch('/api/plugins/manifest');
       if (!manifestResponse.ok) {
@@ -69,7 +68,8 @@ class FrontendLoader {
       let allManifests = await manifestResponse.json();
       
       const frontendPlugins = allManifests
-        .filter(m => m.frontend && m.frontend.entryPoint) 
+        .filter(m => m.frontend && m.frontend.entryPoint)
+        // ++ 核心修改：统一为升序排序 (数字小的先加载)
         .sort((a, b) => (a.frontend?.priority || 0) - (b.frontend?.priority || 0));
 
       console.log(`发现 ${frontendPlugins.length} 个前端插件待加载:`, frontendPlugins.map(p => p.id));
@@ -79,6 +79,7 @@ class FrontendLoader {
       for (const manifest of frontendPlugins) {
         manifestProvider.addManifest(manifest);
         try {
+          // 注意：@vite-ignore 是必需的，因为 Vite 不知道这些 URL
           const entryPointUrl = `/plugins/${manifest.id}/${manifest.frontend.entryPoint}`;
           const pluginModule = await import(/* @vite-ignore */ entryPointUrl);
           
@@ -91,6 +92,10 @@ class FrontendLoader {
         }
       }
 
+      // 【关键修复】步骤 4: 在所有插件加载后，与后端同步完整的前端钩子列表
+      console.log("[Loader] 所有插件已加载。正在与后端同步前端钩子...");
+      remoteProxy.syncFrontendHooks();
+
     } catch (e) {
       console.error("致命错误: 无法初始化插件。", e);
       document.body.innerHTML = `<div style="color: red; padding: 2rem;">错误: 无法从后端加载插件清单。后端服务器是否正在运行？</div>`;
@@ -98,7 +103,7 @@ class FrontendLoader {
     }
 
     // 内核工作结束！触发最终钩子，移交控制权。
-    console.log("✅ 所有插件已加载。正在将控制权移交给应用插件...");
+    console.log("✅ 同步完成。正在将控制权移交给应用插件...");
     await this.services.get('hookManager').trigger('loader.ready');
   }
 }

@@ -10,7 +10,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "build:plugins": "npm run -w plugins/core_layout build && npm run -w plugins/core_diagnostics build"
+    "build:plugins": "npm run build --workspaces"
   },
   "devDependencies": {
     "vite": "^5.2.11"

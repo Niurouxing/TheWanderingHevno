@@ -23,6 +23,7 @@ export class ContributionRegistry {
     }
 
     processContributions(context) {
+        // ++ 核心修改：按优先级升序排序，与加载顺序一致
         const sortedManifests = [...this.manifests].sort((a, b) => 
             (a.frontend?.priority || 0) - (b.frontend?.priority || 0) 
         );
@@ -40,7 +41,8 @@ export class ContributionRegistry {
                 this.processCommandContributions(manifest, contributions.commands, context);
             }
         }
-
+        
+        // ++ 核心修改：现在在所有贡献处理完后，再对每个槽位进行排序
         for (const [slot, views] of this._processedContributions.views.entries()) {
             views.sort((a, b) => (a.order || 0) - (b.order || 0));
         }
@@ -48,10 +50,6 @@ export class ContributionRegistry {
     }
     
     processViewContributions(manifest, viewsContribution) {
-        // [DEBUG] 日志注入点 4: 进入子函数
-        console.log(`%c[DEBUG|Registry]   -> Inside processViewContributions for ${manifest.id}`, 'color: cyan;');
-        console.log(`[DEBUG|Registry]      viewsContribution object received:`, JSON.parse(JSON.stringify(viewsContribution)));
-
         for (const [slotName, views] of Object.entries(viewsContribution)) {
             if (!this._processedContributions.views.has(slotName)) {
                 this._processedContributions.views.set(slotName, []);
@@ -64,14 +62,19 @@ export class ContributionRegistry {
                     console.error(`[Registry] Invalid view contribution from plugin '${manifest.id}'.`, view);
                     continue;
                 }
+                
+                // ++ 核心修改：实现覆盖逻辑
+                // 查找是否已存在同ID的视图
+                const existingViewIndex = existingViewsInSlot.findIndex(v => v.id === view.id);
+                const enrichedView = { ...view, pluginId: manifest.id };
 
-                const isOverridden = existingViewsInSlot.some(v => v.id === view.id);
-
-                if (!isOverridden) {
-                    const enrichedView = { ...view, pluginId: manifest.id };
-                    existingViewsInSlot.push(enrichedView);
+                if (existingViewIndex !== -1) {
+                    // 如果存在，则用当前插件（更高优先级的）的贡献替换它
+                    console.log(`[Registry] Overriding view '${view.id}' in slot '${slotName}' with contribution from plugin '${manifest.id}'.`);
+                    existingViewsInSlot[existingViewIndex] = enrichedView;
                 } else {
-                     console.log(`[Registry] View '${view.id}' in slot '${slotName}' from plugin '${manifest.id}' was overridden by a higher priority plugin.`);
+                    // 如果不存在，则直接添加
+                    existingViewsInSlot.push(enrichedView);
                 }
             }
         }
@@ -86,7 +89,8 @@ export class ContributionRegistry {
                 console.error(`[Registry] Invalid command contribution from plugin '${manifest.id}'.`, command);
                 continue;
             }
-            // 只注册元数据，不涉及 handler
+            // ++ 核心修改：总是注册或覆盖元数据
+            // 因为后加载的插件优先级更高，所以它的元数据应该生效
             commandService.registerMetadata(command.id, { title: command.title }, manifest.id);
             this._processedContributions.commands.set(command.id, { ...command, pluginId: manifest.id });
         }

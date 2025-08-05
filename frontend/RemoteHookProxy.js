@@ -35,11 +35,13 @@ export class RemoteHookProxy {
       console.log("🔗 WebSocket connection established.");
       this.isConnected = true;
       if (this.localHookManager) {
+        // 在 `addImplementation` 调用时，`globalHookRegistry` 已经知道这个钩子了
+        this.localHookManager.addImplementation('websocket.connected', () => {});
         this.localHookManager.trigger('websocket.connected');
       }
 
-      // 任务 4.4: 将前端钩子与后端同步
-      this.syncFrontendHooks();
+      // 【已移除】不再在此处同步钩子。
+      // this.syncFrontendHooks(); 
     };
     
     this.ws.onmessage = (event) => this.handleIncoming(event);
@@ -49,6 +51,8 @@ export class RemoteHookProxy {
       if (this.isConnected) {
         this.isConnected = false;
         if (this.localHookManager) {
+            // 确保钩子存在
+            this.localHookManager.addImplementation('websocket.disconnected', () => {});
             this.localHookManager.trigger('websocket.disconnected');
         }
       }
@@ -63,24 +67,32 @@ export class RemoteHookProxy {
   
   /**
    * 将前端实现的钩子清单发送到后端。
+   * 【已修改】这个方法现在由 FrontendLoader 在所有插件加载后显式调用。
    */
   syncFrontendHooks() {
     if (!this.localHookManager) {
         console.error("[RemoteProxy] 无法同步钩子，HookManager 未设置。");
         return;
     }
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        const hookNamesArray = this.localHookManager.getAllHookNames();
-        const payload = {
-            type: 'sync_hooks', // 特殊类型
-            hooks: hookNamesArray
-        };
-        const message = JSON.stringify(payload);
-        console.log(`[ws >] 正在与后端同步 ${hookNamesArray.length} 个前端钩子。`);
-        this.ws.send(message);
-    } else {
-        console.error("[RemoteProxy] 无法同步钩子: WebSocket 未打开。");
+    // 添加一个延迟/重试机制，以防 `sync` 被调用时 WS 尚未完全打开
+    const trySync = (retries = 5) => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          const hookNamesArray = this.localHookManager.getAllHookNames();
+          const payload = {
+              type: 'sync_hooks', // 特殊类型
+              hooks: hookNamesArray
+          };
+          const message = JSON.stringify(payload);
+          console.log(`[ws >] 正在与后端同步 ${hookNamesArray.length} 个前端钩子。`);
+          this.ws.send(message);
+      } else if (retries > 0) {
+          console.warn(`[RemoteProxy] WebSocket 未打开，将在 200ms 后重试同步 (剩余次数: ${retries - 1})`);
+          setTimeout(() => trySync(retries - 1), 200);
+      } else {
+          console.error("[RemoteProxy] 无法同步钩子: WebSocket 未打开且已达到重试次数上限。");
+      }
     }
+    trySync();
   }
 
   handleIncoming(event) {
