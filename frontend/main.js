@@ -1,89 +1,92 @@
 // /frontend/main.js
+
+import { ServiceContainer } from './ServiceContainer.js';
 import { HookManager } from './HookManager.js';
 import { RemoteHookProxy } from './RemoteHookProxy.js';
-import { ContributionRegistry } from './ContributionRegistry.js';
-import { ServiceContainer } from './ServiceContainer.js';
+import { ManifestProvider } from './ManifestProvider.js';
 
-class FrontendKernel {
+/**
+ * Hevno 前端加载器 (内核)。
+ * 职责被严格限定为：
+ * 1. 初始化并提供最底层的、无业务逻辑的服务。
+ * 2. 从后端获取插件清单，并按优先级加载它们。
+ * 3. 触发一个 `loader.ready` 钩子，然后将控制权完全移交。
+ */
+class FrontendLoader {
   constructor() {
     this.services = new ServiceContainer();
+    window.Hevno = { services: this.services };
 
-    // 注册最核心的服务
-    this.hookManager = new HookManager();
-    this.services.register('hookManager', this.hookManager, 'kernel');
+    // 1. 初始化最底层的服务
+    const hookManager = new HookManager();
+    this.services.register('hookManager', hookManager, 'loader');
     
-    this.contributionRegistry = new ContributionRegistry();
-    this.services.register('contributionRegistry', this.contributionRegistry, 'kernel');
-    
-    // 【修改】将服务容器正式暴露为全局服务定位器
-    // 这并非一个随意的全局变量，而是一个明确的架构决策，为所有插件提供一个稳定的服务获取入口。
-    window.Hevno = {
-      services: this.services
-    };
+    const remoteProxy = new RemoteHookProxy(hookManager);
+    this.services.register('remoteProxy', remoteProxy, 'loader');
 
-    // 【保留】为了方便调试，保留旧的别名
+    const manifestProvider = new ManifestProvider();
+    this.services.register('manifestProvider', manifestProvider, 'loader');
+
+    // 方便调试
     if (import.meta.env.DEV) {
       window.hevno = this.services;
     }
   }
 
-  async start() {
-    console.log("🚀 Hevno Frontend Kernel starting...");
+  async load() {
+    console.log("🚀 Hevno Frontend Loader starting...");
+    this.services.get('remoteProxy').connect();
 
-    // 【修改】初始化并注册 RemoteHookProxy
-    const remoteProxy = new RemoteHookProxy(this.hookManager);
-    this.services.register('remoteProxy', remoteProxy, 'kernel');
-    remoteProxy.connect();
+    const loaderContext = this.services;
+    const manifestProvider = this.services.get('manifestProvider');
 
-    // 【修改】将整个 service container 作为 context 传递
-    const kernelContext = this.services; 
-
-    // ... fetch 和加载插件的逻辑保持不变 ...
     try {
+      // 2. 获取插件清单
       const response = await fetch('/api/plugins/manifest');
       if (!response.ok) {
-          throw new Error(`Failed to fetch manifest: ${response.statusText}`);
+        throw new Error(`Failed to fetch manifest: ${response.statusText}`);
       }
-      const allManifests = await response.json();
-
-      const frontendPlugins = allManifests.filter(m => m.frontend);
+      let allManifests = await response.json();
+      
+      // 按前端声明的优先级降序排序插件
+      const frontendPlugins = allManifests
+        .filter(m => m.frontend)
+        .sort((a, b) => (b.frontend?.priority || 0) - (a.frontend?.priority || 0));
 
       console.log(`Found ${frontendPlugins.length} frontend plugins to load:`, frontendPlugins.map(p => p.id));
 
+      // 3. 依次加载并注册所有插件
       for (const manifest of frontendPlugins) {
-        // ... 注册清单到 Registry 的逻辑不变
-        this.contributionRegistry.registerManifest(manifest);
-
+        // 将清单添加到 provider，供应用主控插件后续使用
+        manifestProvider.addManifest(manifest);
+        
         try {
+          // 动态导入插件入口点
           const entryPointUrl = `/plugins/${manifest.id}/${manifest.frontend.entryPoint}`;
           const pluginModule = await import(/* @vite-ignore */ entryPointUrl);
           
           if (pluginModule.registerPlugin) {
-            console.log(`-> Registering plugin: ${manifest.id}`);
-            // 【修改】现在传递的是 ServiceContainer 实例
-            await Promise.resolve(pluginModule.registerPlugin(kernelContext));
+            console.log(`-> Registering plugin: ${manifest.id} (priority: ${manifest.frontend?.priority || 0})`);
+            // 将底层服务上下文注入每个插件
+            await Promise.resolve(pluginModule.registerPlugin(loaderContext));
           }
         } catch (e) {
           console.error(`Failed to load or register plugin ${manifest.id}:`, e);
         }
       }
 
-      // ... 后续逻辑保持不变 ...
-      console.log("Processing all registered contributions...");
-      this.contributionRegistry.processContributions();
-
     } catch (e) {
       console.error("Fatal: Could not initialize plugins.", e);
-      document.getElementById('app').innerHTML = `<div style="color: red; padding: 2rem;">Error: Could not load plugin manifests from backend. Is the backend server running?</div>`;
+      document.body.innerHTML = `<div style="color: red; padding: 2rem;">Error: Could not load plugin manifests from backend. Is the backend server running?</div>`;
       return;
     }
 
-    console.log("All plugins registered. Mounting application layout...");
-    await this.hookManager.trigger('layout.mount', { target: document.getElementById('app') });
-    console.log("✅ Hevno Frontend is ready.");
+    // 4. 内核工作结束！触发最终钩子，移交控制权。
+    console.log("✅ All plugins loaded. Handing over control to application plugins...");
+    await this.services.get('hookManager').trigger('loader.ready');
   }
 }
 
-// 启动内核
-const kernel = new FrontendKernel();
-kernel.start();
+// 启动加载器
+const loader = new FrontendLoader();
+loader.load();

@@ -1,8 +1,8 @@
 {
     "id": "core_layout",
-    "name": "Core Layout",
+    "name": "Core Layout & Application Host",
     "version": "1.0.0",
-    "description": "Provides the main application workbench layout structure.",
+    "description": "Provides the main application workbench layout and orchestrates the application startup process after the kernel has loaded all plugins.",
     "author": "Hevno Team",
     "frontend": {
         "type": "layout",
