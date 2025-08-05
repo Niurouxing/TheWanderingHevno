@@ -1,36 +1,55 @@
-import React, { useState, useEffect } from 'react';
-import './SandboxList.css'; // 导入样式
+import React, { useState, useEffect, useCallback } from 'react';
+import './SandboxList.css';
 
 export function SandboxList() {
-    // 遵循黄金规则二：在 UI 组件中使用服务定位器
     const hookManager = window.Hevno.services.get('hookManager');
+    // ++ 获取命令服务
+    const commandService = window.Hevno.services.get('commandService');
 
-    // 组件状态
     const [sandboxes, setSandboxes] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState(null);
     const [selectedSandboxId, setSelectedSandboxId] = useState(null);
 
-    // 获取沙盒列表的 effect
-    useEffect(() => {
-        async function fetchSandboxes() {
-            try {
-                const response = await fetch('/api/sandboxes');
-                if (!response.ok) {
-                    throw new Error(`Failed to fetch sandboxes: ${response.statusText}`);
-                }
-                const data = await response.json();
-                setSandboxes(data);
-            } catch (err) {
-                setError(err.message);
-            } finally {
-                setIsLoading(false);
+    // ++ 将 fetch 逻辑提取到一个可复用的函数中
+    const fetchSandboxes = useCallback(async () => {
+        setIsLoading(true);
+        try {
+            const response = await fetch('/api/sandboxes');
+            if (!response.ok) {
+                throw new Error(`Failed to fetch sandboxes: ${response.statusText}`);
             }
+            const data = await response.json();
+            setSandboxes(data);
+            setError(null);
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setIsLoading(false);
         }
-        fetchSandboxes();
     }, []);
 
-    // 处理沙盒选择的函数
+    // 初始加载
+    useEffect(() => {
+        fetchSandboxes();
+    }, [fetchSandboxes]);
+
+    // ++ 添加钩子监听器以在创建新沙盒后刷新列表
+    useEffect(() => {
+        if (!hookManager) return;
+
+        const handleSandboxCreated = () => {
+            console.log('[SandboxList] "sandbox.created" hook received. Refreshing list...');
+            fetchSandboxes();
+        };
+
+        hookManager.addImplementation('sandbox.created', handleSandboxCreated);
+
+        return () => {
+            hookManager.removeImplementation('sandbox.created', handleSandboxCreated);
+        };
+    }, [hookManager, fetchSandboxes]);
+
     const handleSelectSandbox = (sandbox) => {
         if (!hookManager) {
             console.error("[SandboxList] HookManager not available to trigger 'sandbox.selected'");
@@ -38,8 +57,16 @@ export function SandboxList() {
         }
         console.log(`[SandboxList] Selecting sandbox: ${sandbox.name} (${sandbox.id})`);
         setSelectedSandboxId(sandbox.id);
-        // 触发全局钩子，通知其他插件（如 core_history, core_runner）
         hookManager.trigger('sandbox.selected', sandbox);
+    };
+
+    // ++ 新增：处理创建按钮点击事件
+    const handleCreateClick = () => {
+        if (commandService) {
+            commandService.execute('sandboxes.create');
+        } else {
+            console.error('[SandboxList] CommandService not available.');
+        }
     };
 
     if (isLoading) {
@@ -68,8 +95,9 @@ export function SandboxList() {
                 )}
             </ul>
             <div className="sandbox-actions">
-                <button className="action-button" title="Create New Sandbox">+</button>
-                <button className="action-button" title="Import Sandbox">↑</button>
+                {/* ++ 连接到命令 */}
+                <button className="action-button" title="Create New Sandbox" onClick={handleCreateClick}>+</button>
+                <button className="action-button" title="Import Sandbox (Not Implemented)">↑</button>
             </div>
         </div>
     );

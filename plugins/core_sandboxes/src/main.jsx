@@ -1,7 +1,11 @@
 // plugins/core_sandboxes/src/main.jsx
+import React from 'react';
+import { createRoot } from 'react-dom/client';
 
 // 导入 Web Component 封装器
 import { SandboxListElement } from './views/SandboxListElement.jsx';
+// ++ 导入新的创建视图组件
+import { CreateSandboxView } from './components/CreateSandboxView.jsx';
 
 // 遵循插件开发黄金规则一：严格遵循两阶段初始化
 export function registerPlugin(context) {
@@ -22,13 +26,27 @@ export function registerPlugin(context) {
         console.log('[core_sandboxes] Stage 2: "host.ready" received. Registering command handlers...');
         
         const commandService = context.get('commandService');
-        if (commandService) {
+        const layoutService = context.get('layoutService');
+
+        if (commandService && layoutService) {
             commandService.registerHandler(
                 'sandboxes.create',
                 async () => {
-                    // TODO: 实现创建沙盒的逻辑，例如打开一个模态框或新视图
-                    alert("Command 'sandboxes.create' executed! UI not yet implemented.");
                     console.log("[core_sandboxes] Executing command: sandboxes.create");
+                    // ++ 获取主视图插槽
+                    const mainViewSlot = layoutService.getSlot('workbench.main.view');
+                    if (mainViewSlot) {
+                        // 清空主视图并渲染创建表单
+                        mainViewSlot.innerHTML = '';
+                        const reactRoot = createRoot(mainViewSlot);
+                        reactRoot.render(
+                            <React.StrictMode>
+                                <CreateSandboxView />
+                            </React.StrictMode>
+                        );
+                    } else {
+                        console.error("[core_sandboxes] Could not find 'workbench.main.view' slot.");
+                    }
                 }
             );
         }

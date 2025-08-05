@@ -1,0 +1,73 @@
+.create-sandbox-view {
+    padding: 1rem 2rem;
+    height: 100%;
+    overflow-y: auto;
+    box-sizing: border-box;
+}
+
+.create-sandbox-view h2 {
+    margin-top: 0;
+    color: #d4d4d4;
+    font-weight: 400;
+}
+
+.create-sandbox-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+}
+
+.form-group label {
+    margin-bottom: 0.5rem;
+    color: #cccccc;
+    font-size: 0.9em;
+}
+
+.form-group input,
+.form-group textarea {
+    background-color: #3c3c3c;
+    border: 1px solid #3c3c3c;
+    color: #cccccc;
+    padding: 8px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 0.9em;
+}
+
+.form-group input:focus,
+.form-group textarea:focus {
+    outline: none;
+    border-color: #007acc;
+}
+
+.create-sandbox-form button {
+    background-color: #0e639c;
+    color: white;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 4px;
+    cursor: pointer;
+    align-self: flex-start;
+}
+
+.create-sandbox-form button:hover {
+    background-color: #1177bb;
+}
+
+.create-sandbox-form button:disabled {
+    background-color: #555;
+    cursor: not-allowed;
+}
+
+.form-error {
+    background-color: #521d1d;
+    color: #f4c2c2;
+    padding: 10px;
+    border-radius: 4px;
+    border: 1px solid #943a3a;
+}
