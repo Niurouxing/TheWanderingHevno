@@ -56,12 +56,11 @@ export class Layout {
     async renderAllContributions() {
         const renderTasks = [];
         
-        // 遍历布局定义的所有插槽
         for (const slotName in this.slots) {
             const targetSlot = this.slots[slotName];
-
-            // 从注册表中获取该插槽的、已处理过的视图
-            const viewsToRender = this.context.contributionRegistry.getViews(slotName);
+            // 【修改】从 context (ServiceContainer) 中获取 registry
+            const contributionRegistry = this.context.get('contributionRegistry');
+            const viewsToRender = contributionRegistry.getViews(slotName);
 
             for (const view of viewsToRender) {
                 const task = async () => {
@@ -69,19 +68,15 @@ export class Layout {
                         await customElements.whenDefined(view.component);
                         const componentElement = document.createElement(view.component);
                         
+                        // 【修改】将整个 context 传递给组件，让组件自己去取所需的服务
                         if (this.context) {
                             componentElement.context = this.context;
                         }
                         
-                        if (slotName === 'workbench.sidebar') {
-                            const container = document.createElement('div');
-                            container.className = 'sidebar-view-container';
-                            container.innerHTML = `<h3>${view.title || 'Untitled View'}</h3><div class="component-slot"></div>`;
-                            container.querySelector('.component-slot').appendChild(componentElement);
-                            targetSlot.appendChild(container);
-                        } else {
-                            targetSlot.appendChild(componentElement);
-                        }
+                        // 【关键修改】移除所有 if/else 和包装逻辑。
+                        // 布局插件的职责就是找到插槽，然后把组件放进去。
+                        targetSlot.appendChild(componentElement);
+
                     } catch (e) {
                         console.error(`[Layout] Failed to create or mount element '${view.component}' from plugin '${view.pluginId}'.`, e);
                     }

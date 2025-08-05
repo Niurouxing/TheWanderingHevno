@@ -53,4 +53,22 @@ export class HookManager {
     }
     return currentData;
   }
+
+  /**
+     * 移除一个已注册的钩子实现。
+     * @param {string} hookName - 钩子的名称。
+     * @param {Function} implementationToRemove - 要移除的函数实例。
+     */
+    removeImplementation(hookName, implementationToRemove) {
+        const implementations = this.hooks.get(hookName);
+        if (!implementations) {
+            return;
+        }
+
+        const index = implementations.indexOf(implementationToRemove);
+        if (index > -1) {
+            implementations.splice(index, 1);
+            console.log(`[HookManager] REMOVED listener for hook: '${hookName}'`);
+        }
+    }
 }

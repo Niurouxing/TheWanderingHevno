@@ -1,19 +1,22 @@
 // /frontend/main.js
 import { HookManager } from './HookManager.js';
 import { RemoteHookProxy } from './RemoteHookProxy.js';
-import { ContributionRegistry } from './ContributionRegistry.js'; // <-- 1. 导入
+import { ContributionRegistry } from './ContributionRegistry.js';
+import { ServiceContainer } from './ServiceContainer.js'; // <-- 【新增】导入 ServiceContainer
 
 class FrontendKernel {
   constructor() {
-    // 2. 初始化所有核心服务
-    this.hookManager = new HookManager();
-    this.contributionRegistry = new ContributionRegistry();
-    
-    this.services = {
-        hookManager: this.hookManager,
-        contributionRegistry: this.contributionRegistry, // <-- 暴露给插件
-    };
+    // 【修改】使用新的 ServiceContainer 来管理所有服务
+    this.services = new ServiceContainer();
 
+    // 注册最核心的服务
+    this.hookManager = new HookManager();
+    this.services.register('hookManager', this.hookManager, 'kernel');
+    
+    this.contributionRegistry = new ContributionRegistry();
+    this.services.register('contributionRegistry', this.contributionRegistry, 'kernel');
+    
+    // 【修改】为了方便调试，暴露整个容器
     if (import.meta.env.DEV) {
       window.hevno = this.services;
     }
@@ -22,14 +25,15 @@ class FrontendKernel {
   async start() {
     console.log("🚀 Hevno Frontend Kernel starting...");
 
-    // 初始化 WebSocket 代理
+    // 【修改】初始化并注册 RemoteHookProxy
     const remoteProxy = new RemoteHookProxy(this.hookManager);
-    this.services.remoteProxy = remoteProxy;
+    this.services.register('remoteProxy', remoteProxy, 'kernel');
     remoteProxy.connect();
 
+    // 【修改】将整个 service container 作为 context 传递
     const kernelContext = this.services; 
 
-    // 获取并加载所有前端插件
+    // ... fetch 和加载插件的逻辑保持不变 ...
     try {
       const response = await fetch('/api/plugins/manifest');
       if (!response.ok) {
@@ -37,14 +41,12 @@ class FrontendKernel {
       }
       const allManifests = await response.json();
 
-      const frontendPlugins = allManifests
-        .filter(m => m.frontend);
-        // 不在这里排序了，让 Registry 来处理
+      const frontendPlugins = allManifests.filter(m => m.frontend);
 
       console.log(`Found ${frontendPlugins.length} frontend plugins to load:`, frontendPlugins.map(p => p.id));
 
       for (const manifest of frontendPlugins) {
-        // 3. 注册每个插件的清单到 Registry
+        // ... 注册清单到 Registry 的逻辑不变
         this.contributionRegistry.registerManifest(manifest);
 
         try {
@@ -53,6 +55,7 @@ class FrontendKernel {
           
           if (pluginModule.registerPlugin) {
             console.log(`-> Registering plugin: ${manifest.id}`);
+            // 【修改】现在传递的是 ServiceContainer 实例
             await Promise.resolve(pluginModule.registerPlugin(kernelContext));
           }
         } catch (e) {
@@ -60,7 +63,7 @@ class FrontendKernel {
         }
       }
 
-      // 4. 所有插件加载并注册完毕后，处理所有贡献
+      // ... 后续逻辑保持不变 ...
       console.log("Processing all registered contributions...");
       this.contributionRegistry.processContributions();
 
@@ -70,7 +73,6 @@ class FrontendKernel {
       return;
     }
 
-    // 5. 触发应用挂载钩子
     console.log("All plugins registered. Mounting application layout...");
     await this.hookManager.trigger('layout.mount', { target: document.getElementById('app') });
     console.log("✅ Hevno Frontend is ready.");
