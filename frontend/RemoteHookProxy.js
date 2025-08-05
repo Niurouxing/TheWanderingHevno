@@ -1,3 +1,5 @@
+// ./frontend/RemoteHookProxy.js
+
 /**
  * 负责管理与后端 WebSocket 的连接，并作为前后端钩子系统的桥梁。
  */
@@ -19,28 +21,33 @@ export class RemoteHookProxy {
     
     this.ws = new WebSocket(wsUrl);
 
-    this.ws.onopen = () => console.log("🔗 WebSocket connection established.");
+    this.ws.onopen = () => {
+      console.log("🔗 WebSocket connection established.");
+      // 【修改】触发本地连接成功钩子
+      this.localHookManager.trigger('websocket.connected');
+    };
     
     this.ws.onmessage = (event) => this.handleIncoming(event);
     
     this.ws.onclose = () => {
       console.warn("🔌 WebSocket connection closed. Attempting to reconnect in 3 seconds...");
+      // 【修改】触发本地连接断开钩子
+      this.localHookManager.trigger('websocket.disconnected');
       setTimeout(() => this.connect(), 3000);
     };
 
-    this.ws.onerror = (error) => console.error("WebSocket error:", error);
+    this.ws.onerror = (error) => {
+      console.error("WebSocket error:", error);
+      // 【修改】在出错时也触发断开钩子
+      this.localHookManager.trigger('websocket.disconnected');
+    };
   }
-
-  /**
-   * 处理从后端接收到的消息，并将其转发到前端钩子系统。
-   * @param {MessageEvent} event - WebSocket 消息事件。
-   */
+  // ... 其他方法保持不变 ...
   handleIncoming(event) {
     try {
       const payload = JSON.parse(event.data);
       if (payload.hook_name) {
         console.log(`[ws <] Received remote hook: ${payload.hook_name}`, payload.data);
-        // 将后端事件转发到前端钩子系统
         this.localHookManager.trigger(payload.hook_name, payload.data);
       }
     } catch (e) {
@@ -48,11 +55,6 @@ export class RemoteHookProxy {
     }
   }
 
-  /**
-   * 供前端插件调用，以触发一个后端的钩子。
-   * @param {string} hookName - 要在后端触发的钩子名称。
-   * @param {object} data - 要发送的数据。
-   */
   trigger(hookName, data = {}) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       const payload = { hook_name: hookName, data };

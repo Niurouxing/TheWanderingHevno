@@ -1,0 +1,12 @@
+{
+    "id": "core_layout",
+    "name": "Core Layout",
+    "version": "1.0.0",
+    "description": "Provides the main application workbench layout structure.",
+    "author": "Hevno Team",
+    "frontend": {
+        "type": "layout",
+        "priority": -100,
+        "entryPoint": "dist/main.js"
+    }
+}
