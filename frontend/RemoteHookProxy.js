@@ -4,17 +4,14 @@
  * 负责管理与后端 WebSocket 的连接，并作为前后端钩子系统的桥梁。
  */
 export class RemoteHookProxy {
-  /**
-   * @param {import('./HookManager').HookManager} localHookManager - 前端本地的钩子管理器实例。
-   */
   constructor(localHookManager) {
     this.localHookManager = localHookManager;
     this.ws = null;
+    this.isConnected = false;
+    // 【日志】
+    console.log(`[RemoteProxy] CONSTRUCTED. Initial isConnected: ${this.isConnected}`);
   }
 
-  /**
-   * 建立并维护 WebSocket 连接。
-   */
   connect() {
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${wsProtocol}//${window.location.host}/ws/hooks`;
@@ -23,26 +20,33 @@ export class RemoteHookProxy {
 
     this.ws.onopen = () => {
       console.log("🔗 WebSocket connection established.");
-      // 【修改】触发本地连接成功钩子
+      // 【日志】
+      console.log(`[RemoteProxy] ON_OPEN. Setting isConnected to true.`);
+      this.isConnected = true;
       this.localHookManager.trigger('websocket.connected');
     };
     
     this.ws.onmessage = (event) => this.handleIncoming(event);
     
-    this.ws.onclose = () => {
+   this.ws.onclose = () => {
       console.warn("🔌 WebSocket connection closed. Attempting to reconnect in 3 seconds...");
-      // 【修改】触发本地连接断开钩子
-      this.localHookManager.trigger('websocket.disconnected');
+      if (this.isConnected) {
+          // 【日志】
+          console.log(`[RemoteProxy] ON_CLOSE. Was connected, now setting to false.`);
+          this.isConnected = false;
+          this.localHookManager.trigger('websocket.disconnected');
+      }
       setTimeout(() => this.connect(), 3000);
     };
 
     this.ws.onerror = (error) => {
       console.error("WebSocket error:", error);
-      // 【修改】在出错时也触发断开钩子
-      this.localHookManager.trigger('websocket.disconnected');
+      if (this.isConnected) { // <--【修改】只有在之前是连接状态时才触发
+          this.isConnected = false;
+          this.localHookManager.trigger('websocket.disconnected');
+      }
     };
   }
-  // ... 其他方法保持不变 ...
   handleIncoming(event) {
     try {
       const payload = JSON.parse(event.data);

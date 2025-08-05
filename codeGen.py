@@ -115,34 +115,35 @@ def main(paths, output_file="code_collection.md"):
     return save_to_markdown(content, output_file)
 
 if __name__ == "__main__":
-    paths = [
-        "./backend", 
-        "./plugins/core_engine",
-        "./plugins/core_api",
-        "./plugins/core_codex",
-        "./plugins/core_memoria",
-        "./plugins/core_remote_hooks",
-        "./plugins/core_websocket",
-        "./plugins/core_llm",
-        "./plugins/core_logging",
-        "./plugins/core_persistence",
-        "./hevno.json",
-        "./cli.py",
-        # "./frontend",
-        # "./tests", 
-        # "./conftest.py",
-        # "./plugins/core_memoria",
-        # "./",
-    ]
-
     # paths = [
-    #     "./frontend",
-    #     "./plugins/core_layout",
+    #     "./backend", 
+    #     "./plugins/core_engine",
+    #     "./plugins/core_api",
+    #     "./plugins/core_codex",
+    #     "./plugins/core_memoria",
     #     "./plugins/core_remote_hooks",
     #     "./plugins/core_websocket",
-    #     "./plugins/sandbox_manager",
-    #     "./.gitignore"
+    #     "./plugins/core_llm",
+    #     "./plugins/core_logging",
+    #     "./plugins/core_persistence",
+    #     "./hevno.json",
+    #     "./cli.py",
+    #     # "./frontend",
+    #     # "./tests", 
+    #     # "./conftest.py",
+    #     # "./plugins/core_memoria",
+    #     # "./",
     # ]
+
+    paths = [
+        "./frontend",
+        "./plugins/core_layout",
+        "./plugins/core_remote_hooks",
+        "./plugins/core_websocket",
+        "./plugins/core_statusbar_item",
+        "./package.json",
+        "./vite.config.js",
+    ]
 
     # paths = [
     #     "./backend", 

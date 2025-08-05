@@ -16,6 +16,8 @@ export class HookManager {
     if (!this.hooks.has(hookName)) {
       this.hooks.set(hookName, []);
     }
+    // 【日志】
+    console.log(`[HookManager] ADDED listener for hook: '${hookName}'`);
     this.hooks.get(hookName).push(implementation);
   }
 
@@ -26,11 +28,15 @@ export class HookManager {
    * @param {object} data - 传递给钩子实现的数据。
    */
   async trigger(hookName, data = {}) {
+    // 【日志】
+    console.log(`[HookManager] TRIGGERING hook: '${hookName}' with data:`, data);
     const implementations = this.hooks.get(hookName) || [];
+    if (implementations.length === 0) {
+        console.warn(`[HookManager] No listeners found for hook: '${hookName}'`);
+    }
     const tasks = implementations.map(impl => Promise.resolve(impl(data)));
     await Promise.all(tasks);
   }
-
   /**
    * 触发一个“过滤型”钩子。
    * 按注册顺序链式执行，后一个实现接收前一个的返回值。

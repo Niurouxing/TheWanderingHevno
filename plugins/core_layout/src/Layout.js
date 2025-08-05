@@ -1,34 +1,39 @@
 // plugins/core_layout/src/Layout.js
+
+/**
+ * 负责创建应用的主布局骨架，并动态渲染由其他插件贡献的 UI 视图。
+ */
 export class Layout {
-    /**
-     * @param {HTMLElement} targetElement - 要挂载布局的 DOM 元素。
-     */
-    constructor(targetElement) {
+    constructor(targetElement, context) {
         this.target = targetElement;
-        this.target.innerHTML = ''; // 清空加载提示
+        this.context = context;
+        this.slots = {};
+        this.target.innerHTML = '';
     }
 
-    /**
-     * 创建主布局骨架并渲染所有插件贡献的视图。
-     */
     async mount() {
+        console.log('[Layout] Mounting skeleton...');
         this.createSkeleton();
-        const manifests = await this.fetchPluginManifests();
-        this.renderContributions(manifests);
+        
+        console.log('[Layout] Rendering contributions provided by Kernel Registry...');
+        await this.renderAllContributions();
+        console.log('[Layout] All contributions rendered.');
     }
 
     /**
-     * 创建布局的 HTML 骨架。
+     * 创建布局的静态 HTML 骨架，并缓存对关键“插槽”的引用。
      */
     createSkeleton() {
         const workbench = document.createElement('div');
         workbench.className = 'hevno-workbench';
 
+        // 使用模板字符串定义布局结构，清晰易懂
         workbench.innerHTML = `
             <div class="content-area">
                 <div class="sidebar"></div>
                 <div class="main-content">
                     <h1>Welcome to Hevno Engine</h1>
+                    <p>Select a Sandbox or create a new one to begin.</p>
                 </div>
             </div>
             <div class="statusbar">
@@ -39,7 +44,7 @@ export class Layout {
 
         this.target.appendChild(workbench);
 
-        // 保存对关键“插槽”的引用
+        // 保存对关键“插槽”的引用，以便后续注入内容
         this.slots = {
             'workbench.sidebar': workbench.querySelector('.sidebar'),
             'workbench.main.view': workbench.querySelector('.main-content'),
@@ -48,49 +53,25 @@ export class Layout {
         };
     }
 
-    /**
-     * 获取所有插件的清单。
-     */
-    async fetchPluginManifests() {
-        try {
-            const response = await fetch('/api/plugins/manifest');
-            return await response.json();
-        } catch (e) {
-            console.error("Layout failed to fetch manifests:", e);
-            return [];
-        }
-    }
-
-    /**
-     * 遍历清单，将插件贡献的视图渲染到对应的插槽中。
-     * @param {Array<object>} manifests - 所有插件的清单数组。
-     */
-    /**
- * 遍历清单，将插件贡献的视图渲染到对应的插槽中。
- * @param {Array<object>} manifests - 所有插件的清单数组。
- */
-renderContributions(manifests) {
-    for (const manifest of manifests) {
-        const contributions = manifest.frontend?.contributions?.views;
-        if (!contributions) continue;
-
-        for (const [slotName, views] of Object.entries(contributions)) {
+    async renderAllContributions() {
+        const renderTasks = [];
+        
+        // 遍历布局定义的所有插槽
+        for (const slotName in this.slots) {
             const targetSlot = this.slots[slotName];
-            if (targetSlot) {
-                for (const view of views) {
-                    // 【修改】添加健壮性检查
-                    const componentName = view.component;
 
-                    if (!componentName || typeof componentName !== 'string' || componentName.indexOf('-') === -1) {
-                        console.error(
-                            `[Layout] Invalid component name '${componentName}' contributed by plugin '${manifest.id}'. ` +
-                            `Custom element names must contain a hyphen ('-'). Skipping.`
-                        );
-                        continue; // 跳过这个不合法的贡献
-                    }
-                    
+            // 从注册表中获取该插槽的、已处理过的视图
+            const viewsToRender = this.context.contributionRegistry.getViews(slotName);
+
+            for (const view of viewsToRender) {
+                const task = async () => {
                     try {
-                        const componentElement = document.createElement(componentName);
+                        await customElements.whenDefined(view.component);
+                        const componentElement = document.createElement(view.component);
+                        
+                        if (this.context) {
+                            componentElement.context = this.context;
+                        }
                         
                         if (slotName === 'workbench.sidebar') {
                             const container = document.createElement('div');
@@ -102,11 +83,13 @@ renderContributions(manifests) {
                             targetSlot.appendChild(componentElement);
                         }
                     } catch (e) {
-                        console.error(`[Layout] Failed to create element '${componentName}' contributed by plugin '${manifest.id}'.`, e);
+                        console.error(`[Layout] Failed to create or mount element '${view.component}' from plugin '${view.pluginId}'.`, e);
                     }
-                }
+                };
+                renderTasks.push(task());
             }
         }
+        
+        await Promise.all(renderTasks);
     }
-}
 }
