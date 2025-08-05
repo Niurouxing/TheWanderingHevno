@@ -146,8 +146,9 @@ if __name__ == "__main__":
     # ]
 
     paths = [
-        # "./backend", 
-        "./plugins/core_layout/",
+        "./backend", 
+        "./frontend",
+        "./plugins/",
     ]
     output_path = "code_collection.md"
     result = main(paths, output_path)

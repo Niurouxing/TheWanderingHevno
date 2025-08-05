@@ -24,7 +24,7 @@ export class ContributionRegistry {
 
     processContributions(context) {
         const sortedManifests = [...this.manifests].sort((a, b) => 
-            (b.frontend?.priority || 0) - (a.frontend?.priority || 0)
+            (a.frontend?.priority || 0) - (b.frontend?.priority || 0) 
         );
 
         for (const manifest of sortedManifests) {
@@ -37,7 +37,6 @@ export class ContributionRegistry {
                 this.processViewContributions(manifest, contributions.views);
             }
             if (contributions.commands) {
-                // ++ 修改：现在只处理元数据
                 this.processCommandContributions(manifest, contributions.commands, context);
             }
         }

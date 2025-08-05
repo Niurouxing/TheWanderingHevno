@@ -6,7 +6,7 @@
     "author": "Hevno Team",
     "frontend": {
         "type": "layout",
-        "priority": -100,
+        "priority": 100,
         "entryPoint": "dist/main.js"
     }
 }

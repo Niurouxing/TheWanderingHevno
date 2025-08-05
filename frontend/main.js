@@ -51,7 +51,7 @@ class FrontendLoader {
       // 按前端声明的优先级降序排序插件
       const frontendPlugins = allManifests
         .filter(m => m.frontend && m.frontend.entryPoint) 
-        .sort((a, b) => (b.frontend?.priority || 0) - (a.frontend?.priority || 0));
+        .sort((a, b) => (a.frontend?.priority || 0) - (b.frontend?.priority || 0));
 
       console.log(`Found ${frontendPlugins.length} frontend plugins to load:`, frontendPlugins.map(p => p.id));
 
