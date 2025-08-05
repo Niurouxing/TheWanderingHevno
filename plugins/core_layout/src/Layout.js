@@ -58,7 +58,6 @@ export class Layout {
         
         for (const slotName in this.slots) {
             const targetSlot = this.slots[slotName];
-            // 【修改】从 context (ServiceContainer) 中获取 registry
             const contributionRegistry = this.context.get('contributionRegistry');
             const viewsToRender = contributionRegistry.getViews(slotName);
 
@@ -68,13 +67,6 @@ export class Layout {
                         await customElements.whenDefined(view.component);
                         const componentElement = document.createElement(view.component);
                         
-                        // 【修改】将整个 context 传递给组件，让组件自己去取所需的服务
-                        if (this.context) {
-                            componentElement.context = this.context;
-                        }
-                        
-                        // 【关键修改】移除所有 if/else 和包装逻辑。
-                        // 布局插件的职责就是找到插槽，然后把组件放进去。
                         targetSlot.appendChild(componentElement);
 
                     } catch (e) {

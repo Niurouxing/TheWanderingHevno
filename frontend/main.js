@@ -2,11 +2,10 @@
 import { HookManager } from './HookManager.js';
 import { RemoteHookProxy } from './RemoteHookProxy.js';
 import { ContributionRegistry } from './ContributionRegistry.js';
-import { ServiceContainer } from './ServiceContainer.js'; // <-- 【新增】导入 ServiceContainer
+import { ServiceContainer } from './ServiceContainer.js';
 
 class FrontendKernel {
   constructor() {
-    // 【修改】使用新的 ServiceContainer 来管理所有服务
     this.services = new ServiceContainer();
 
     // 注册最核心的服务
@@ -16,7 +15,13 @@ class FrontendKernel {
     this.contributionRegistry = new ContributionRegistry();
     this.services.register('contributionRegistry', this.contributionRegistry, 'kernel');
     
-    // 【修改】为了方便调试，暴露整个容器
+    // 【修改】将服务容器正式暴露为全局服务定位器
+    // 这并非一个随意的全局变量，而是一个明确的架构决策，为所有插件提供一个稳定的服务获取入口。
+    window.Hevno = {
+      services: this.services
+    };
+
+    // 【保留】为了方便调试，保留旧的别名
     if (import.meta.env.DEV) {
       window.hevno = this.services;
     }

@@ -2,12 +2,10 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 
-export function ConnectionStatus({ context }) {
-    // 【新增日志】确认收到的 props
-    console.log('[ConnectionStatus] Render started. Context prop is:', context);
-
-    const hookManager = context?.get('hookManager');
-    const remoteProxy = context?.get('remoteProxy');
+export function ConnectionStatus() {
+    // 【修改】通过全局服务定位器主动“拉取”所需的服务
+    const hookManager = window.Hevno.services.get('hookManager');
+    const remoteProxy = window.Hevno.services.get('remoteProxy');
     
     console.log('[ConnectionStatus] Services retrieved:', { hookManager, remoteProxy });
 
