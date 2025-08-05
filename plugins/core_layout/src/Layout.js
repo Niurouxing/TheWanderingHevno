@@ -1,8 +1,4 @@
 // plugins/core_layout/src/Layout.js
-
-/**
- * 负责创建应用的主布局骨架，并通过 LayoutService 注册其提供的“插槽”。
- */
 export class Layout {
     constructor(targetElement, context) {
         this.target = targetElement;
@@ -23,12 +19,15 @@ export class Layout {
         const workbench = document.createElement('div');
         workbench.className = 'hevno-workbench';
         workbench.innerHTML = `
-            <div class="content-area">
-                <div class="sidebar"></div>
-                <div class="main-content">
-                    <h1>Welcome to Hevno Engine</h1>
-                    <p>Select a Sandbox or create a new one to begin.</p>
+            <div class="main-area">
+                <div class="content-area">
+                    <div class="sidebar"></div>
+                    <div class="main-content">
+                        <h1>Welcome to Hevno Engine</h1>
+                        <p>Select a Sandbox or create a new one to begin.</p>
+                    </div>
                 </div>
+                <div class="bottom-panel-area"></div>
             </div>
             <div class="statusbar">
                 <div class="left-items"></div>
@@ -37,10 +36,13 @@ export class Layout {
         `;
         this.target.appendChild(workbench);
 
-        // 核心职责：向 LayoutService 注册本布局提供的所有插槽。
+        // 向 LayoutService 注册所有插槽和可操作的容器
         this.layoutService.registerSlot('workbench.sidebar', workbench.querySelector('.sidebar'));
         this.layoutService.registerSlot('workbench.main.view', workbench.querySelector('.main-content'));
         this.layoutService.registerSlot('statusbar.left', workbench.querySelector('.statusbar .left-items'));
         this.layoutService.registerSlot('statusbar.right', workbench.querySelector('.statusbar .right-items'));
+        
+        // ++ 注册动态面板的容器
+        this.layoutService.registerPanelContainer('bottom', workbench.querySelector('.bottom-panel-area'));
     }
 }

@@ -1,5 +1,5 @@
 {
-  "name": "hevno-plugin-core-statusbar-item",
+  "name": "hevno-plugin-core-diagnostics",
   "version": "1.0.0",
   "private": true,
   "type": "module",

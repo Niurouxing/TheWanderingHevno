@@ -1,4 +1,4 @@
-// plugins/core_statusbar_item/src/ConnectionStatus.jsx
+// plugins/core_diagnostics/src/ConnectionStatus.jsx
 
 import React, { useState, useEffect, useCallback } from 'react';
 

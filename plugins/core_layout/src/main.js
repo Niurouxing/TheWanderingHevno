@@ -7,11 +7,8 @@ import './styles.css';
 import { ContributionRegistry } from './services/ContributionRegistry.js';
 import { LayoutService } from './services/LayoutService.js';
 import { RendererService } from './services/RendererService.js';
+import { CommandService } from './services/CommandService.js';
 
-/**
- * 核心布局与应用主控插件的注册入口。
- * @param {object} context - 由内核加载器注入的，只包含最底层服务的 ServiceContainer。
- */
 export function registerPlugin(context) {
     console.log('[core_layout] Registering as Application Host...');
     
@@ -24,7 +21,10 @@ export function registerPlugin(context) {
     
     const rendererService = new RendererService(context);
     context.register('rendererService', rendererService, 'core_layout');
-    
+
+    const commandService = new CommandService();
+    context.register('commandService', commandService, 'core_layout');
+
     const hookManager = context.get('hookManager');
     if (!hookManager) {
         console.error('[core_layout] CRITICAL: HookManager service not found in context!');
@@ -44,10 +44,8 @@ export function registerPlugin(context) {
         const allManifests = manifestProvider.getManifests();
 
         // b. 注册并处理所有插件的贡献
-        allManifests.forEach(manifest => {
-            contributionRegistry.registerManifest(manifest);
-        });
-        contributionRegistry.processContributions();
+        contributionRegistry.registerManifests(allManifests); // ++ 更改为批量注册
+        contributionRegistry.processContributions(context); // ++ 传入 context
 
         // c. 挂载UI骨架 (这会调用 layoutService.registerSlot)
         const layout = new Layout(document.getElementById('app'), context);

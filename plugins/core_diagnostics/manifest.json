@@ -1,0 +1,42 @@
+{
+    "id": "core_diagnostics",
+    "name": "Core Diagnostics & UI Examples",
+    "version": "1.1.0",
+    "description": "Provides diagnostic views (connection status, sandbox indicator, plugin list) and commands (show system report). Serves as an example for advanced plugin development.",
+    "author": "Hevno Team",
+    "frontend": {
+        "type": "view",
+        "priority": 10,
+        "entryPoint": "dist/main.js",
+        "contributions": {
+            "views": {
+                "statusbar.left": [
+                    {
+                        "id": "connection-status",
+                        "component": "connection-status-element",
+                        "order": 10
+                    },
+                    {
+                        "id": "sandbox-indicator",
+                        "component": "sandbox-indicator-element",
+                        "order": 20
+                    }
+                ],
+                "workbench.sidebar": [
+                    {
+                        "id": "diagnostics.plugin-list",
+                        "component": "plugin-list-element",
+                        "title": "Loaded Plugins",
+                        "order": 100
+                    }
+                ]
+            },
+            "commands": [
+                {
+                    "id": "developer.showSystemReport",
+                    "title": "Developer: Show System Report"
+                }
+            ]
+        }
+    }
+}

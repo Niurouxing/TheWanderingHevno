@@ -135,20 +135,20 @@ if __name__ == "__main__":
     #     # "./",
     # ]
 
-    paths = [
-        "./frontend",
-        "./plugins/core_layout",
-        "./plugins/core_remote_hooks",
-        "./plugins/core_websocket",
-        "./plugins/core_statusbar_item",
-        "./package.json",
-        "./vite.config.js",
-    ]
-
     # paths = [
-    #     "./backend", 
-    #     "./plugins",
+    #     "./frontend",
+    #     "./plugins/core_layout",
+    #     "./plugins/core_remote_hooks",
+    #     "./plugins/core_websocket",
+    #     "./plugins/core_diagnostics",
+    #     "./package.json",
+    #     "./vite.config.js",
     # ]
+
+    paths = [
+        # "./backend", 
+        "./plugins/core_layout/",
+    ]
     output_path = "code_collection.md"
     result = main(paths, output_path)
     print(result)

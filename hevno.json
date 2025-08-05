@@ -10,6 +10,6 @@
     "core_websocket": { "source": "local" },
     "core_remote_hooks": { "source": "local" },
     "core_layout": { "source": "local" },
-    "core_statusbar_item": { "source": "local" }
+    "core_diagnostics": { "source": "local" }
   }
 }
