@@ -10,7 +10,7 @@ __pycache__/
 /build
 /.next
 /out
-
+.vite/
 # Log files
 npm-debug.log*
 yarn-debug.log*
