@@ -1,7 +1,7 @@
 // plugins/core_layout/src/main.js
 
 import { Layout } from './Layout.js';
-import './styles.css';
+
 
 // 导入本插件提供的所有应用层服务
 import { ContributionRegistry } from './services/ContributionRegistry.js';
