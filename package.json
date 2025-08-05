@@ -1,12 +1,16 @@
 {
-  "name": "hevno-engine-frontend",
+  "name": "hevno-engine-monorepo",
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "workspaces": [
+    "plugins/*"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:plugins": "npm run -w plugins/core_layout build && npm run -w plugins/core_statusbar_item build"
   },
   "devDependencies": {
     "vite": "^5.2.11"

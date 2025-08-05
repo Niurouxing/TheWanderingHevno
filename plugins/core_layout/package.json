@@ -1,0 +1,12 @@
+{
+  "name": "hevno-plugin-core-layout",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "vite": "^5.2.11"
+  }
+}
