@@ -1,0 +1,22 @@
+{
+    "id": "core_statusbar_item",
+    "name": "Core Statusbar Item",
+    "version": "1.0.0",
+    "description": "Displays the current backend connection status in the statusbar.",
+    "author": "Hevno Team",
+    "frontend": {
+        "type": "view",
+        "priority": 10,
+        "entryPoint": "dist/main.js",
+        "contributions": {
+            "views": {
+                "statusbar.left": [
+                    {
+                        "id": "connection-status",
+                        "component": "connection-status-element"
+                    }
+                ]
+            }
+        }
+    }
+}
