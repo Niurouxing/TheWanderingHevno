@@ -1,11 +1,10 @@
 {
     "id": "core_remote_hooks",
-    "name": "core_remote_hooks",
+    "name": "Full-Stack Hook Bridge",
     "version": "1.0.0",
-    "description": "Full-stack plugin bridging backend/frontend hook systems via WebSocket.",
+    "description": "Bridges the backend and frontend hook systems via WebSocket, enabling location-transparent event handling.",
     "author": "Hevno Team",
-    
     "backend": {
-        "priority": -80
+        "priority": 15
     }
 }

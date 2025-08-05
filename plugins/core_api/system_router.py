@@ -5,8 +5,10 @@ import logging # <-- 导入 logging
 from pathlib import Path
 from typing import List, Dict, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException,Depends
 from fastapi.responses import FileResponse
+from .dependencies import get_hook_manager
+from backend.core.contracts import HookManager
 
 # 获取这个模块的 logger 实例
 logger = logging.getLogger(__name__)
@@ -96,3 +98,13 @@ async def serve_plugin_resource(plugin_id: str, resource_path: str):
     except Exception as e:
         logger.error(f"[ASSET_SERVER] Error serving plugin resource '{plugin_id}/{resource_path}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error while serving plugin resource.")
+
+@api_plugins_router.get("/hooks/manifest", response_model=Dict[str, List[str]], summary="Get Backend Hooks Manifest")
+async def get_backend_hooks_manifest(
+    hook_manager: HookManager = Depends(get_hook_manager)
+):
+    """
+    获取一个包含所有已在后端注册的钩子名称的列表。
+    供前端在启动时同步。
+    """
+    return {"hooks": list(hook_manager._hooks.keys())}

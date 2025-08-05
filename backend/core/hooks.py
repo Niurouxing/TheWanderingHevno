@@ -1,13 +1,21 @@
 # backend/core/hooks.py
 import asyncio
 import logging
-import inspect 
+import inspect
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Awaitable, TypeVar, Optional
 
 # 从平台核心导入最基础的接口
 from backend.core.contracts import HookManager as HookManagerInterface, Container
+
+# 从新插件的契约中导入核心模型和接口
+from plugins.core_remote_hooks.contracts import (
+    HookLocation,
+    GlobalHookRegistryInterface,
+    RemoteHookEmitterInterface
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -24,20 +32,23 @@ class HookImplementation:
     func: HookCallable = field(compare=False)
     plugin_name: str = field(compare=False, default="<unknown>")
 
+
 class HookManager(HookManagerInterface):
     """
     一个中心化的、上下文感知的服务，负责发现、注册和调度所有钩子实现。
-    它能自动将上下文注入到钩子函数中。
+    它能自动将上下文注入到钩子函数中，并支持向远端的智能路由。
     """
-    def __init__(self, container: Container): # <-- 构造函数接收 Container
+    def __init__(self, container: Container):
         self._hooks: Dict[str, List[HookImplementation]] = defaultdict(list)
-        # 持有核心上下文
+        # 【修改】直接持有 container 实例，以便在运行时解析服务
+        self._container = container
         self._shared_context: Dict[str, Any] = {
             "container": container,
             "hook_manager": self
         }
         logger.info("HookManager initialized and context-aware.")
 
+    # ... (add_shared_context, _prepare_hook_args, add_implementation methods remain the same) ...
     def add_shared_context(self, name: str, service: Any) -> None:
         """允许在启动过程中向钩子系统添加更多的共享服务。"""
         if name in self._shared_context:
@@ -89,44 +100,70 @@ class HookManager(HookManagerInterface):
         self._hooks[hook_name].sort() # 保持列表按优先级排序（从小到大）
         logger.debug(f"Registered hook '{hook_name}' from plugin '{plugin_name}' with priority {priority}.")
 
+
     async def trigger(self, hook_name: str, **kwargs: Any) -> None:
         """
-        触发一个“通知型”钩子。并发执行，忽略返回值。
-        现在会自动注入上下文。
+        【重构】触发一个“通知型”钩子。
+        现在会查询全域路由表，并智能地决定是在本地执行、发送到远端，还是两者都做。
         """
-        if hook_name not in self._hooks:
-            return
+        # --- 智能路由逻辑 ---
+        try:
+            # 1. 在运行时从容器解析所需的服务
+            global_registry: GlobalHookRegistryInterface = self._container.resolve("global_hook_registry")
+            remote_emitter: RemoteHookEmitterInterface = self._container.resolve("remote_hook_emitter")
+            
+            # 2. 查询钩子的位置
+            location = global_registry.get_hook_location(hook_name)
 
-        # 合并共享上下文和本次调用的临时上下文
-        call_context = {**self._shared_context, **kwargs}
-        
-        implementations = self._hooks[hook_name]
-        tasks = []
-        for impl in implementations:
-            try:
-                # 智能准备参数
-                _, prepared_kwargs = self._prepare_hook_args(impl.func, call_context)
-                tasks.append(impl.func(**prepared_kwargs))
-            except Exception as e:
-                logger.error(
-                    f"Error preparing args for NOTIFICATION hook '{hook_name}' from plugin '{impl.plugin_name}': {e}",
-                    exc_info=e
-                )
+        except ValueError:
+            # 如果 `core_remote_hooks` 插件未加载，这些服务将无法解析。
+            # 在这种情况下，优雅地降级为仅本地执行。
+            location = HookLocation.LOCAL
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        executed_locally = False
 
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                impl = implementations[i]
-                logger.error(
-                    f"Error in NOTIFICATION hook '{hook_name}' from plugin '{impl.plugin_name}': {result}",
-                    exc_info=result
-                )
+        # --- 本地执行逻辑 ---
+        if location in [HookLocation.LOCAL, HookLocation.BOTH]:
+            if hook_name in self._hooks:
+                call_context = {**self._shared_context, **kwargs}
+                implementations = self._hooks[hook_name]
+                tasks = []
+                for impl in implementations:
+                    try:
+                        _, prepared_kwargs = self._prepare_hook_args(impl.func, call_context)
+                        tasks.append(impl.func(**prepared_kwargs))
+                    except Exception as e:
+                        logger.error(
+                            f"Error preparing args for NOTIFICATION hook '{hook_name}' from plugin '{impl.plugin_name}': {e}",
+                            exc_info=e
+                        )
 
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        impl = implementations[i]
+                        logger.error(
+                            f"Error in NOTIFICATION hook '{hook_name}' from plugin '{impl.plugin_name}': {result}",
+                            exc_info=result
+                        )
+                executed_locally = True
+
+        # --- 远程执行逻辑 ---
+        if location in [HookLocation.REMOTE, HookLocation.BOTH]:
+            await remote_emitter.emit(hook_name, kwargs)
+
+        # --- 未找到处理程序的警告 ---
+        if not executed_locally and location == HookLocation.UNKNOWN:
+            logger.warning(
+                f"Triggered hook '{hook_name}' has no known implementation in backend or frontend."
+            )
+
+    # ... (filter and decide methods remain the same) ...
     async def filter(self, hook_name: str, data: T, **kwargs: Any) -> T:
         """
         触发一个“过滤型”钩子，形成处理链。
-        现在会自动注入上下文。
+        【保持不变】此类型钩子仅在本地执行。
         """
         if hook_name not in self._hooks:
             return data
@@ -136,7 +173,6 @@ class HookManager(HookManagerInterface):
         
         for impl in self._hooks[hook_name]:
             try:
-                # 智能准备参数
                 prepared_args, prepared_kwargs = self._prepare_hook_args(impl.func, call_context, positional_data=current_data)
                 current_data = await impl.func(*prepared_args, **prepared_kwargs)
             except Exception as e:
@@ -150,7 +186,7 @@ class HookManager(HookManagerInterface):
     async def decide(self, hook_name: str, **kwargs: Any) -> Optional[Any]:
         """
         触发一个“决策型”钩子。按优先级从高到低执行，并返回第一个非 None 的结果。
-        现在会自动注入上下文。
+        【保持不变】此类型钩子仅在本地执行。
         """
         if hook_name not in self._hooks:
             return None
