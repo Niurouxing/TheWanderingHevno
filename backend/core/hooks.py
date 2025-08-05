@@ -40,15 +40,19 @@ class HookManager(HookManagerInterface):
     """
     def __init__(self, container: Container):
         self._hooks: Dict[str, List[HookImplementation]] = defaultdict(list)
-        # 【修改】直接持有 container 实例，以便在运行时解析服务
         self._container = container
         self._shared_context: Dict[str, Any] = {
             "container": container,
             "hook_manager": self
         }
+        
+        # 【优化】为远程服务添加缓存属性
+        self._global_registry: Optional[GlobalHookRegistryInterface] = None
+        self._remote_emitter: Optional[RemoteHookEmitterInterface] = None
+        self._remote_services_resolved: bool = False # 标志位，确保只解析一次
+
         logger.info("HookManager initialized and context-aware.")
 
-    # ... (add_shared_context, _prepare_hook_args, add_implementation methods remain the same) ...
     def add_shared_context(self, name: str, service: Any) -> None:
         """允许在启动过程中向钩子系统添加更多的共享服务。"""
         if name in self._shared_context:
@@ -61,7 +65,7 @@ class HookManager(HookManagerInterface):
         call_context: Dict[str, Any],
         positional_data: Optional[Any] = None
     ) -> tuple[list, dict]:
-        """【新增】智能地准备传递给钩子函数的参数。"""
+        """智能地准备传递给钩子函数的参数。"""
         sig = inspect.signature(func)
         params = sig.parameters
         
@@ -103,22 +107,28 @@ class HookManager(HookManagerInterface):
 
     async def trigger(self, hook_name: str, **kwargs: Any) -> None:
         """
-        【重构】触发一个“通知型”钩子。
+        【重构 & 优化】触发一个“通知型”钩子。
         现在会查询全域路由表，并智能地决定是在本地执行、发送到远端，还是两者都做。
+        远程服务采用懒加载模式，只在第一次调用时解析。
         """
-        # --- 智能路由逻辑 ---
-        try:
-            # 1. 在运行时从容器解析所需的服务
-            global_registry: GlobalHookRegistryInterface = self._container.resolve("global_hook_registry")
-            remote_emitter: RemoteHookEmitterInterface = self._container.resolve("remote_hook_emitter")
-            
-            # 2. 查询钩子的位置
-            location = global_registry.get_hook_location(hook_name)
+        # --- 优化的智能路由逻辑 ---
+        if not self._remote_services_resolved:
+            try:
+                # 尝试解析一次并缓存
+                self._global_registry = self._container.resolve("global_hook_registry")
+                self._remote_emitter = self._container.resolve("remote_hook_emitter")
+                logger.info("Successfully resolved and cached remote hook services.")
+            except ValueError:
+                # 无法解析服务，说明插件未安装。我们将它们保持为 None。
+                logger.info("Remote hook services not found. HookManager will operate in local-only mode.")
+            finally:
+                # 无论成功与否，都标记为已解析，不再重复尝试
+                self._remote_services_resolved = True
 
-        except ValueError:
-            # 如果 `core_remote_hooks` 插件未加载，这些服务将无法解析。
-            # 在这种情况下，优雅地降级为仅本地执行。
-            location = HookLocation.LOCAL
+        location = HookLocation.LOCAL # 默认是本地
+        if self._global_registry:
+            # 如果注册表已缓存，则查询位置
+            location = self._global_registry.get_hook_location(hook_name)
 
         executed_locally = False
 
@@ -150,8 +160,8 @@ class HookManager(HookManagerInterface):
                 executed_locally = True
 
         # --- 远程执行逻辑 ---
-        if location in [HookLocation.REMOTE, HookLocation.BOTH]:
-            await remote_emitter.emit(hook_name, kwargs)
+        if self._remote_emitter and location in [HookLocation.REMOTE, HookLocation.BOTH]:
+            await self._remote_emitter.emit(hook_name, kwargs)
 
         # --- 未找到处理程序的警告 ---
         if not executed_locally and location == HookLocation.UNKNOWN:
@@ -159,7 +169,6 @@ class HookManager(HookManagerInterface):
                 f"Triggered hook '{hook_name}' has no known implementation in backend or frontend."
             )
 
-    # ... (filter and decide methods remain the same) ...
     async def filter(self, hook_name: str, data: T, **kwargs: Any) -> T:
         """
         触发一个“过滤型”钩子，形成处理链。
@@ -193,7 +202,8 @@ class HookManager(HookManagerInterface):
 
         call_context = {**self._shared_context, **kwargs}
 
-        for impl in reversed(self._hooks[hook_name]):
+        # 注意：决策型钩子应该从高优先级（数字小）到低优先级（数字大）执行，所以顺序是正确的
+        for impl in self._hooks[hook_name]:
             try:
                 _, prepared_kwargs = self._prepare_hook_args(impl.func, call_context)
                 result = await impl.func(**prepared_kwargs)

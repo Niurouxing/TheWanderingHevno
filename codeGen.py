@@ -149,6 +149,8 @@ if __name__ == "__main__":
         "./backend", 
         "./frontend",
         "./plugins/",
+         "./package.json",
+         "./vite.config.js",
     ]
     output_path = "code_collection.md"
     result = main(paths, output_path)
