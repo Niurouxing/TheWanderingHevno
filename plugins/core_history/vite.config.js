@@ -11,7 +11,7 @@ export default defineConfig(({ mode }) => {
     build: {
       lib: {
         entry: resolve(__dirname, 'src/main.jsx'),
-        name: 'HevnoCoreDiagnostics', // 插件的唯一名称
+        name: 'HevnoCoreHistory', // 插件的唯一名称
         fileName: 'main',
         formats: ['es'],
       },

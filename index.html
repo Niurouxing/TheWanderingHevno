@@ -1,31 +1,51 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
+  <head>
     <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Hevno Engine</title>
-    <style>
-      /* 基础样式，确保在插件加载前有良好的视觉反馈 */
-      body {
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-        margin: 0;
-        background-color: #1e1e1e;
-        color: #d4d4d4;
+    
+    <!-- 
+      ===============================================================
+      关键: Import Map
+      ===============================================================
+      这部分代码必须在加载任何模块脚本 (<script type="module">) 之前。
+      它告诉浏览器如何解析 'react', 'react-dom' 和 'react-dom/client' 的导入。
+      所有插件中的 import React from 'react' 都会被重定向到下面的 URL。
+      esm.sh 是一个优秀的 CDN，它能将 NPM 包转换为浏览器可用的 ES 模块。
+    -->
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0?dev",
+        "react-dom": "https://esm.sh/react-dom@18.2.0?dev",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client?dev"
       }
-      #app::before {
-        content: '🚀 Hevno Engine is loading...';
-        display: block;
-        padding: 2rem;
-        font-size: 1.2rem;
-        text-align: center;
+    }
+    </script>
+    <style>
+      /* 添加一些基础样式以避免启动时白屏 */
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        background-color: #1e1e1e;
+      }
+      #app {
+        height: 100vh;
+        width: 100vw;
+        overflow: hidden;
       }
     </style>
-</head>
-<body>
-    <!-- 布局插件将在此处渲染UI -->
-    <div id="app"></div>
-
-    <!-- 加载前端内核 -->
+  </head>
+  <body>
+    <div id="app">
+        <!-- 应用将挂载在这里 -->
+    </div>
+    <!-- 
+      加载你的前端内核入口文件。
+      这个脚本会动态加载所有插件，而这些插件的 React 导入将被上面的 Import Map 解析。
+    -->
     <script type="module" src="/frontend/main.js"></script>
-</body>
+  </body>
 </html>
