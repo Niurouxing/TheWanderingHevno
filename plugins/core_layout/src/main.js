@@ -33,27 +33,28 @@ export function registerPlugin(context) {
 
     // 2. 监听内核加载器发出的“就绪”信号，然后接管应用的启动流程
     hookManager.addImplementation('loader.ready', async () => {
-        console.log('[core_layout] Received "loader.ready" signal. Starting application bootstrap...');
+        console.log('[core_layout] Received "loader.ready". Starting application bootstrap...');
         
-        // a. 从 ManifestProvider 获取所有插件的清单
         const manifestProvider = context.get('manifestProvider');
-        if (!manifestProvider) {
-            console.error('[core_layout] CRITICAL: ManifestProvider service not found!');
-            return;
-        }
+        const contributionRegistry = context.get('contributionRegistry');
+        const rendererService = context.get('rendererService');
+
+        // a. 注册并处理所有插件的贡献 (元数据处理)
         const allManifests = manifestProvider.getManifests();
+        contributionRegistry.registerManifests(allManifests);
+        contributionRegistry.processContributions(context);
 
-        // b. 注册并处理所有插件的贡献
-        contributionRegistry.registerManifests(allManifests); // ++ 更改为批量注册
-        contributionRegistry.processContributions(context); // ++ 传入 context
-
-        // c. 挂载UI骨架 (这会调用 layoutService.registerSlot)
+        // b. 挂载UI骨架
         const layout = new Layout(document.getElementById('app'), context);
         layout.mount();
 
-        // d. 调用渲染服务，将所有处理过的贡献渲染到已注册的插槽中
+        // c. 调用渲染服务，渲染声明式UI
         await rendererService.renderAll();
         
         console.log('[core_layout] Application bootstrap complete. UI is ready.');
+
+        // d. ++ 核心修改：触发 host.ready 钩子，通知其他插件可以开始了
+        console.log('[core_layout] Triggering "host.ready" for other plugins...');
+        await hookManager.trigger('host.ready');
     });
 }

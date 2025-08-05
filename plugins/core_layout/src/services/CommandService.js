@@ -9,6 +9,15 @@ export class CommandService {
         console.log('[CommandService] Initialized.');
     }
 
+    registerMetadata(commandId, metadata, pluginId) {
+        if (!this.commands.has(commandId)) {
+            this.commands.set(commandId, { ...metadata, pluginId });
+        } else {
+            // 可以根据优先级决定是否覆盖元数据
+            console.warn(`[CommandService] Metadata for command '${commandId}' is already registered.`);
+        }
+    }
+
     /**
      * 注册一个命令。
      * @param {string} commandId - 命令的唯一ID, e.g., "sandboxes.create_new"
@@ -40,6 +49,19 @@ export class CommandService {
             }
         } else {
             console.error(`[CommandService] Command '${commandId}' not found or handler is not a function.`);
+        }
+    }
+
+    registerHandler(commandId, handler) {
+        const command = this.commands.get(commandId);
+        if (command) {
+            if (command.handler) {
+                console.warn(`[CommandService] Handler for command '${commandId}' is being overridden.`);
+            }
+            command.handler = handler;
+            console.log(`[CommandService] Handler for command '${commandId}' registered.`);
+        } else {
+            console.error(`[CommandService] Cannot register handler. Command '${commandId}' metadata not found. Make sure it's declared in a manifest.json.`);
         }
     }
 

@@ -29,27 +29,36 @@ export class ContributionRegistry {
 
         for (const manifest of sortedManifests) {
             const contributions = manifest.frontend.contributions;
+            if (!contributions) {
+                continue; // 跳过没有贡献的插件
+            }
+
             if (contributions.views) {
                 this.processViewContributions(manifest, contributions.views);
             }
             if (contributions.commands) {
+                // ++ 修改：现在只处理元数据
                 this.processCommandContributions(manifest, contributions.commands, context);
             }
         }
 
-        for (const [slot, views] of this.processedContributions.views.entries()) {
+        for (const [slot, views] of this._processedContributions.views.entries()) {
             views.sort((a, b) => (a.order || 0) - (b.order || 0));
         }
-        console.log('[Registry] All contributions processed:', this.processedContributions);
+        console.log('[Registry] All contributions processed:', this._processedContributions);
     }
     
     processViewContributions(manifest, viewsContribution) {
+        // [DEBUG] 日志注入点 4: 进入子函数
+        console.log(`%c[DEBUG|Registry]   -> Inside processViewContributions for ${manifest.id}`, 'color: cyan;');
+        console.log(`[DEBUG|Registry]      viewsContribution object received:`, JSON.parse(JSON.stringify(viewsContribution)));
+
         for (const [slotName, views] of Object.entries(viewsContribution)) {
-            if (!this.processedContributions.views.has(slotName)) {
-                this.processedContributions.views.set(slotName, []);
+            if (!this._processedContributions.views.has(slotName)) {
+                this._processedContributions.views.set(slotName, []);
             }
 
-            const existingViewsInSlot = this.processedContributions.views.get(slotName);
+            const existingViewsInSlot = this._processedContributions.views.get(slotName);
             
             for (const view of views) {
                 if (!view.id || !view.component || view.component.indexOf('-') === -1) {
@@ -71,36 +80,15 @@ export class ContributionRegistry {
 
     processCommandContributions(manifest, commandsContribution, context) {
         const commandService = context.get('commandService');
-        if (!commandService) {
-            console.error('[Registry] CommandService not available to process command contributions.');
-            return;
-        }
+        if (!commandService) return;
 
         for (const command of commandsContribution) {
             if (!command.id || !command.title) {
-                console.error(`[Registry] Invalid command contribution from plugin '${manifest.id}'. 'id' and 'title' are required.`, command);
+                console.error(`[Registry] Invalid command contribution from plugin '${manifest.id}'.`, command);
                 continue;
             }
-
-            // 从插件动态加载的模块中获取处理函数
-            // 注意：这是一个简化的实现。一个更健壮的系统可能需要插件
-            // 在 registerPlugin 时主动注册命令的 handler 函数。
-            // 这里我们假设命令的 handler 是一个全局可访问的函数，或者需要更复杂的机制来定位。
-            // 一个简单的约定是：插件在 `registerPlugin` 时将 command handlers 挂载到某个地方。
-            // 为简单起见，我们暂时将 handler 定义为字符串，由调用方解析。
-            
-            // 为了演示，我们暂时不实现 handler 的动态绑定，只注册命令本身
-            // 完整的 handler 绑定需要在插件的 JS 入口文件中完成
-            const commandToRegister = {
-                title: command.title,
-                handler: () => { 
-                    // 真正的 handler 应该由插件在 JS 中提供，并通过 Hook 或 Service 关联起来
-                    console.log(`Placeholder for command '${command.id}' from plugin '${manifest.id}'`);
-                    alert(`Executing: ${command.title}`);
-                }
-            };
-
-            commandService.register(command.id, commandToRegister, manifest.id);
+            // 只注册元数据，不涉及 handler
+            commandService.registerMetadata(command.id, { title: command.title }, manifest.id);
             this._processedContributions.commands.set(command.id, { ...command, pluginId: manifest.id });
         }
     }

@@ -1,5 +1,4 @@
 // plugins/core_diagnostics/src/main.jsx
-
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 
@@ -12,48 +11,42 @@ import { PluginListElement } from './views/PluginListElement.jsx';
 import { SystemReportView } from './components/SystemReportView.jsx';
 
 /**
- * 注册插件，定义所有 Web Components 并将命令的 handler 绑定到服务
- * @param {object} context - ServiceContainer 实例
+ * 核心诊断插件的注册入口。
+ * @param {object} context - 由内核加载器注入的，包含底层服务的 ServiceContainer 实例。
  */
-export function registerPlugin(context) {
-    const commandService = context.get('commandService');
-    const layoutService = context.get('layoutService');
 
-    // 1. 定义所有由本插件贡献的 Web Components
+export function registerPlugin(context) {
+    // Stage 1
+    console.log('[core_diagnostics] Stage 1: Defining web components...');
     customElements.define('connection-status-element', ConnectionStatusElement);
     customElements.define('sandbox-indicator-element', SandboxIndicatorElement);
     customElements.define('plugin-list-element', PluginListElement);
+    console.log('[core_diagnostics] Stage 1: All web components defined.');
 
-    console.log('[core_diagnostics] All web components defined.');
-    
-    // 2. 注册命令的 handler
-    if (commandService && layoutService) {
-        commandService.register(
-            'developer.showSystemReport', 
-            {
-                title: 'Developer: Show System Report',
-                handler: async () => {
-                    // 动态添加底部面板
-                    const panelSlot = layoutService.addPanel('bottom', { 
-                        id: 'system-report', 
-                        title: 'System Report' 
-                    });
+    const hookManager = context.get('hookManager');
+    if (!hookManager) { return; }
 
+    // Stage 2: ++ 修改，监听 host.ready
+    hookManager.addImplementation('host.ready', () => {
+        console.log('[core_diagnostics] Stage 2: "host.ready" received. Registering command handlers...');
+        
+        const commandService = context.get('commandService');
+        const layoutService = context.get('layoutService');
+
+        if (commandService && layoutService) {
+            commandService.registerHandler(
+                'developer.showSystemReport',
+                async () => {
+                    console.log('[core_diagnostics] Executing command: developer.showSystemReport');
+                    const panelSlot = layoutService.addPanel('bottom', { id: 'system-report', title: 'System Report' });
                     if (panelSlot) {
-                        // 将 React 组件渲染到动态创建的插槽中
                         const reactRoot = createRoot(panelSlot);
-                        reactRoot.render(
-                            <React.StrictMode>
-                                <SystemReportView />
-                            </React.StrictMode>
-                        );
+                        reactRoot.render(<React.StrictMode><SystemReportView /></React.StrictMode>);
                     }
                 }
-            }, 
-            'core_diagnostics'
-        );
-        console.log('[core_diagnostics] "showSystemReport" command handler registered.');
-    } else {
-        console.warn('[core_diagnostics] CommandService or LayoutService not available. Cannot register command handlers.');
-    }
+            );
+        } else {
+            console.error('[core_diagnostics] CRITICAL: Services not available even after "host.ready".');
+        }
+    });
 }
