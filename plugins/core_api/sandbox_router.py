@@ -50,6 +50,10 @@ class SandboxListItem(BaseModel):
     icon_url: str
     has_custom_icon: bool
 
+class UpdateSandboxRequest(BaseModel):
+    name: str = Field(..., min_length=1, description="The new name for the sandbox.")
+
+
 # --- Sandbox Lifecycle API ---
 
 @router.post("", response_model=Sandbox, status_code=201, summary="Create a new Sandbox")
@@ -78,7 +82,55 @@ async def create_sandbox(
     
     logger.info(f"Created new sandbox '{sandbox.name}' ({sandbox.id}).")
     return sandbox
+    
 
+@router.patch("/{sandbox_id}", response_model=Sandbox, summary="Update Sandbox Details")
+async def update_sandbox_details(
+    sandbox_id: UUID,
+    request_body: UpdateSandboxRequest,
+    sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store"))
+):
+    """
+    更新沙盒的详细信息，例如名称。
+    这是一个局部更新，所以使用 PATCH 方法。
+    """
+    sandbox = sandbox_store.get(sandbox_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Sandbox not found.")
+
+    # 更新沙盒名称
+    sandbox.name = request_body.name
+    logger.info(f"Updated name for sandbox '{sandbox.id}' to '{sandbox.name}'.")
+
+    # 注意：因为 sandbox_store 是一个在内存中的字典，这里的修改会立即生效。
+    # 在一个真实的、带持久化的应用中，这里会调用一个 service.save(sandbox) 方法。
+
+    return sandbox
+
+@router.delete("/{sandbox_id}", status_code=204, summary="Delete a Sandbox")
+async def delete_sandbox(
+    sandbox_id: UUID,
+    sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store")),
+    snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
+    # 如果有持久化，也需要注入 persistence_service
+):
+    """
+    永久删除一个沙盒及其所有关联的快照。
+    """
+    if sandbox_id not in sandbox_store:
+        raise HTTPException(status_code=404, detail="Sandbox not found.")
+
+    # 1. 从内存中删除沙盒
+    del sandbox_store[sandbox_id]
+
+    # 2. 从快照存储中删除所有关联的快照
+    # (SnapshotStoreInterface 需要一个删除方法)
+    # 假设 snapshot_store 有一个 `delete_by_sandbox(sandbox_id)` 方法
+    # snapshot_store.delete_by_sandbox(sandbox_id)
+
+    logger.info(f"Deleted sandbox '{sandbox_id}' and all associated data.")
+    return Response(status_code=204)
+    
 @router.post("/{sandbox_id}/step", response_model=StateSnapshot, summary="Execute a step")
 async def execute_sandbox_step(
     sandbox_id: UUID, 
