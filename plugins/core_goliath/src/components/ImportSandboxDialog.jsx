@@ -55,22 +55,24 @@ export default function ImportSandboxDialog() {
   
   const handleImport = async () => {
     if (!selectedFile) {
-        setError("Please provide a PNG file.");
+        setError("Please select a PNG file.");
         return;
     }
     setError('');
 
     try {
-        // 后端会从文件内容中解析出所有数据，包括名称
-        const imported = await importSandbox(selectedFile);
-        if (imported) {
-          selectSandbox(imported);
-          handleClose();
-        }
+        // ✨ 关键修复：现在只需调用 importSandbox。
+        // 它会处理导入、刷新列表和选择新项的所有逻辑。
+        await importSandbox(selectedFile);
+        
+        // 成功后直接关闭对话框
+        handleClose();
+        
     } catch (e) {
         setError(e.message || "An unknown error occurred during import.");
     }
   };
+  
   
   // 使用 useMemo 来确定按钮是否应该被禁用
   const isImportDisabled = useMemo(() => {

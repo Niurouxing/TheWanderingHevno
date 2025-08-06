@@ -18,21 +18,13 @@ const SandboxContext = createContext({
 });
 
 export const SandboxProvider = ({ children }) => {
-    // 状态保持不变，但其内容结构会改变
     const [sandboxes, setSandboxes] = useState([]);
     const [selectedSandbox, setSelectedSandbox] = useState(null);
     const [activeView, setActiveView] = useState('Home');
     const [loading, setLoading] = useState(false);
 
-    // 2. 实现与新 API 端点交互的函数
-
-    /**
-     * 从后端获取所有沙盒列表。
-     * 现在获取的是 SandboxListItem 格式。
-     */
     const fetchSandboxes = useCallback(async () => {
         setLoading(true);
-        console.log('[SandboxContext] Fetching sandboxes list...');
         try {
             const response = await fetch('/api/sandboxes');
             if (!response.ok) {
@@ -49,11 +41,17 @@ export const SandboxProvider = ({ children }) => {
         }
     }, []);
 
-    /**
-     * 导入一个沙盒 (通过上传一个 .png 文件)。
-     * @param {File} file - 用户选择的 PNG 文件。
-     * @returns {object} 创建成功后的沙盒对象。
-     */
+    // ✨ 关键修复：把 selectSandbox 的定义移到前面
+    const selectSandbox = useCallback((sandbox) => {
+        setSelectedSandbox(sandbox);
+        if (sandbox) {
+            setActiveView('Home');
+            console.log(`[SandboxContext] Sandbox selected: ${sandbox.name} (${sandbox.id})`);
+        } else {
+            console.log(`[SandboxContext] Sandbox deselected.`);
+        }
+    }, []); // setActiveView 通常不需要作为依赖，因为它是 setState 函数
+
     const importSandbox = useCallback(async (file) => {
         setLoading(true);
         const formData = new FormData();
@@ -69,17 +67,31 @@ export const SandboxProvider = ({ children }) => {
                 const errorData = await response.json();
                 throw new Error(errorData.detail || 'Failed to import sandbox');
             }
-            const importedSandbox = await response.json();
-            console.log('[SandboxContext] Sandbox imported:', importedSandbox);
-            await fetchSandboxes(); // 刷新列表
-            return importedSandbox;
+            const importedSandboxStub = await response.json();
+            
+            // 刷新列表
+            await fetchSandboxes();
+            
+            // 使用函数式更新来安全地从最新的 state 中查找并选择
+            setSandboxes(currentSandboxes => {
+                const newSandboxInList = currentSandboxes.find(s => s.id === importedSandboxStub.id);
+                if (newSandboxInList) {
+                    selectSandbox(newSandboxInList);
+                } else {
+                    // 如果在列表中找不到（不太可能发生，但作为防御性编程），取消选择以避免不一致的状态
+                    selectSandbox(null);
+                }
+                return currentSandboxes; // 返回未修改的列表
+            });
+
         } catch (error) {
             console.error(error);
             throw error;
         } finally {
             setLoading(false);
         }
-    }, [fetchSandboxes]);
+    }, [fetchSandboxes, selectSandbox]);// 添加 selectSandbox 到依赖数组
+
 
     /**
      * 更新指定沙盒的图标。
@@ -178,18 +190,6 @@ export const SandboxProvider = ({ children }) => {
         }
     }, [selectedSandbox, fetchSandboxes]);
 
-
-    // 选择沙盒的逻辑保持不变
-    const selectSandbox = useCallback((sandbox) => {
-        // 注意：传入的 sandbox 对象现在是 SandboxListItem 格式
-        setSelectedSandbox(sandbox);
-        if (sandbox) {
-            setActiveView('Home');
-            console.log(`[SandboxContext] Sandbox selected: ${sandbox.name} (${sandbox.id})`);
-        } else {
-             console.log(`[SandboxContext] Sandbox deselected.`);
-        }
-    }, []);
 
     // 3. 将所有新的和更新后的方法打包到 value 对象中
     const value = {
