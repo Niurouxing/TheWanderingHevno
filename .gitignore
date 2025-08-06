@@ -55,10 +55,7 @@ code_collection.md
 !/plugins/core_remote_hooks/
 !/plugins/core_websocket/
 !/plugins/core_layout/
-!/plugins/core_diagnostics/
-!/plugins/core_sandboxes/
-!/plugins/core_history/
-!/plugins/core_runner/
+!/plugins/core_goliath/
 # 同样，重新包含 plugins 命名空间包的 __init__.py
 !/plugins/__init__.py
 
