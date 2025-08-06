@@ -1,7 +1,7 @@
 {
   "name": "hevno-engine-monorepo",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "workspaces": [
     "plugins/*"
@@ -13,9 +13,7 @@
     "build:plugins": "npm run build --workspaces"
   },
   "devDependencies": {
-    "vite": "^5.2.11"
-  },
-  "dependencies": {
-    "@emotion/cache": "^11.14.0"
+    "@vitejs/plugin-react": "^4.7.0",
+    "vite": "latest"
   }
 }

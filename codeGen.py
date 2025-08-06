@@ -138,6 +138,7 @@ if __name__ == "__main__":
     paths = [
         "./frontend",
         "./plugins/core_layout",
+        "./plugins/core_goliath",
         "./plugins/core_remote_hooks",
         "./plugins/core_websocket",
         "./package.json",
@@ -151,6 +152,13 @@ if __name__ == "__main__":
     #     "./plugins/",
     #      "./package.json",
     #      "./vite.config.js",
+    # ]
+
+    # paths = [  
+        #  "dashboard/Dashboard.js",
+        #     "dashboard/Dashboard.tsx",
+        #     "dashboard/theme",
+        # "/Users/niurx/theme"
     # ]
     output_path = "code_collection.md"
     result = main(paths, output_path)

@@ -58,6 +58,8 @@ code_collection.md
 !/plugins/core_goliath/
 # 同样，重新包含 plugins 命名空间包的 __init__.py
 !/plugins/__init__.py
+dashboard/
+shared-theme/
 
 # 如果核心插件内有需要忽略的文件（比如测试产物），可以在这里单独添加
 /plugins/core_*/__pycache__/
