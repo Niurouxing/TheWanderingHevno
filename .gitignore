@@ -42,22 +42,12 @@ pnpm-debug.log*
 code_collection.md
 
 
-/plugins/*
+
 
 # 但是，重新包含（取消忽略）核心插件，以便它们可以被版本控制
-!/plugins/core_api/
-!/plugins/core_codex/
-!/plugins/core_engine/
-!/plugins/core_llm/
-!/plugins/core_logging/
-!/plugins/core_memoria/
-!/plugins/core_persistence/
-!/plugins/core_remote_hooks/
-!/plugins/core_websocket/
-!/plugins/core_layout/
-!/plugins/core_goliath/
+
 # 同样，重新包含 plugins 命名空间包的 __init__.py
-!/plugins/__init__.py
+
 dashboard/
 shared-theme/
 
