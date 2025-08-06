@@ -1,4 +1,4 @@
-// plugins/core_goliath/src/dashboard/components/SelectContent.jsx
+// plugins/core_goliath/src/dashboard/components/SelectContent.jsx (带自定义图标显示)
 
 import React, { useEffect } from 'react';
 import MuiAvatar from '@mui/material/Avatar';
@@ -16,12 +16,17 @@ import ConstructionRoundedIcon from '@mui/icons-material/ConstructionRounded';
 
 import { useSandbox } from '../../context/SandboxContext';
 
+// Avatar 和 ListItemAvatar 样式保持不变
 const Avatar = styled(MuiAvatar)(({ theme }) => ({
   width: 28,
   height: 28,
   backgroundColor: (theme.vars || theme).palette.background.paper,
   color: (theme.vars || theme).palette.text.secondary,
   border: `1px solid ${(theme.vars || theme).palette.divider}`,
+  // 1. 确保图片填充整个Avatar，而不是被裁剪
+  '& .MuiAvatar-img': {
+    objectFit: 'cover',
+  },
 }));
 
 const ListItemAvatar = styled(MuiListItemAvatar)({
@@ -29,9 +34,9 @@ const ListItemAvatar = styled(MuiListItemAvatar)({
   marginRight: 12,
 });
 
-// 1. 定义默认显示对象，但其ID现在是空字符串 ''
 const DEFAULT_DISPLAY_ITEM = {
     name: 'Sitemark-web',
+    icon_url: null, // 默认项没有icon_url
 };
 
 export default function SelectContent() {
@@ -41,7 +46,6 @@ export default function SelectContent() {
     loading, 
     fetchSandboxes, 
     selectSandbox,
-    createSandbox
   } = useSandbox();
 
   useEffect(() => {
@@ -55,7 +59,6 @@ export default function SelectContent() {
     if (sandboxId === 'create_new') {
         return;
     }
-
     const newSelectedSandbox = sandboxes.find(s => s.id === sandboxId) || null;
     selectSandbox(newSelectedSandbox);
   };
@@ -70,7 +73,6 @@ export default function SelectContent() {
     }
   };
 
-  // 2. 当前选择ID现在是真实ID或空字符串 ''
   const currentSelectionId = selectedSandbox?.id || '';
   const currentDisplayItem = selectedSandbox || DEFAULT_DISPLAY_ITEM;
 
@@ -79,7 +81,6 @@ export default function SelectContent() {
       value={currentSelectionId}
       onChange={handleChange}
       disabled={loading}
-      // 关键：确保Select组件知道如何处理空值''
       displayEmpty 
       inputProps={{ 'aria-label': 'Select company' }}
       fullWidth
@@ -93,11 +94,13 @@ export default function SelectContent() {
           pl: 1,
         },
       }}
+      // 2. 修改 renderValue 以显示图标
       renderValue={() => (
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <ListItemAvatar sx={{ minWidth: 0 }}>
-            <Avatar alt={currentDisplayItem.name}>
-                <DevicesRoundedIcon sx={{ fontSize: '1rem' }} />
+            {/* Avatar现在会尝试加载icon_url，如果失败则显示默认图标 */}
+            <Avatar src={currentDisplayItem.icon_url}>
+              <DevicesRoundedIcon sx={{ fontSize: '1rem' }} />
             </Avatar>
           </ListItemAvatar>
           <ListItemText 
@@ -110,14 +113,14 @@ export default function SelectContent() {
     >
       <ListSubheader sx={{ pt: 0 }}>Production</ListSubheader>
       
-      {/* 3. 调整渲染逻辑 */}
+      {/* 3. 修改 MenuItem 列表以显示图标 */}
       {sandboxes.length > 0 
         ? (
-            // 如果有沙盒，则渲染沙盒列表
             sandboxes.map((sandbox) => (
               <MenuItem key={sandbox.id} value={sandbox.id}>
                   <ListItemAvatar>
-                    <Avatar alt={sandbox.name}>
+                    <Avatar src={sandbox.icon_url}>
+                      {/* 如果 sandbox.icon_url 无效，则显示此默认图标 */}
                       <DevicesRoundedIcon sx={{ fontSize: '1rem' }} />
                     </Avatar>
                   </ListItemAvatar>
@@ -126,10 +129,9 @@ export default function SelectContent() {
             ))
         ) 
         : (
-            // 如果没有沙盒（或正在加载），渲染一个禁用的默认项来占位
             <MenuItem key="none-item" value="" disabled>
                 <ListItemAvatar>
-                  <Avatar alt={DEFAULT_DISPLAY_ITEM.name}>
+                  <Avatar> {/* 无 src，总是显示默认图标 */}
                     <DevicesRoundedIcon sx={{ fontSize: '1rem' }} />
                   </Avatar>
                 </ListItemAvatar>
@@ -141,7 +143,7 @@ export default function SelectContent() {
       <ListSubheader>Development</ListSubheader>
       <MenuItem value="dev_placeholder" disabled>
         <ListItemAvatar>
-          <Avatar alt="Sitemark Admin">
+          <Avatar> {/* 无 src */}
             <ConstructionRoundedIcon sx={{ fontSize: '1rem' }} />
           </Avatar>
         </ListItemAvatar>

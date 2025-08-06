@@ -120,15 +120,15 @@ export const SandboxProvider = ({ children }) => {
     const updateSandboxName = useCallback(async (sandboxId, newName) => {
         setLoading(true);
         try {
-            // 注意：此处假设后端API端点为 PUT /api/sandboxes/{sandboxId}
-            // 如果后端实现不同，需要修改此处的 fetch URL 和 body。
+            // 关键修正：使用 PATCH 方法，并确保 URL 是正确的根相对路径
             const response = await fetch(`/api/sandboxes/${sandboxId}`, {
-                method: 'PUT',
+                method: 'PATCH', // 使用 PATCH 更符合语义
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: newName }),
             });
              if (!response.ok) {
-                const errorData = await response.json();
+                // 后端可能会返回更详细的错误信息
+                const errorData = await response.json().catch(() => ({ detail: response.statusText }));
                 throw new Error(errorData.detail || 'Failed to update name');
             }
             console.log(`[SandboxContext] Name for sandbox ${sandboxId} updated.`);
@@ -146,6 +146,7 @@ export const SandboxProvider = ({ children }) => {
             setLoading(false);
         }
     }, [selectedSandbox]);
+
 
 
     /**
