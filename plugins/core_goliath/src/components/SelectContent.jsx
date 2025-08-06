@@ -1,4 +1,4 @@
-// plugins/core_goliath/src/dashboard/components/SelectContent.jsx (带自定义图标显示)
+// plugins/core_goliath/src/components/SelectContent.jsx 
 
 import React, { useEffect } from 'react';
 import MuiAvatar from '@mui/material/Avatar';
@@ -14,7 +14,7 @@ import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import DevicesRoundedIcon from '@mui/icons-material/DevicesRounded';
 import ConstructionRoundedIcon from '@mui/icons-material/ConstructionRounded';
 
-import { useSandbox } from '../../context/SandboxContext';
+import { useSandbox } from '../context/SandboxContext';
 
 // Avatar 和 ListItemAvatar 样式保持不变
 const Avatar = styled(MuiAvatar)(({ theme }) => ({

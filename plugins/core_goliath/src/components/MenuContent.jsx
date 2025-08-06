@@ -1,4 +1,4 @@
-// plugins/core_goliath/src/dashboard/components/MenuContent.jsx
+// plugins/core_goliath/src/components/MenuContent.jsx
 
 import * as React from 'react';
 import List from '@mui/material/List';
@@ -16,7 +16,7 @@ import InfoRoundedIcon from '@mui/icons-material/InfoRounded';
 import HelpRoundedIcon from '@mui/icons-material/HelpRounded';
 
 // 2. 引入 useSandbox Hook
-import { useSandbox } from '../../context/SandboxContext';
+import { useSandbox } from '../context/SandboxContext';
 
 // 3. 定义新的主菜单项
 const mainListItems = [

@@ -9,7 +9,7 @@ import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
-import { useSandbox } from '../../context/SandboxContext';
+import { useSandbox } from '../context/SandboxContext';
 import ImageUploader from './ImageUploader';
 
 // 假设我们有一个PNG解析工具

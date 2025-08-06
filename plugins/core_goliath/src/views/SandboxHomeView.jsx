@@ -15,7 +15,7 @@ import DialogContentText from '@mui/material/DialogContentText';
 import DialogTitle from '@mui/material/DialogTitle';
 
 import { useSandbox } from '../context/SandboxContext';
-import ImageUploader from '../dashboard/components/ImageUploader';
+import ImageUploader from '../components/ImageUploader';
 
 export default function SandboxHomeView() {
     const { 

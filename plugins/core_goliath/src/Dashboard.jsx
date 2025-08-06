@@ -1,4 +1,4 @@
-// plugins/core_goliath/src/dashboard/Dashboard.jsx
+// plugins/core_goliath/src/Dashboard.jsx
 
 import * as React from 'react';
 
@@ -9,14 +9,14 @@ import Stack from '@mui/material/Stack';
 import AppNavbar from './components/AppNavbar';
 import Header from './components/Header';
 import SideMenu from './components/SideMenu';
-import AppTheme from '../shared-theme/AppTheme';
+import AppTheme from './shared-theme/AppTheme';
 
 // 1. 引入 useSandbox Hook 和我们的新视图
-import { useSandbox } from '../context/SandboxContext';
-import WelcomeView from '../views/WelcomeView';
-import SandboxHomeView from '../views/SandboxHomeView';
-import SandboxBuildView from '../views/SandboxBuildView';
-import SandboxRunView from '../views/SandboxRunView';
+import { useSandbox } from './context/SandboxContext';
+import WelcomeView from './views/WelcomeView';
+import SandboxHomeView from './views/SandboxHomeView';
+import SandboxBuildView from './views/SandboxBuildView';
+import SandboxRunView from './views/SandboxRunView';
 import ImportSandboxDialog from './components/ImportSandboxDialog';
 
 // 2. 创建一个辅助函数来选择要渲染的视图
