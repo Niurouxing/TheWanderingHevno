@@ -71,43 +71,40 @@ class PersistenceService(PersistenceServiceInterface):
         """将ZIP数据作为标准的zTXt块嵌入到PNG图片中。"""
         logger.debug(f"[EMBED] Received zip_bytes with size: {len(zip_bytes)}")
         
-        # --- 【核心修正】将二进制数据编码为Base64字符串 ---
         encoded_data = base64.b64encode(zip_bytes).decode('ascii')
         logger.debug(f"[EMBED] Base64 encoded data size: {len(encoded_data)}")
 
-        png_info_obj = PngImagePlugin.PngInfo()
-
-        if base_image_bytes:
-            logger.debug(f"[EMBED] Using provided base image with size: {len(base_image_bytes)}")
-            try:
-                with Image.open(io.BytesIO(base_image_bytes)) as temp_img:
-                    temp_img.load()
-                    if temp_img.info:
-                        for key, value in temp_img.info.items():
-                            png_info_obj.add(key, value)
-                logger.debug(f"[EMBED] Copied existing info keys: {[c[0] for c in png_info_obj.chunks]}")
-            except Exception as e:
-                logger.warning(f"[EMBED] Could not read metadata from base image, proceeding without it. Error: {e}")
-
-        png_info_obj.add(b"hVNO", zip_bytes)
-        logger.debug(f"[EMBED] Added 'hVNO' chunk. Final info keys: {[c[0] for c in png_info_obj.chunks]}")
-
-        # --- 【核心修正】使用 zTXt 块 ---
-        # 第一个参数是块的关键字 (必须是1-79个拉丁字母/数字/符号)
-        # 第二个参数是值。Pillow会自动处理zlib压缩。
-        png_info_obj.add_text("hevno:data", encoded_data)
-        logger.debug(f"[EMBED] Added 'ztxt' chunk 'hevno:data'.")
-
         if base_image_bytes:
             image = Image.open(io.BytesIO(base_image_bytes))
+            logger.debug(f"[EMBED] Using provided base image with size: {len(base_image_bytes)}")
         else:
-            image = Image.new('RGBA', (1, 1), (0, 0, 0, 255)) # RGBA模式对于tEXt块是可靠的
+            image = Image.new('RGBA', (1, 1), (0, 0, 0, 255))
+            logger.debug("[EMBED] No base image provided, creating a new 1x1 PNG.")
+        
+        # --- 【核心修正】创建一个只包含我们自定义数据的 PngInfo 对象 ---
+        png_info_obj = PngImagePlugin.PngInfo()
+        png_info_obj.add_text("hevno:data", encoded_data, zip=True)
+        logger.debug("[EMBED] Created a new PngInfo object containing only our 'hevno:data' ztxt chunk.")
 
         buffer = io.BytesIO()
+        # --- 【核心修正】让 Pillow 的 save 方法自动处理和保留原始元数据 ---
+        # save 方法会自动保留原始图像的必要块（如 PLTE, tRNS），
+        # 然后再附加我们通过 pnginfo 参数提供的新块。
         image.save(buffer, "PNG", pnginfo=png_info_obj)
         
         output_bytes = buffer.getvalue()
         logger.debug(f"[EMBED] Final PNG size: {len(output_bytes)}")
+        
+        # --- 添加验证步骤 ---
+        try:
+            with Image.open(io.BytesIO(output_bytes)) as verification_image:
+                verification_image.verify() # 检查文件结构的完整性
+            logger.debug("[EMBED] Self-verification successful: The generated PNG is valid.")
+        except Exception as e:
+            logger.error(f"[EMBED] Self-verification FAILED: The generated PNG is corrupted. Error: {e}")
+            # 如果我们生成了损坏的文件，最好抛出异常而不是返回它
+            raise IOError("Failed to generate a valid PNG file after embedding data.") from e
+
         return output_bytes
 
     def _extract_zip_from_png(self, png_bytes: bytes) -> Tuple[bytes, bytes]:
@@ -136,6 +133,7 @@ class PersistenceService(PersistenceServiceInterface):
     def save_sandbox_icon(self, sandbox_id: str, icon_bytes: bytes) -> Path:
         """保存沙盒图标文件。"""
         icon_path = self.assets_base_dir / "sandbox_icons" / f"{sandbox_id}.png"
+        icon_path.parent.mkdir(parents=True, exist_ok=True)
         icon_path.write_bytes(icon_bytes)
         logger.info(f"Saved icon for sandbox {sandbox_id} to {icon_path}")
         return icon_path

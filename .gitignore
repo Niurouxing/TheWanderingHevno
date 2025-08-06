@@ -2,6 +2,7 @@
 node_modules/
 /.pnpm-store
 dist/
+/assets/
 
 __pycache__/
 
@@ -38,6 +39,8 @@ pnpm-debug.log*
 .DS_Store
 *.tmp
 *.swp
+
+
 
 code_collection.md
 

@@ -33,6 +33,16 @@ export const inputsCustomizations = {
         boxShadow: 'none',
         borderRadius: (theme.vars || theme).shape.borderRadius,
         textTransform: 'none',
+        '&.Mui-disabled': {
+            // 强制禁用时的背景色和颜色
+            // 使用MUI的默认禁用颜色或您自己的灰色调
+            backgroundColor: theme.palette.action.disabledBackground,
+            color: theme.palette.action.disabled,
+            // 确保禁用时没有任何背景图像或阴影
+            backgroundImage: 'none',
+            boxShadow: 'none',
+            border: 'none',
+        },
         variants: [
           {
             props: {

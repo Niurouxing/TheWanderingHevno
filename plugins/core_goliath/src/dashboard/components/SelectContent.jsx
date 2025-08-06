@@ -60,28 +60,13 @@ export default function SelectContent() {
     selectSandbox(newSelectedSandbox);
   };
   
-  const handleCreateClick = async () => {
-    console.log('[SelectContent] "Add product" clicked, initiating one-click creation...');
-
-    const newName = `New Sandbox ${new Date().toLocaleTimeString()}`;
-    const defaultPayload = {
-        name: newName,
-        graph_collection: {
-          main: {
-            nodes: [{ id: "start_node", run: [] }]
-          }
-        },
-        initial_state: {}
-    };
-
-    try {
-        const newlyCreatedSandbox = await createSandbox(defaultPayload);
-        if (newlyCreatedSandbox) {
-            selectSandbox(newlyCreatedSandbox);
-            console.log(`[SelectContent] Automatically selected newly created sandbox: ${newlyCreatedSandbox.name}`);
-        }
-    } catch (error) {
-        console.error("Failed to create sandbox:", error.message);
+  const handleCreateClick = () => {
+    console.log('[SelectContent] "Add product" clicked, triggering import dialog...');
+    const hookManager = window.Hevno.services.get('hookManager');
+    if (hookManager) {
+        hookManager.trigger('ui.show.importSandboxDialog');
+    } else {
+        console.error('[SelectContent] hookManager service not found!');
     }
   };
 

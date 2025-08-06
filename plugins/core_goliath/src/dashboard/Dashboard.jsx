@@ -1,4 +1,4 @@
-// src/dashboard/Dashboard.jsx
+// plugins/core_goliath/src/dashboard/Dashboard.jsx
 
 import * as React from 'react';
 
@@ -17,6 +17,7 @@ import WelcomeView from '../views/WelcomeView';
 import SandboxHomeView from '../views/SandboxHomeView';
 import SandboxBuildView from '../views/SandboxBuildView';
 import SandboxRunView from '../views/SandboxRunView';
+import ImportSandboxDialog from './components/ImportSandboxDialog';
 
 // 2. 创建一个辅助函数来选择要渲染的视图
 const renderActiveView = (activeView, selectedSandbox) => {
@@ -43,6 +44,7 @@ export default function Dashboard(props) {
   
   return (
     <AppTheme {...props} >
+         <ImportSandboxDialog /> 
       <Box sx={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column' }}>
         <CssBaseline enableColorScheme />
         <Box sx={{ display: 'flex', flexGrow: 1, overflow: 'hidden' }}>
