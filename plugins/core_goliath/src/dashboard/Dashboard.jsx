@@ -11,18 +11,38 @@ import Header from './components/Header';
 import SideMenu from './components/SideMenu';
 import AppTheme from '../shared-theme/AppTheme';
 
+// 1. 引入 useSandbox Hook 和我们的新视图
+import { useSandbox } from '../context/SandboxContext';
+import WelcomeView from '../views/WelcomeView';
+import SandboxHomeView from '../views/SandboxHomeView';
+import SandboxBuildView from '../views/SandboxBuildView';
+import SandboxRunView from '../views/SandboxRunView';
+
+// 2. 创建一个辅助函数来选择要渲染的视图
+const renderActiveView = (activeView, selectedSandbox) => {
+    if (!selectedSandbox) {
+        return <WelcomeView />;
+    }
+
+    switch (activeView) {
+        case 'Home':
+            return <SandboxHomeView />;
+        case 'Build':
+            return <SandboxBuildView />;
+        case 'Run':
+            return <SandboxRunView />;
+        default:
+            return <SandboxHomeView />; // 默认显示 Home
+    }
+};
+
 
 export default function Dashboard(props) {
+  // 3. 获取全局状态
+  const { selectedSandbox, activeView } = useSandbox();
+  
   return (
-    // AppTheme 是我们的 ThemeProvider
     <AppTheme {...props} >
-      {/* 
-        关键修复：
-        在 AppTheme 之后，立即使用一个 Box 作为根容器。
-        MUI 的 ThemeProvider 会将所有 CSS 变量（--template-palette...）
-        作为内联样式或者在一个 <style> 块中定义，并应用到这个 Box 上。
-        这样，这个 Box 内部的所有子组件就都能成功地访问到这些 CSS 变量了。
-      */}
       <Box sx={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column' }}>
         <CssBaseline enableColorScheme />
         <Box sx={{ display: 'flex', flexGrow: 1, overflow: 'hidden' }}>
@@ -48,7 +68,8 @@ export default function Dashboard(props) {
               }}
             >
               <Header />
-              {/* <MainGrid /> */}
+              {/* 4. 调用我们的渲染函数，替换掉原来的 <MainGrid /> */}
+              {renderActiveView(activeView, selectedSandbox)}
             </Stack>
           </Box>
         </Box>

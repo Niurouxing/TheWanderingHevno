@@ -1,4 +1,6 @@
-import * as React from 'react';
+// plugins/core_goliath/src/dashboard/components/SelectContent.jsx
+
+import React, { useEffect } from 'react';
 import MuiAvatar from '@mui/material/Avatar';
 import MuiListItemAvatar from '@mui/material/ListItemAvatar';
 import MenuItem from '@mui/material/MenuItem';
@@ -10,8 +12,9 @@ import Divider from '@mui/material/Divider';
 import { styled } from '@mui/material/styles';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import DevicesRoundedIcon from '@mui/icons-material/DevicesRounded';
-import SmartphoneRoundedIcon from '@mui/icons-material/SmartphoneRounded';
 import ConstructionRoundedIcon from '@mui/icons-material/ConstructionRounded';
+
+import { useSandbox } from '../../context/SandboxContext';
 
 const Avatar = styled(MuiAvatar)(({ theme }) => ({
   width: 28,
@@ -26,28 +29,78 @@ const ListItemAvatar = styled(MuiListItemAvatar)({
   marginRight: 12,
 });
 
+// 1. 定义默认显示对象，但其ID现在是空字符串 ''
+const DEFAULT_DISPLAY_ITEM = {
+    name: 'Sitemark-web',
+};
+
 export default function SelectContent() {
-  const [company, setCompany] = React.useState('');
+  const { 
+    sandboxes, 
+    selectedSandbox, 
+    loading, 
+    fetchSandboxes, 
+    selectSandbox,
+    createSandbox
+  } = useSandbox();
+
+  useEffect(() => {
+    fetchSandboxes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleChange = (event) => {
-    setCompany(event.target.value);
+    const sandboxId = event.target.value;
+    
+    if (sandboxId === 'create_new') {
+        return;
+    }
+
+    const newSelectedSandbox = sandboxes.find(s => s.id === sandboxId) || null;
+    selectSandbox(newSelectedSandbox);
   };
+  
+  const handleCreateClick = async () => {
+    console.log('[SelectContent] "Add product" clicked, initiating one-click creation...');
+
+    const newName = `New Sandbox ${new Date().toLocaleTimeString()}`;
+    const defaultPayload = {
+        name: newName,
+        graph_collection: {
+          main: {
+            nodes: [{ id: "start_node", run: [] }]
+          }
+        },
+        initial_state: {}
+    };
+
+    try {
+        const newlyCreatedSandbox = await createSandbox(defaultPayload);
+        if (newlyCreatedSandbox) {
+            selectSandbox(newlyCreatedSandbox);
+            console.log(`[SelectContent] Automatically selected newly created sandbox: ${newlyCreatedSandbox.name}`);
+        }
+    } catch (error) {
+        console.error("Failed to create sandbox:", error.message);
+    }
+  };
+
+  // 2. 当前选择ID现在是真实ID或空字符串 ''
+  const currentSelectionId = selectedSandbox?.id || '';
+  const currentDisplayItem = selectedSandbox || DEFAULT_DISPLAY_ITEM;
 
   return (
     <Select
-      labelId="company-select"
-      id="company-simple-select"
-      value={company}
+      value={currentSelectionId}
       onChange={handleChange}
-      displayEmpty
+      disabled={loading}
+      // 关键：确保Select组件知道如何处理空值''
+      displayEmpty 
       inputProps={{ 'aria-label': 'Select company' }}
       fullWidth
       sx={{
         maxHeight: 56,
         width: 215,
-        '&.MuiList-root': {
-          p: '8px',
-        },
         [`& .${selectClasses.select}`]: {
           display: 'flex',
           alignItems: 'center',
@@ -55,47 +108,68 @@ export default function SelectContent() {
           pl: 1,
         },
       }}
+      renderValue={() => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <ListItemAvatar sx={{ minWidth: 0 }}>
+            <Avatar alt={currentDisplayItem.name}>
+                <DevicesRoundedIcon sx={{ fontSize: '1rem' }} />
+            </Avatar>
+          </ListItemAvatar>
+          <ListItemText 
+              primary={loading ? 'Loading...' : currentDisplayItem.name}
+              secondary="Web app"
+              primaryTypographyProps={{ style: { textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}}
+          />
+        </div>
+      )}
     >
       <ListSubheader sx={{ pt: 0 }}>Production</ListSubheader>
-      <MenuItem value="">
-        <ListItemAvatar>
-          <Avatar alt="Sitemark web">
-            <DevicesRoundedIcon sx={{ fontSize: '1rem' }} />
-          </Avatar>
-        </ListItemAvatar>
-        <ListItemText primary="Sitemark-web" secondary="Web app" />
-      </MenuItem>
-      <MenuItem value={10}>
-        <ListItemAvatar>
-          <Avatar alt="Sitemark App">
-            <SmartphoneRoundedIcon sx={{ fontSize: '1rem' }} />
-          </Avatar>
-        </ListItemAvatar>
-        <ListItemText primary="Sitemark-app" secondary="Mobile application" />
-      </MenuItem>
-      <MenuItem value={20}>
-        <ListItemAvatar>
-          <Avatar alt="Sitemark Store">
-            <DevicesRoundedIcon sx={{ fontSize: '1rem' }} />
-          </Avatar>
-        </ListItemAvatar>
-        <ListItemText primary="Sitemark-Store" secondary="Web app" />
-      </MenuItem>
+      
+      {/* 3. 调整渲染逻辑 */}
+      {sandboxes.length > 0 
+        ? (
+            // 如果有沙盒，则渲染沙盒列表
+            sandboxes.map((sandbox) => (
+              <MenuItem key={sandbox.id} value={sandbox.id}>
+                  <ListItemAvatar>
+                    <Avatar alt={sandbox.name}>
+                      <DevicesRoundedIcon sx={{ fontSize: '1rem' }} />
+                    </Avatar>
+                  </ListItemAvatar>
+                  <ListItemText primary={sandbox.name} secondary="Web app" />
+              </MenuItem>
+            ))
+        ) 
+        : (
+            // 如果没有沙盒（或正在加载），渲染一个禁用的默认项来占位
+            <MenuItem key="none-item" value="" disabled>
+                <ListItemAvatar>
+                  <Avatar alt={DEFAULT_DISPLAY_ITEM.name}>
+                    <DevicesRoundedIcon sx={{ fontSize: '1rem' }} />
+                  </Avatar>
+                </ListItemAvatar>
+                <ListItemText primary={DEFAULT_DISPLAY_ITEM.name} secondary="Web app" />
+            </MenuItem>
+        )
+      }
+
       <ListSubheader>Development</ListSubheader>
-      <MenuItem value={30}>
+      <MenuItem value="dev_placeholder" disabled>
         <ListItemAvatar>
-          <Avatar alt="Sitemark Store">
+          <Avatar alt="Sitemark Admin">
             <ConstructionRoundedIcon sx={{ fontSize: '1rem' }} />
           </Avatar>
         </ListItemAvatar>
         <ListItemText primary="Sitemark-Admin" secondary="Web app" />
       </MenuItem>
+      
       <Divider sx={{ mx: -1 }} />
-      <MenuItem value={40}>
+
+      <MenuItem value="create_new" onClick={handleCreateClick}>
         <ListItemIcon>
           <AddRoundedIcon />
         </ListItemIcon>
-        <ListItemText primary="Add product" secondary="Web app" />
+        <ListItemText primary="Add product" />
       </MenuItem>
     </Select>
   );
