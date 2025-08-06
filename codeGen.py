@@ -117,10 +117,10 @@ def main(paths, output_file="code_collection.md"):
 if __name__ == "__main__":
     paths = [
         "./backend", 
-        "./plugins/core_engine",
+        # "./plugins/core_engine",
         "./plugins/core_api",
-        "./plugins/core_codex",
-        "./plugins/core_memoria",
+        # "./plugins/core_codex",
+        # "./plugins/core_memoria",
         "./plugins/core_remote_hooks",
         "./plugins/core_websocket",
         "./plugins/core_llm",

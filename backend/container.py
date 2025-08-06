@@ -2,7 +2,8 @@
 
 import logging
 from typing import Dict, Any, Callable, Set
-import threading  # 1. 导入 threading
+# 1. 将 threading.Lock 替换为 threading.RLock
+import threading
 
 from backend.core.contracts import Container as ContainerInterface
 
@@ -15,9 +16,10 @@ class Container(ContainerInterface):
         self._factories: Dict[str, Callable] = {}
         self._singletons: Dict[str, bool] = {}
         self._instances: Dict[str, Any] = {}
-        self._lock = threading.Lock()
+        # 2. 使用 RLock (Re-entrant Lock) 替代 Lock
+        self._lock = threading.RLock()
         
-        # 2. 使用 threading.local() 来创建线程本地的解析栈
+        # 使用 threading.local() 来创建线程本地的解析栈
         # 每个线程都会有自己独立的 `_resolution_stack` 副本
         self._local = threading.local()
 
@@ -39,14 +41,12 @@ class Container(ContainerInterface):
         解析（获取）一个服务实例。
         此方法是线程安全的，并能检测循环依赖。
         """
-        # 3. 循环依赖检测
+        # 循环依赖检测
         resolution_stack = self._get_resolution_stack()
         if name in resolution_stack:
-            # 构建清晰的错误信息
             path = " -> ".join(list(resolution_stack) + [name])
             raise RuntimeError(f"Circular dependency detected: {path}")
 
-        # 将当前服务推入栈中
         resolution_stack.add(name)
 
         try:
@@ -79,5 +79,4 @@ class Container(ContainerInterface):
                 self._instances[name] = instance
                 return instance
         finally:
-            # 4. 无论成功还是失败，都要将当前服务从栈中弹出
             resolution_stack.remove(name)
