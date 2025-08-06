@@ -41,17 +41,6 @@ pnpm-debug.log*
 
 code_collection.md
 
-
-
-
-# 但是，重新包含（取消忽略）核心插件，以便它们可以被版本控制
-
-# 同样，重新包含 plugins 命名空间包的 __init__.py
-
-dashboard/
-shared-theme/
-
 # 如果核心插件内有需要忽略的文件（比如测试产物），可以在这里单独添加
-/plugins/core_*/__pycache__/
-/plugins/core_*/tests/__pycache__/
+
 /hevno_engine.egg-info/ 
