@@ -78,10 +78,31 @@ class FrontendLoader {
       // 这将调用 `HookManager.addImplementation`，从而填充前端钩子注册表
       for (const manifest of frontendPlugins) {
         manifestProvider.addManifest(manifest);
+        for (const manifest of frontendPlugins) {
+        manifestProvider.addManifest(manifest);
         try {
-          // 注意：@vite-ignore 是必需的，因为 Vite 不知道这些 URL
-          const entryPointUrl = `/plugins/${manifest.id}/${manifest.frontend.entryPoint}`;
-          const pluginModule = await import(/* @vite-ignore */ entryPointUrl);
+          let entryPointUrl = '';
+
+          if (import.meta.env.DEV) {
+            // ===============================================================
+            // 关键变更: 调整开发模式的路径构造
+            // ===============================================================
+            const srcEntryPoint = manifest.frontend.srcEntryPoint || `src/main.${manifest.id.includes('goliath') ? 'jsx' : 'js'}`; // 简单的后缀判断
+
+            // 构造一个相对于项目根目录的绝对路径，并以 `/` 开头。
+            // Vite Dev Server 会将这个路径视为从项目根目录开始寻找文件。
+            // 例如: `/plugins/core_goliath/src/main.jsx`
+            entryPointUrl = `/plugins/${manifest.id}/${srcEntryPoint}`;
+            
+            console.log(`[DEV MODE] Loading source for ${manifest.id}: ${entryPointUrl}`);
+
+          } else {
+            // 生产模式路径保持不变
+            entryPointUrl = `/plugins/${manifest.id}/${manifest.frontend.entryPoint}`;
+          }
+          
+          // 移除 `@vite-ignore`，让 Vite 处理这个动态导入
+          const pluginModule = await import(entryPointUrl);
           
           if (pluginModule.registerPlugin) {
             console.log(`-> 正在注册插件: ${manifest.id} (priority: ${manifest.frontend?.priority || 0})`);
@@ -91,6 +112,7 @@ class FrontendLoader {
           console.error(`加载或注册插件 ${manifest.id} 失败:`, e);
         }
       }
+        }
 
       // 【关键修复】步骤 4: 在所有插件加载后，与后端同步完整的前端钩子列表
       console.log("[Loader] 所有插件已加载。正在与后端同步前端钩子...");

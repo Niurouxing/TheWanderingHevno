@@ -8,6 +8,7 @@
         "type": "view",
         "priority": 10,
         "entryPoint": "dist/main.js",
+        "srcEntryPoint": "src/main.jsx",
         "contributions": {
             "views": {
                 "workbench.main": [

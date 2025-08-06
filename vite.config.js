@@ -1,21 +1,17 @@
 import { defineConfig } from 'vite';
+// import { resolve } from 'path'; // 不再需要
 
 export default defineConfig({
   server: {
-    // 代理所有对后端的请求
     proxy: {
-      // API 请求, e.g., /api/plugins/manifest
       '/api': 'http://localhost:8000',
-
-      // WebSocket 连接
       '/ws': {
         target: 'ws://localhost:8000',
         ws: true,
       },
-
-      // 【关键】代理插件静态资源请求
-      // 这使得内核可以通过 /plugins/... URL 加载由后端服务的插件资源
-      '/plugins': 'http://localhost:8000',
+      // 在生产构建后，需要一个服务器（如 Nginx 或后端）来处理 /plugins 请求
+      // 但在开发时，我们让 Vite 直接服务于 /plugins/... 的源文件，所以这里不能有代理
     },
   },
+  // resolve.alias 配置项已被移除
 });
