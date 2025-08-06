@@ -50,6 +50,7 @@ class Sandbox(BaseModel):
     name: str
     head_snapshot_id: Optional[UUID] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    icon_updated_at: Optional[datetime] = None
 
 
 # --- 2. 核心运行时上下文模型 ---

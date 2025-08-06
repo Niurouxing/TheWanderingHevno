@@ -28,12 +28,12 @@ handlers:
 
 # 根日志记录器配置
 root:
-  level: INFO
+  level: DEBUG
   handlers: [console] #, file] # 默认使用控制台处理器
 
 # 可以为特定模块设置不同级别
 loggers:
   uvicorn:
-    level: INFO
+    level: DEBUG
   fastapi:
-    level: INFO
+    level: DEBUG

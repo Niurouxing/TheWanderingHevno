@@ -1,4 +1,4 @@
-# plugins/core_persistence/dependencies.py (新文件)
+# plugins/core_persistence/dependencies.py 
 
 from fastapi import Request
 from .service import PersistenceService

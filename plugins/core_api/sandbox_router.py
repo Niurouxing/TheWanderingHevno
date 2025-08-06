@@ -5,9 +5,12 @@ import logging
 from typing import Dict, Any, List, Optional
 from uuid import UUID
 from pydantic import BaseModel, Field, ValidationError
+from datetime import datetime, timezone
+
 
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File
-from fastapi.responses import StreamingResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import StreamingResponse, FileResponse, Response
 
 # 从平台核心契约导入数据模型和接口
 from plugins.core_engine.contracts import (
@@ -19,7 +22,9 @@ from plugins.core_engine.contracts import (
 )
 
 # 从本插件的依赖注入文件中导入 "getters"
-from .dependencies import get_snapshot_store, get_engine, get_persistence_service, get_sandbox_store
+from .dependencies import get_snapshot_store, get_engine, get_sandbox_store
+
+from plugins.core_persistence.dependencies import get_persistence_service
 
 from plugins.core_persistence.contracts import (
     PersistenceServiceInterface, 
@@ -41,6 +46,14 @@ class CreateSandboxRequest(BaseModel):
     name: str = Field(..., description="The human-readable name for the sandbox.")
     graph_collection: GraphCollection
     initial_state: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+
+class SandboxListItem(BaseModel):
+    id: UUID
+    name: str
+    created_at: datetime
+    icon_url: str
+    has_custom_icon: bool
 
 # --- Sandbox Lifecycle API ---
 
@@ -136,34 +149,95 @@ async def revert_sandbox_to_snapshot(
 
 # --- Sandbox Import/Export API ---
 
-@router.get("", response_model=List[Sandbox], summary="List all Sandboxes")
+@router.get("", response_model=List[SandboxListItem], summary="List all Sandboxes")
 async def list_sandboxes(
-    sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store)
+    sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
+    persistence_service: PersistenceServiceInterface = Depends(get_persistence_service)
 ):
-    """
-    获取一个包含系统中所有已创建沙盒对象的列表。
-    默认按创建时间降序排列。
-    """
-    # 将字典中的所有沙盒对象转换为列表
     all_sandboxes = list(sandbox_store.values())
+    response_items = []
     
-    # 根据需求文档，按 created_at 降序排序
-    sorted_sandboxes = sorted(
-        all_sandboxes, 
-        key=lambda s: s.created_at, 
-        reverse=True
-    )
-    
-    return sorted_sandboxes
+    for sandbox in all_sandboxes:
+        icon_path = persistence_service.get_sandbox_icon_path(str(sandbox.id))
+        has_custom_icon = icon_path is not None
+        
+        icon_url = f"/api/sandboxes/{sandbox.id}/icon"
+        if sandbox.icon_updated_at:
+            icon_url += f"?v={int(sandbox.icon_updated_at.timestamp())}"
+        
+        response_items.append(
+            SandboxListItem(
+                id=sandbox.id,
+                name=sandbox.name,
+                created_at=sandbox.created_at,
+                icon_url=icon_url,
+                has_custom_icon=has_custom_icon
+            )
+        )
+        
+    return sorted(response_items, key=lambda s: s.created_at, reverse=True)
 
-@router.get("/{sandbox_id}/export", response_class=StreamingResponse, summary="Export a Sandbox")
+@router.get("/{sandbox_id}/icon", response_class=FileResponse, summary="Get Sandbox Icon")
+async def get_sandbox_icon(
+    sandbox_id: UUID,
+    persistence_service: PersistenceServiceInterface = Depends(get_persistence_service)
+):
+    icon_path = persistence_service.get_sandbox_icon_path(str(sandbox_id))
+    if icon_path:
+        return FileResponse(icon_path)
+    
+    default_icon_path = persistence_service.get_default_icon_path()
+    if not default_icon_path.is_file():
+        raise HTTPException(status_code=404, detail="Default icon not found on server.")
+    return FileResponse(default_icon_path)
+
+@router.post("/{sandbox_id}/icon", status_code=200, summary="Upload/Update Sandbox Icon")
+async def upload_sandbox_icon(
+    sandbox_id: UUID,
+    file: UploadFile = File(...),
+    sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
+    persistence_service: PersistenceServiceInterface = Depends(get_persistence_service),
+):
+    sandbox = sandbox_store.get(sandbox_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Sandbox not found.")
+    
+    if not file.content_type == "image/png":
+        raise HTTPException(status_code=400, detail="Invalid file type. Only PNG is allowed.")
+
+    icon_bytes = await file.read()
+    
+    # 安全验证
+    try:
+        img = Image.open(io.BytesIO(icon_bytes))
+        img.verify() # 验证文件结构
+        
+        # 重新打开以检查元数据
+        img = Image.open(io.BytesIO(icon_bytes))
+        if img.format != 'PNG':
+            raise ValueError("Image format is not PNG.")
+        if max(img.size) > 2048:
+            raise ValueError("Image dimensions are too large (max 2048x2048).")
+            
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Invalid PNG file: {e}")
+
+    persistence_service.save_sandbox_icon(str(sandbox.id), icon_bytes)
+    sandbox.icon_updated_at = datetime.now(timezone.utc)
+    
+    return {"message": "Icon updated successfully."}
+
+@router.get("/{sandbox_id}/export", response_class=Response, summary="Export a Sandbox as PNG")
 async def export_sandbox(
     sandbox_id: UUID,
     sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
     snapshot_store: SnapshotStoreInterface = Depends(get_snapshot_store),
     persistence_service: PersistenceServiceInterface = Depends(get_persistence_service)
 ):
-    """将一个沙盒及其完整历史导出为一个 .hevno.zip 包文件。"""
+    """
+    将一个沙盒及其完整历史导出为一个嵌入了数据的PNG图片文件。
+    该图片将使用沙盒当前的封面图标作为基础图像。
+    """
     sandbox = sandbox_store.get(sandbox_id)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found")
@@ -171,6 +245,8 @@ async def export_sandbox(
     snapshots = snapshot_store.find_by_sandbox(sandbox_id)
     if not snapshots:
         raise HTTPException(status_code=404, detail="No snapshots found for this sandbox to export.")
+
+    logger.debug(f"Exporting sandbox {sandbox_id}. Found {len(snapshots)} snapshots.")
 
     # 1. 准备清单和数据文件
     manifest = PackageManifest(
@@ -182,38 +258,58 @@ async def export_sandbox(
     for snap in snapshots:
         data_files[f"snapshots/{snap.id}.json"] = snap
 
-    # 2. 调用 persistence_service 进行打包
+    # 2. 获取基础图像字节流 (自定义图标或默认图标)
+    base_image_bytes = None
+    icon_path = persistence_service.get_sandbox_icon_path(str(sandbox.id))
+    if not icon_path:
+        icon_path = persistence_service.get_default_icon_path()
+    
+    if icon_path.is_file():
+        base_image_bytes = icon_path.read_bytes()
+    else:
+        logger.warning(f"Could not find a base image for export (neither custom nor default). A blank PNG will be generated.")
+
+    # 3. 调用 persistence_service 进行打包和PNG嵌入
     try:
-        zip_bytes = persistence_service.export_package(manifest, data_files)
+        logger.debug("Calling persistence_service.export_package...")
+        png_bytes = persistence_service.export_package(manifest, data_files, base_image_bytes)
+        logger.debug(f"export_package returned {len(png_bytes)} bytes of PNG data.")
     except Exception as e:
         logger.error(f"Failed to create package for sandbox {sandbox_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to create package: {e}")
 
-    # 3. 返回文件流
-    filename = f"hevno_sandbox_{sandbox.name.replace(' ', '_')}_{sandbox.id}.hevno.zip"
-    return StreamingResponse(
-        io.BytesIO(zip_bytes),
-        media_type="application/zip",
+    # 4. 返回PNG文件流
+    filename = f"hevno_sandbox_{sandbox.name.replace(' ', '_')}_{sandbox_id}.png"
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
-@router.post("/import", response_model=Sandbox, summary="Import a Sandbox")
+@router.post("/import", response_model=Sandbox, summary="Import a Sandbox from PNG")
 async def import_sandbox(
-    file: UploadFile = File(..., description="A .hevno.zip package file."),
+    file: UploadFile = File(..., description="A .hevno.zip package file embedded in a PNG."),
     sandbox_store: Dict[UUID, Sandbox] = Depends(get_sandbox_store),
     snapshot_store: SnapshotStoreInterface = Depends(get_snapshot_store),
     persistence_service: PersistenceServiceInterface = Depends(get_persistence_service)
 ) -> Sandbox:
-    """从一个 .hevno.zip 文件导入一个沙盒及其完整历史。"""
-    if not file.filename or not file.filename.endswith(".hevno.zip"):
-        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a .hevno.zip file.")
+    """
+    从一个包含数据的PNG文件导入一个沙盒及其完整历史。
+    导入的PNG图像本身将自动成为新沙盒的封面图标。
+    """
+    if not file.filename or not file.filename.endswith(".png"):
+        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a .png file.")
 
-    zip_bytes = await file.read()
+    package_bytes = await file.read()
+    logger.debug(f"Importing file '{file.filename}' with size {len(package_bytes)} bytes.")
     
     # 1. 调用 persistence_service 解包
     try:
-        manifest, data_files = persistence_service.import_package(zip_bytes)
+        logger.debug("Calling persistence_service.import_package...")
+        manifest, data_files, png_bytes = persistence_service.import_package(package_bytes)
+        logger.debug(f"import_package successful. Manifest type: {manifest.package_type}. Found {len(data_files)} data files.")
     except ValueError as e:
+        logger.warning(f"Failed to import package: {e}", exc_info=False) # exc_info=False for cleaner logs on expected errors
         raise HTTPException(status_code=400, detail=f"Invalid package: {e}")
 
     if manifest.package_type != PackageType.SANDBOX_ARCHIVE:
@@ -247,6 +343,16 @@ async def import_sandbox(
         # 3. 如果所有数据都有效，则原子性地保存到存储中
         for snapshot in recovered_snapshots:
             snapshot_store.save(snapshot)
+        
+        # 4. 将导入的PNG本身设为新沙盒的图标，并设置时间戳
+        try:
+            persistence_service.save_sandbox_icon(str(new_sandbox.id), png_bytes)
+            new_sandbox.icon_updated_at = datetime.now(timezone.utc)
+        except Exception as e:
+            # 即便图标保存失败，也不应阻止导入成功，只记录一个警告
+            logger.warning(f"Failed to set icon for newly imported sandbox {new_sandbox.id}: {e}")
+
+        # 5. 最后将沙盒对象存入store
         sandbox_store[new_sandbox.id] = new_sandbox
         
         logger.info(f"Successfully imported sandbox '{new_sandbox.name}' ({new_sandbox.id}).")

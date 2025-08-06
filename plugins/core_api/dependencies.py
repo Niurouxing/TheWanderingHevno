@@ -10,7 +10,6 @@ from plugins.core_engine.contracts import (
     ExecutionEngineInterface, 
     SnapshotStoreInterface
 )
-from plugins.core_persistence.contracts import PersistenceServiceInterface
 from backend.core.contracts import HookManager
 from .contracts import AuditorInterface
 
@@ -29,10 +28,6 @@ def get_sandbox_store(request: Request) -> Dict[UUID, Sandbox]:
 
 def get_auditor(request: Request) -> AuditorInterface:
     return request.app.state.container.resolve("auditor")
-
-def get_persistence_service(request: Request) -> PersistenceServiceInterface:
-    """FastAPI 依赖注入函数，用于从容器中获取 PersistenceService。"""
-    return request.app.state.container.resolve("persistence_service")
 
 def get_hook_manager(request: Request) -> HookManager:
     """FastAPI 依赖注入函数，用于从容器中获取 HookManager。"""

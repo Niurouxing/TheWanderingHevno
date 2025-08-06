@@ -39,27 +39,22 @@ class PackageManifest(BaseModel):
 # --- 服务接口 ---
 
 class PersistenceServiceInterface(ABC):
-    """
-    定义了持久化服务必须提供的核心能力的抽象接口。
-    其他插件应该依赖于这个接口，而不是具体的 PersistenceService 类。
-    """
-
     @abstractmethod
-    def export_package(self, manifest: PackageManifest, data_files: Dict[str, BaseModel]) -> bytes:
-        """
-        在内存中创建一个 .hevno.zip 包并返回其字节流。
-        """
+    def export_package(self, manifest: PackageManifest, data_files: Dict[str, BaseModel], base_image_bytes: Optional[bytes] = None) -> bytes:
         raise NotImplementedError
 
     @abstractmethod
-    def import_package(self, zip_bytes: bytes) -> Tuple[PackageManifest, Dict[str, str]]:
-        """
-        解压包，读取清单和所有数据文件（作为原始字符串）。
-        """
+    def import_package(self, zip_bytes: bytes) -> Tuple[PackageManifest, Dict[str, str], bytes]:
         raise NotImplementedError
     
-    # 我们可以选择性地将其他方法也加入接口，如果未来有其他插件需要
-    # from .models import AssetType
-    # @abstractmethod
-    # def list_assets(self, asset_type: AssetType) -> List[str]:
-    #     raise NotImplementedError
+    @abstractmethod
+    def save_sandbox_icon(self, sandbox_id: str, icon_bytes: bytes) -> 'Path':
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_sandbox_icon_path(self, sandbox_id: str) -> Optional['Path']:
+        raise NotImplementedError
+    
+    @abstractmethod
+    def get_default_icon_path(self) -> 'Path':
+        raise NotImplementedError

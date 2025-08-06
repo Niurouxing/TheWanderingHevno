@@ -6,15 +6,55 @@ import io
 import json
 from fastapi.testclient import TestClient
 from uuid import uuid4, UUID
+import base64
+from PIL import Image, PngImagePlugin 
+import logging
+logger = logging.getLogger(__name__)
 
 # 从平台核心契约导入
 from backend.core.contracts import Container
 
 # 从依赖插件的契约导入数据模型和接口
 from plugins.core_engine.contracts import GraphCollection, SnapshotStoreInterface
+from plugins.core_persistence.contracts import PersistenceServiceInterface
 
-# 注意：这个文件现在只依赖 test_client 和 conftest_data.py 中定义的 fixture
-# 它与 test_engine fixture 完全解耦
+
+def create_test_png_package(manifest_dict: dict, data_files: dict) -> bytes:
+    """一个辅助函数，用于为测试创建嵌入了zTXt数据的PNG包。"""
+    logger.debug(f"[TEST_HELPER] Creating test package. Manifest type: {manifest_dict.get('package_type')}")
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w') as zf:
+        zf.writestr("manifest.json", json.dumps(manifest_dict))
+        for name, content in data_files.items():
+            zf.writestr(f"data/{name}", json.dumps(content))
+    zip_bytes = zip_buffer.getvalue()
+    logger.debug(f"[TEST_HELPER] Created zip_bytes with size: {len(zip_bytes)}")
+
+    encoded_data = base64.b64encode(zip_bytes).decode('ascii')
+
+    image = Image.new('RGBA', (1, 1))
+    
+    png_info_obj = PngImagePlugin.PngInfo()
+    png_info_obj.add_text("hevno:data", encoded_data)
+
+    png_buffer = io.BytesIO()
+    image.save(png_buffer, "PNG", pnginfo=png_info_obj)
+    
+    output_bytes = png_buffer.getvalue()
+    logger.debug(f"[TEST_HELPER] Final test PNG size: {len(output_bytes)}")
+    
+    # 自我验证
+    try:
+        with Image.open(io.BytesIO(output_bytes)) as re_image:
+            re_image.load()
+            assert "hevno:data" in re_image.text, "[TEST_HELPER] FATAL: ztxt chunk not found in self-created package!"
+            logger.debug("[TEST_HELPER] Self-verification successful. 'hevno:data' chunk is present.")
+    except Exception as e:
+        logger.error(f"[TEST_HELPER] Self-verification failed: {e}")
+        pytest.fail(f"Test helper failed to create a valid PNG package: {e}")
+
+    return output_bytes
+
 
 @pytest.mark.e2e
 class TestApiSandboxLifecycle:
@@ -96,28 +136,38 @@ class TestApiErrorHandling:
 
 @pytest.mark.e2e
 class TestSandboxImportExport:
-    """专门测试沙盒导入/导出 API 的类。"""
+    """专门测试沙盒导入/导出 API 的类 (已更新为PNG格式)。"""
 
     def test_sandbox_export_import_roundtrip(
         self, test_client: TestClient, linear_collection: GraphCollection
     ):
-        # --- 步骤 1 & 2: 创建沙盒，执行一步，然后导出 ---
+        # --- 步骤 1 & 2: 创建、执行、导出 ---
         create_resp = test_client.post(
             "/api/sandboxes",
             json={"name": "Export-Test-Sandbox", "graph_collection": linear_collection.model_dump()}
         )
-        assert create_resp.status_code == 201, create_resp.text
+        assert create_resp.status_code == 201
         sandbox_id = create_resp.json()["id"]
 
         step_resp = test_client.post(f"/api/sandboxes/{sandbox_id}/step", json={})
-        assert step_resp.status_code == 200, step_resp.text
+        assert step_resp.status_code == 200
         
         export_resp = test_client.get(f"/api/sandboxes/{sandbox_id}/export")
-        assert export_resp.status_code == 200, export_resp.text
+        assert export_resp.status_code == 200
+        assert export_resp.headers['content-type'] == 'image/png'
         
-        # --- 步骤 3: 验证导出的 ZIP 文件 ---
-        zip_bytes = export_resp.content
-        with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
+        # --- 步骤 3: 验证导出的PNG文件 ---
+        png_bytes = export_resp.content
+        
+        # 使用Pillow从PNG中提取ZIP数据
+        image = Image.open(io.BytesIO(png_bytes))
+        image.load()
+        encoded_data = image.text.get('hevno:data')
+        assert encoded_data is not None
+        zip_data = base64.b64decode(encoded_data)
+        assert zip_data is not None
+        
+        with zipfile.ZipFile(io.BytesIO(zip_data), 'r') as zf:
             filenames = zf.namelist()
             assert "manifest.json" in filenames
             assert "data/sandbox.json" in filenames
@@ -125,17 +175,17 @@ class TestSandboxImportExport:
             manifest = json.loads(zf.read("manifest.json"))
             assert manifest["package_type"] == "sandbox_archive"
 
-        # --- 步骤 4: 清理状态，模拟新环境 ---
+        # --- 步骤 4: 清理状态 ---
         container: Container = test_client.app.state.container
         sandbox_store: dict = container.resolve("sandbox_store")
         snapshot_store: SnapshotStoreInterface = container.resolve("snapshot_store")
         sandbox_store.clear()
         snapshot_store.clear()
 
-        # --- 步骤 5: 导入 ZIP 文件 ---
+        # --- 步骤 5: 导入PNG文件 ---
         import_resp = test_client.post(
             "/api/sandboxes/import",
-            files={"file": ("imported.hevno.zip", zip_bytes, "application/zip")}
+            files={"file": ("imported.png", png_bytes, "image/png")} # <-- 使用正确的元数据
         )
         assert import_resp.status_code == 200, import_resp.text
         imported_sandbox = import_resp.json()
@@ -146,26 +196,26 @@ class TestSandboxImportExport:
         assert len(sandbox_store) == 1
         
         history_resp = test_client.get(f"/api/sandboxes/{sandbox_id}/history")
-        assert history_resp.status_code == 200, history_resp.text
+        assert history_resp.status_code == 200
         assert len(history_resp.json()) == 2
 
     def test_import_invalid_package_type(self, test_client: TestClient):
         """测试导入一个非沙盒类型的包应被拒绝。"""
         manifest = {
             "package_type": "graph_collection", # 错误的类型
-            "entry_point": "file.json",
-            "format_version": "1.0"
+            "entry_point": "file.json"
         }
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w') as zf:
-            zf.writestr("manifest.json", json.dumps(manifest))
-            zf.writestr("data/file.json", "{}")
+        data_files = {"file.json": {}}
+        
+        # 使用辅助函数创建包含错误 manifest 的合法PNG包
+        png_package = create_test_png_package(manifest, data_files)
         
         import_resp = test_client.post(
             "/api/sandboxes/import",
-            files={"file": ("wrong_type.hevno.zip", zip_buffer.getvalue(), "application/zip")}
+            files={"file": ("wrong_type.png", png_package, "image/png")}
         )
         assert import_resp.status_code == 400
+        # 现在我们可以断言更深层次的业务逻辑错误了
         assert "Invalid package type" in import_resp.json()["detail"]
 
     def test_import_conflicting_sandbox_id(
@@ -181,21 +231,24 @@ class TestSandboxImportExport:
         sandbox_id = create_resp.json()["id"]
 
         # 2. 构造一个具有相同 ID 的导出包
-        # (我们手动构造，而不是真的去导出，这样更快)
-        sandbox = {"id": sandbox_id, "name": "Duplicate Sandbox", "head_snapshot_id": None}
-        manifest = {"package_type": "sandbox_archive", "entry_point": "sandbox.json"}
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w') as zf:
-            zf.writestr("manifest.json", json.dumps(manifest))
-            zf.writestr("data/sandbox.json", json.dumps(sandbox))
-            # 为了通过验证，至少需要一个快照
-            snapshot = {"id": str(uuid4()), "sandbox_id": sandbox_id, "graph_collection": linear_collection.model_dump()}
-            zf.writestr(f"data/snapshots/{snapshot['id']}.json", json.dumps(snapshot))
+        sandbox_data = {"id": sandbox_id, "name": "Duplicate Sandbox", "head_snapshot_id": None}
+        manifest_data = {"package_type": "sandbox_archive", "entry_point": "sandbox.json"}
+        snapshot_data = {"id": str(uuid4()), "sandbox_id": sandbox_id, "graph_collection": linear_collection.model_dump()}
+        
+        data_files = {
+            "sandbox.json": sandbox_data,
+            f"snapshots/{snapshot_data['id']}.json": snapshot_data
+        }
+        
+        # 使用辅助函数创建包含冲突数据的合法PNG包
+        png_package = create_test_png_package(manifest_data, data_files)
 
         # 3. 尝试导入
         import_resp = test_client.post(
             "/api/sandboxes/import",
-            files={"file": ("conflict.hevno.zip", zip_buffer.getvalue(), "application/zip")}
+            files={"file": ("conflict.png", png_package, "image/png")}
         )
+        
+        # 现在断言应该通过了
         assert import_resp.status_code == 409
         assert "already exists" in import_resp.json()["detail"]
