@@ -1,8 +1,8 @@
 {
     "id": "core_layout",
-    "name": "Minimalist Layout Host",
-    "version": "1.1.0",
-    "description": "Provides a minimalist layout (sidebar + main content) and hosts application-layer services.",
+    "name": "Application Host & Minimalist Layout",
+    "version": "1.2.0",
+    "description": "Initializes application-layer services (Commands, Layout) and provides a single, primary mounting point for the main UI plugin (e.g., core_goliath).",
     "author": "Hevno Team",
     "frontend": {
         "type": "layout",

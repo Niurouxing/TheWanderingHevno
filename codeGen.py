@@ -140,10 +140,9 @@ if __name__ == "__main__":
         "./plugins/core_layout",
         "./plugins/core_remote_hooks",
         "./plugins/core_websocket",
-        "./plugins/core_diagnostics",
-        "./plugins/core_sandboxes",
         "./package.json",
         "./vite.config.js",
+        "./index.html",
     ]
 
     # paths = [

@@ -6,32 +6,31 @@ export class Layout {
         if (!this.layoutService) {
             throw new Error("[Core Layout] CRITICAL: LayoutService not found!");
         }
-        this.target.innerHTML = ''; // 清空 app 容器
+        this.target.innerHTML = ''; // 清空 #app 容器
     }
 
     mount() {
-        console.log('[Layout] Mounting minimalist skeleton...');
+        console.log('[Layout] Mounting minimalist root host...');
 
         const rootContainer = document.createElement('div');
-        // 这个 ID 很重要，Goliath 插件会用它来应用顶级样式
-        rootContainer.id = 'hevno-root-layout'; 
+        rootContainer.id = 'hevno-root-layout';
+        rootContainer.style.width = '100%';
+        rootContainer.style.height = '100%';
         
-        // 创建两个插槽的容器
-        const sidebarSlotContainer = document.createElement('div');
-        sidebarSlotContainer.id = 'hevno-sidebar-slot';
-        
-        const mainSlotContainer = document.createElement('div');
-        mainSlotContainer.id = 'hevno-main-slot';
+        // 关键变更: 不再创建侧边栏等具体布局元素。
+        // 只创建一个单一的主工作区挂载点，让 Goliath 插件完全控制其内部布局。
+        const mainWorkbenchSlot = document.createElement('div');
+        mainWorkbenchSlot.id = 'hevno-workbench-slot';
+        mainWorkbenchSlot.style.width = '100%';
+        mainWorkbenchSlot.style.height = '100%';
 
-        rootContainer.appendChild(sidebarSlotContainer);
-        rootContainer.appendChild(mainSlotContainer);
-        
+        rootContainer.appendChild(mainWorkbenchSlot);
         this.target.appendChild(rootContainer);
 
-        // 向 LayoutService 注册插槽
-        this.layoutService.registerSlot('workbench.sidebar', sidebarSlotContainer);
-        this.layoutService.registerSlot('workbench.main', mainSlotContainer); // 简化插槽名
+        // 关键变更: 只向 LayoutService 注册一个插槽。
+        // 这是 Goliath 插件将其 UI 贡献到的目标 "贡献点"。
+        this.layoutService.registerSlot('workbench.main', mainWorkbenchSlot);
 
-        console.log('[Layout] Minimalist skeleton mounted and slots registered.');
+        console.log('[Layout] Minimalist host mounted. Single slot "workbench.main" is ready.');
     }
 }
