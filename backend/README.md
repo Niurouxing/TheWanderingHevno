@@ -1,4 +1,3 @@
-
 # Hevno Engine
 
 **一个为构建复杂、持久、可交互的 AI 世界而生的状态图执行引擎。**
@@ -46,13 +45,13 @@
     {
         "runtime": "system.execute",
         "config": {
-        "code": "{{ world.character_mood = 'happy' }}"
+        "code": "{{ moment.character_mood = 'happy' }}"
         }
     },
     {
         "runtime": "llm.default",
         "config": {
-        "prompt": "{{ f'根据角色愉悦的心情 ({world.character_mood})，生成一句问候。' }}"
+        "prompt": "{{ f'根据角色愉悦的心情 ({moment.character_mood})，生成一句问候。' }}"
         }
     }
     ]
@@ -60,45 +59,46 @@
 ```
 这种设计将节点的行为分解为一系列原子的、可预测的步骤，提供了无与伦比的控制力和可读性。
 
-#### 1.2.2 哲学二：状态先行，计算短暂
+#### 1.2.2 哲学二：状态先行，计算短暂 (State is permanent, execution is ephemeral.)
 
-> **"State is permanent, execution is ephemeral."**
+> **【已重构】** 一个交互式模拟世界的核心恰恰是“状态”。我们构建了一个以**三层作用域**为核心的、清晰而强大的状态架构，以解决不同类型数据的生命周期问题。
 
-一个交互式模拟世界的核心恰恰是“状态”。我们构建了一个以状态为核心的架构：
-
-*   **沙盒 (`Sandbox`)**: 代表一个完整的、隔离的交互环境（例如，一局游戏、一个项目）。
-*   **不可变快照 (`StateSnapshot`)**: 我们不直接修改状态。每一次交互（如图执行）都会产生一个全新的、完整的状态快照。这包含了当时所有的持久化变量 (`world_state`) 和驱动逻辑的图 (`graph_collection`)。
-*   **引擎的角色**: `ExecutionEngine` 本身是无状态的。它的工作是接收一个旧的 `StateSnapshot`，执行计算，然后生成一个新的 `StateSnapshot`。它是一个纯粹的**状态转换函数**。
+*   **沙盒 (`Sandbox`)**: 代表一个完整的、隔离的交互环境（例如，一局游戏、一个项目）。它现在是所有状态的根容器。
+*   **三层状态作用域**:
+    1.  **`definition` (静态定义层)**: 沙盒的“设计蓝图”。它在沙盒创建时被定义，并且在整个生命周期中是**只读**的。它约定了世界的初始样貌。
+    2.  **`lore` (演化知识层)**: 沙盒的“世界法典”或“历史书”。这部分状态会随着时间演化（例如，一个角色学会了新技能，解锁了新的故事线），但 crucially，它在**读档（Revert）时不会被回滚**。它代表了世界不可逆的成长。图定义 (`lore.graphs`) 和知识库 (`lore.codices`) 通常存放在这里。
+    3.  **`moment` (瞬时状态层)**: 沙盒的“即时快照”，包含了所有**可回滚**的状态，例如玩家的生命值 (`moment.player.hp`)、当前位置、以及短期记忆 (`moment.memoria`)。每一次交互都会产生一个全新的、包含当时 `moment` 状态的快照。
+*   **引擎的角色**: `ExecutionEngine` 本身是无状态的。它的工作是接收一个 `Sandbox`，读取其 `lore` 和最新的 `moment` (通过 `head_snapshot_id`)，执行计算，然后生成一个新的快照（包含新的 `moment`）和一个可能被更新的 `lore`，最后将这些变更应用回 `Sandbox`。它是一个纯粹的**状态转换函数**。
 
 **执行流程示意：**
 ```
-+---------------------------------------+
-|          (Old StateSnapshot)          |
-|  - world_state                        |
-|  - graph_collection                   |
-+---------------------------------------+
-                   |
-                   |
-                   v
-+---------------------------------------+
-|           Execution Engine            |
-|          (State Transition)           |
-|              run_graph()              |
-+---------------------------------------+
-                   |
-                   |
-                   v
-+---------------------------------------+
-|          (New StateSnapshot)          |
-|  - world_state (updated)              |
-|  - graph_collection (possibly evolved)|
-+---------------------------------------+
++-------------------------------------------------+
+|                    Sandbox (Old)                |
+|  - definition (只读)                            |
+|  - lore (演化知识)                              |
+|  - head_snapshot_id -> (Old Moment Snapshot)    |
++-------------------------------------------------+
+                          |
+                          v
++-------------------------------------------------+
+|                Execution Engine                 |
+|               (State Transition)                |
+|                   step(sandbox)                 |
++-------------------------------------------------+
+                          |
+                          v
++-------------------------------------------------+
+|                    Sandbox (New)                |
+|  - definition (不变)                            |
+|  - lore (可能已更新)                            |
+|  - head_snapshot_id -> (New Moment Snapshot)    |
++-------------------------------------------------+
 ```
 
 这种架构天然地带来了巨大的好处：
-1.  **完美的回溯能力**: “读档”操作变成了简单地将沙盒的指针指向一个历史快照。
+1.  **完美的回溯能力**: “读档”操作变成了简单地将沙盒的 `head_snapshot_id` 指针指向一个历史快照。`lore` 中演化的世界规则和历史保持不变，只有 `moment` 中的角色状态等被回滚。
 2.  **健壮的并发与调试**: 不可变性消除了大量的并发问题，并使得追踪状态变化变得异常简单。
-3.  **动态的逻辑演化**: 因为图的定义本身也是状态的一部分，所以图可以被它自己执行的逻辑所修改（例如，一个指令可以更新 `world_state` 中存储的图定义），实现世界的“自我进化”。
+3.  **动态的逻辑演化**: 因为图和知识库的定义本身也是 `lore` 状态的一部分，所以它们可以被自己执行的逻辑所修改，实现世界的“自我进化”。
 
 #### 1.2.3 哲学三：约定与配置相结合，智能推断与明确声明并存
 
@@ -108,7 +108,7 @@
 
 *   **智能的依赖推断 (约定)**: 在我们的图定义中，你通常找不到 `edges` 字段。当一个节点的指令在其 `config` 中通过宏 `{{ nodes.A.output }}` 引用了另一个节点 `A` 时，引擎会自动建立一条从 `A` 到当前节点的执行依赖。这是我们的主要约定，能处理 90% 的场景。
 
-*   **明确的依赖声明 (配置)**: 对于那些无法通过宏自动推断的**隐式依赖**（例如，一个节点通过副作用修改了 `world` 状态，而另一个节点依赖这个状态），我们提供了一个明确的 `depends_on` 字段。这让你可以在需要时精确控制执行顺序，消除竞态条件。
+*   **明确的依赖声明 (配置)**: 对于那些无法通过宏自动推断的**隐式依赖**（例如，一个节点通过副作用修改了 `moment` 状态，而另一个节点依赖这个状态），我们提供了一个明确的 `depends_on` 字段。这让你可以在需要时精确控制执行顺序，消除竞态条件。
 
 **依赖推断示例:**
 ```json
@@ -124,18 +124,18 @@
 
 **明确声明依赖示例:**
 ```json
-// B 节点读取由 A 节点设置的世界变量，这是一种隐式依赖。
+// B 节点读取由 A 节点设置的状态，这是一种隐式依赖。
 // 我们使用 depends_on 来确保 A 在 B 之前执行。
 {
     "id": "A_set_state",
-    "run": [{ "runtime": "system.execute", "config": { "code": "{{ world.theme = 'fantasy' }}" }}]
+    "run": [{ "runtime": "system.execute", "config": { "code": "{{ moment.theme = 'fantasy' }}" }}]
 },
 {
     "id": "B_read_state",
     "depends_on": ["A_set_state"],
     "run": [{
     "runtime": "llm.default",
-    "config": { "prompt": "{{ f'生成一个关于 {world.theme} 世界的故事。' }}" }
+    "config": { "prompt": "{{ f'生成一个关于 {moment.theme} 世界的故事。' }}" }
     }]
 }
 ```
@@ -145,25 +145,25 @@
 
 > **"Write natural code, get parallel safety for free."**
 
-在 Hevno 中，图的节点可以并行执行，这极大地提升了效率。但并发也带来了风险：如果两个并行节点同时修改同一个世界状态（如 `world.counter`），就会产生不可预测的结果（竞态条件）。
+在 Hevno 中，图的节点可以并行执行，这极大地提升了效率。但并发也带来了风险：如果两个并行节点同时修改同一个状态（如 `moment.counter`），就会产生不可预测的结果（竞态条件）。
 
 我们坚信，开发者不应该为了利用并发而成为并发控制专家。因此，Hevno Engine 内置了**宏级原子锁**机制：
 
 *   **默认开启，完全透明**: 您无需编写任何特殊代码。引擎会自动确保每一个宏脚本的执行都是一个**原子操作**。
-*   **无竞态条件之忧**: 当您在宏中编写 `world.counter += 1` 时，即使有十个节点同时执行这段代码，引擎也能保证其过程不会被打断，最终结果绝对正确。
+*   **无竞态条件之忧**: 当您在宏中编写 `moment.counter += 1` 时，即使有十个节点同时执行这段代码，引擎也能保证其过程不会被打断，最终结果绝对正确。
 *   **专注业务逻辑**: 您可以像在单线程环境中一样自然地编写代码，将全部精力投入到构建世界逻辑中，而引擎在幕后处理了所有复杂的并发安全问题。
 
 **并发写入示例:**
 ```json
 // 节点 A 和 B 会被并行执行
-// 但由于宏级原子锁，对 world.gold 的修改是安全的
+// 但由于宏级原子锁，对 moment.gold 的修改是安全的
 {
   "id": "A_earn_gold",
-  "run": [{ "runtime": "system.execute", "config": { "code": "world.gold += 10" } }]
+  "run": [{ "runtime": "system.execute", "config": { "code": "moment.gold += 10" } }]
 },
 {
   "id": "B_spend_gold",
-  "run": [{ "runtime": "system.execute", "config": { "code": "world.gold -= 5" } }]
+  "run": [{ "runtime": "system.execute", "config": { "code": "moment.gold -= 5" } }]
 }
 ```
 这种设计让您能够无缝地从简单的线性逻辑扩展到复杂的高性能并行图，而无需修改一行状态操作代码。
@@ -384,17 +384,17 @@ plugins/
 // 简单求值
 { "config": { "value": "{{ 1 + 1 }}" } }
 
-// 访问世界状态
-{ "config": { "prompt": "{{ f'你好，{world.player_name}！' }}" } }
+// 访问状态
+{ "config": { "prompt": "{{ f'你好，{moment.player_name}！' }}" } }
 
 // 执行复杂逻辑并修改状态
 {
   "config": {
     "script": "{{
-      if world.player.is_tired:
-          world.player.energy -= 10
+      if moment.player.is_tired:
+          moment.player.energy -= 10
       else:
-          world.player.energy += 5
+          moment.player.energy += 5
     }}"
   }
 }
@@ -413,22 +413,31 @@ plugins/
 
 #### 3.2.2 入门指南 (为所有用户)
 
-##### 3.2.2.1 访问核心数据：您的世界交互窗口
+##### 3.2.2.1 【已重构】访问核心数据：您的世界交互窗口
 
 宏最强大的能力，在于它能访问和操纵 Hevno 引擎在执行图过程中的所有内部状态。您可以把宏想象成一个开在指令配置上的“开发者控制台”，能让您直接与引擎的“记忆”互动。
 
-在 `{{ ... }}` 内部，您可以访问一个包含了**所有可用上下文信息**的全局命名空间。这些上下文对象都支持便捷的**点符号访问**（如 `world.player.hp`）。
+在 `{{ ... }}` 内部，您可以访问一个包含了**所有可用上下文信息**的全局命名空间。这些上下文对象都支持便捷的**点符号访问**。
 
-*   **持久化世界状态 (`world`)**: 这是您的沙盒（Sandbox）的长期记忆。所有需要跨越多个执行步骤、长期存在的数据都应存放在这里。您可以读取它，也可以向其中写入新数据或修改现有数据，这些改动将被永久记录在下一个状态快照中。
-    *   **用途**: 存储玩家属性（如 `world.player.hp`）、任务进度、世界环境、角色关系等。
-    *   **示例 (读取)**: `"{{ f'玩家当前生命值：{world.player.hp}' }}"`
-    *   **示例 (写入)**: `"{{ world.quest_log.append('新任务：击败恶龙') }}"`
+*   **`moment` (瞬时状态)**: 这是您沙盒的“即时快照”，是您最常交互的对象。所有需要跨越多个执行步骤、但在读档时**应该被回滚**的数据都应存放在这里。您可以读取它，也可以向其中写入新数据或修改现有数据，这些改动将被永久记录在下一个状态快照中。
+    *   **用途**: 存储玩家属性（如 `moment.player.hp`）、任务进度、当前位置、短期记忆 (`moment.memoria`) 等。
+    *   **示例 (读取)**: `"{{ f'玩家当前生命值：{moment.player.hp}' }}"`
+    *   **示例 (写入)**: `"{{ moment.quest_log.append('新任务：击败恶龙') }}"`
 
-*   **已完成节点的结果 (`nodes`)**: 这是一个对象，其属性是所有在当前节点执行之前，已经成功完成的节点的 `id`。您可以访问这些节点的最终输出结果。这是实现**节点间**数据流动的关键。
+*   **`lore` (演化知识)**: 这是您沙盒的“世界法典”。所有需要长期存在、并且在读档时**不应被回滚**的数据存放在这里。它代表了世界的永久性成长和演化。
+    *   **用途**: 存储可演化的图定义 (`lore.graphs`)、可进化的知识库 (`lore.codices`)、已解锁的世界规则等。
+    *   **示例 (读取)**: `"{{ f'当前世界规则版本：{lore.rules.version}' }}"`
+    *   **示例 (写入)**: `"{{ lore.graphs['new_magic_spell'] = {...} }}"`
+
+*   **`definition` (静态定义)**: 这是您沙盒的“设计蓝图”，在运行时是**只读**的。它定义了世界的初始状态。
+    *   **用途**: 读取沙盒的初始配置，例如初始的 lore 和 moment。
+    *   **示例**: `"{{ definition.initial_lore.description }}"`
+
+*   **`nodes` (已完成节点的结果)**: 这是一个对象，其属性是所有在当前节点执行之前，已经成功完成的节点的 `id`。您可以访问这些节点的最终输出结果。这是实现**节点间**数据流动的关键。
     *   **用途**: 将一个节点的输出作为另一个节点的输入。
     *   **示例**: `"{{ nodes.get_character_name.output.upper() }}"`
 
-*   **节点内管道状态 (`pipe`)**: 这是一个特殊的对象，它包含了**本节点内**所有**上一个指令**执行完成后的输出结果。它允许您在一个节点内部构建强大的数据处理管道，实现**指令间**的数据流动。
+*   **`pipe` (节点内管道状态)**: 这是一个特殊的对象，它包含了**本节点内**所有**上一个指令**执行完成后的输出结果。它允许您在一个节点内部构建强大的数据处理管道，实现**指令间**的数据流动。
     *   **用途**: 将 `system.io.input` 的结果传给 `llm.default`。
     *   **示例**:
         ```json
@@ -438,11 +447,11 @@ plugins/
         ]
         ```
 
-*   **本次运行的临时数据 (`run`)**: 这是一个临时存储区域，其生命周期仅限于**单次**图的执行。执行结束后，其中的所有数据都会被丢弃。
+*   **`run` (本次运行的临时数据)**: 这是一个临时存储区域，其生命周期仅限于**单次**图的执行。执行结束后，其中的所有数据都会被丢弃。
     *   **用途**: 存储触发本次运行的外部输入（如用户的聊天消息）、本次运行中途的临时计算结果等。
-    *   **示例**: `"{{ run.trigger_input.user_message }}"`
+    *   **示例**: `"{{ run.triggering_input.user_message }}"`
 
-*   **【新增】可用的服务 (`services`)**: 这是一个特殊的代理对象，是您访问所有已注册插件服务的入口。服务是**懒加载**的：只有当您在宏中第一次访问某个服务（如 `services.llm_service`）时，DI 容器才会创建或获取该服务的实例。
+*   **`services` (可用的服务)**: 这是一个特殊的代理对象，是您访问所有已注册插件服务的入口。服务是**懒加载**的：只有当您在宏中第一次访问某个服务（如 `services.llm_service`）时，DI 容器才会创建或获取该服务的实例。
     *   **用途**: 从宏中直接调用任何插件提供的功能，例如发起 LLM 请求或访问持久化存储。
     *   **示例**:
         ```json
@@ -454,7 +463,7 @@ plugins/
         }
         ```
 
-*   **会话元信息 (`session`)**: 包含了关于整个交互会话的全局信息，例如会话开始的时间、总共执行的回合数等。
+*   **`session` (会话元信息)**: 包含了关于整个交互会话的全局信息，例如会话开始的时间、总共执行的回合数等。
     *   **用途**: 用于记录、调试或实现与时间相关的逻辑。
     *   **示例**: `"{{ f'当前是第 {session.turn_count} 回合' }}"`
 
@@ -469,7 +478,7 @@ plugins/
 
 ##### 示例1：动态生成 NPC 对话
 
-根据玩家的声望 (`world.player_reputation`)，NPC 会有不同的反应。
+根据玩家的声望 (`moment.player_reputation`)，NPC 会有不同的反应。
 
 ```json
 {
@@ -479,9 +488,9 @@ plugins/
       "runtime": "llm.default",
       "config": {
         "prompt": "{{
-          rep = world.player_reputation
+          rep = moment.player_reputation
           if rep > 50:
-              f'欢迎，尊敬的 {world.player_name}！见到您真是我的荣幸。'
+              f'欢迎，尊敬的 {moment.player_name}！见到您真是我的荣幸。'
           elif rep < -50:
               '哼，你还敢出现在我面前？'
           else:
@@ -504,7 +513,7 @@ plugins/
     {
         "runtime": "system.io.input",
         "config": {
-        "value": "{{ run.trigger_input.damage }}"
+        "value": "{{ run.triggering_input.damage }}"
         }
     },
     {
@@ -512,8 +521,8 @@ plugins/
         "config": {
         "code": "{{
             damage_amount = pipe.output
-            world.player_hp -= damage_amount
-            world.battle_log.append(f'玩家受到了 {damage_amount} 点伤害。')
+            moment.player_hp -= damage_amount
+            moment.battle_log.append(f'玩家受到了 {damage_amount} 点伤害。')
         }}"
         }
     }
@@ -524,7 +533,7 @@ plugins/
 1.  第一个指令执行，它的输出 (`damage` 值) 被放入 `pipe` 对象。
 2.  第二个指令开始执行，它的 `config` 中的宏被求值。
 3.  `pipe.output` 成功地获取了上一步的伤害值。
-4.  `world` 状态被成功修改。
+4.  `moment` 状态被成功修改。
 
 #### 3.2.4 并发安全：引擎的承诺与您的责任
 
@@ -532,12 +541,12 @@ Hevno 引擎天生支持并行节点执行，这意味着没有依赖关系的�
 
 ##### 3.2.4.1 引擎的承诺：透明的并发安全
 
-Hevno 引擎的核心承诺是：**为所有基于 Python 基础数据类型（字典、列表、数字、字符串等）的世界状态操作，提供完全透明的、默认开启的并发安全保护。**
+Hevno 引擎的核心承诺是：**为所有基于 Python 基础数据类型（字典、列表、数字、字符串等）的状态操作，提供完全透明的、默认开启的并发安全保护。**
 
 这意味着，当您在宏中编写以下代码时，我们保证其结果在任何并行执行下都是正确和可预测的：
-*   `world.counter += 1`
-*   `world.player['stats']['strength'] -= 5`
-*   `world.log.append("New event")`
+*   `moment.counter += 1`
+*   `moment.player['stats']['strength'] -= 5`
+*   `lore.events.append("New event")`
 
 **工作原理：** 在执行任何一个宏脚本（即 `{{ ... }}` 中的全部内容）之前，引擎会自动获取一个全局写入锁。在宏脚本执行完毕后，锁会自动释放。这保证了**每一个宏脚本的执行都是一个不可分割的原子操作**。您无需做任何事情，即可免费获得这份安全保障。
 
@@ -545,10 +554,10 @@ Hevno 引擎的核心承诺是：**为所有基于 Python 基础数据类型（�
 
 我们的自动化保护机制是有边界的。一个操作**必定会**产生不可预测的并发问题（竞态条件），当且仅当它**同时满足以下所有条件**：
 
-1.  **使用自定义类管理可变状态：** 您在宏中定义了 `class MyObject:` 并在其实例中直接存储可变数据（如 `self.hp = 100`），并将其存入 `world`。
+1.  **使用自定义类管理可变状态：** 您在宏中定义了 `class MyObject:` 并在其实例中直接存储可变数据（如 `self.hp = 100`），并将其存入 `moment` 或 `lore`。
 2.  **使用非纯方法修改状态：** 您调用了该实例的一个方法来直接修改其内部状态（如 `my_obj.take_damage(10)`，其内部实现是 `self.hp -= 10`）。
 3.  **真正的并行执行：** 您将这个修改操作放在了两个或多个**无依赖关系**的并行节点中。
-4.  **操作同一数据实例：** 这些并行节点操作的是**同一个对象实例**（e.g., `world.player_character`）。
+4.  **操作同一数据实例：** 这些并行节点操作的是**同一个对象实例**（e.g., `moment.player_character`）。
 
 这个场景的本质是，您创建了一个引擎无法自动理解其内部工作原理的“黑盒”（您的自定义类），并要求引擎在并行环境下保证其内部操作的原子性。这是一个理论上无法被通用引擎自动解决的问题。
 
@@ -560,9 +569,9 @@ Hevno 引擎的核心承诺是：**为所有基于 Python 基础数据类型（�
 
 这是解决此问题的**首选方案**。它不需要您理解并发的复杂性，只需稍微调整代码组织方式：
 
-*   **状态用字典：** `world.player = {'hp': 100}`
+*   **状态用字典：** `moment.player = {'hp': 100}`
 *   **逻辑用函数：** `def take_damage(p, amount): p['hp'] -= amount`
-*   **在宏中调用：** `{{ take_damage(world.player, 10) }}`
+*   **在宏中调用：** `{{ take_damage(moment.player, 10) }}`
 
 这种模式能完美地被我们的自动化安全机制所覆盖，是 99% 的用户的最佳选择。
 
@@ -599,7 +608,7 @@ Hevno 引擎的核心承诺是：**为所有基于 Python 基础数据类型（�
       # 使用 f-string 和单引号来构建最终的 prompt
       # 这样 '{{...}}' 部分就会被当作普通文本
       f'''
-      你是一个游戏助手。要将玩家的生命值设置为100，你应该返回：'{{ world.player_hp = 100 }}'
+      你是一个游戏助手。要将玩家的生命值设置为100，你应该返回：'{{ moment.player_hp = 100 }}'
       
       现在，请为我恢复玩家的能量。
       '''
@@ -607,11 +616,11 @@ Hevno 引擎的核心承诺是：**为所有基于 Python 基础数据类型（�
   }
 }
 ```
-引擎在预处理此指令时，会执行 f-string，生成一个包含 `{{ world.player_hp = 100 }}` **文本**的字符串，然后将其发送给 LLM。
+引擎在预处理此指令时，会执行 f-string，生成一个包含 `{{ moment.player_hp = 100 }}` **文本**的字符串，然后将其发送给 LLM。
 
 **步骤 2: 执行 LLM 返回的指令**
 
-假设上一步的 LLM 返回了字符串 `"{{ world.player_energy = 100 }}"`。这个字符串现在存储在 `pipe.llm_output` 中。它只是一个普通的字符串，不会自动执行。
+假设上一步的 LLM 返回了字符串 `"{{ moment.player_energy = 100 }}"`。这个字符串现在存储在 `pipe.llm_output` 中。它只是一个普通的字符串，不会自动执行。
 
 要执行它，我们需要在下一个指令使用 `system.execute` 运行时。
 
@@ -621,16 +630,16 @@ Hevno 引擎的核心承诺是：**为所有基于 Python 基础数据类型（�
   "runtime": "system.execute",
   "config": {
     // 1. 在预处理阶段，这个宏被执行，
-    //    'code' 的值变成了字符串 "{{ world.player_energy = 100 }}"
+    //    'code' 的值变成了字符串 "{{ moment.player_energy = 100 }}"
     "code": "{{ pipe.llm_output }}",
   }
 }
 ```
-`system.execute` 运行时会接收到 `code` 字段的值，并对其进行**二次求值**，从而真正执行 `world.player_energy = 100`，修改世界状态。
+`system.execute` 运行时会接收到 `code` 字段的值，并对其进行**二次求值**，从而真正执行 `moment.player_energy = 100`，修改状态。
 
 ##### 3.2.5.2 动态定义函数与 `import`
 
-您可以 `import` 任何库，或在 `world` 对象上动态创建函数，以构建可复用的逻辑或实现世界的自我演化。
+您可以 `import` 任何库，或在 `lore` 或 `moment` 对象上动态创建函数，以构建可复用的逻辑或实现世界的自我演化。
 
 ```json
 {
@@ -643,13 +652,13 @@ Hevno 引擎的核心承诺是：**为所有基于 Python 基础数据类型（�
       def calculate_weighted_average(values, weights):
           return np.average(values, weights=weights)
 
-      if not hasattr(world, 'utils'): world.utils = {}
-      world.utils['weighted_avg'] = calculate_weighted_average
+      if not hasattr(lore, 'utils'): lore.utils = {}
+      lore.utils['weighted_avg'] = calculate_weighted_average
     }}"
   }}]
 }
 ```
-在后续节点中，您就可以直接调用 `{{ world.utils.weighted_avg(...) }}`。
+在后续节点中，您就可以直接调用 `{{ lore.utils.weighted_avg(...) }}`。
 
 ## 4. `system` 运行时参考
 
@@ -660,7 +669,7 @@ Hevno 引擎通过 `core_engine` 插件提供了一套功能强大、职责清�
 *   **职责明确**: 每个运行时都封装一个有意义的、可复用的逻辑单元。
 *   **LLM的纯粹性**: 保持 `llm.default` 的核心职责——与LLM API交互。所有的数据预处理（如格式化）和后处理（如解析）都应由独立的 `system` 运行时完成。
 *   **通用性与可组合性**: 运行时被设计为通用的“瑞士军刀”，能够通过组合解决广泛的问题。
-*   **优先使用宏**: 对于简单的状态读写操作（如 `world.player.hp` 的读取和修改），应鼓励直接使用宏。
+*   **优先使用宏**: 对于简单的状态读写操作（如 `moment.player.hp` 的读取和修改），应鼓励直接使用宏。
 
 ### 4.2. `system.io` (输入/输出)
 
@@ -674,7 +683,7 @@ Hevno 引擎通过 `core_engine` 插件提供了一套功能强大、职责清�
     {
       "runtime": "system.io.input",
       "config": {
-        "value": "{{ f'当前玩家是 {world.player_name}' }}"
+        "value": "{{ f'当前玩家是 {moment.player_name}' }}"
       }
     }
     ```
@@ -690,7 +699,7 @@ Hevno 引擎通过 `core_engine` 插件提供了一套功能强大、职责清�
     {
       "runtime": "system.io.log",
       "config": {
-        "message": "Debug: Player HP is {{ world.player_hp }} before combat.",
+        "message": "Debug: Player HP is {{ moment.player_hp }} before combat.",
         "level": "debug"
       }
     }
@@ -769,7 +778,7 @@ Hevno 引擎通过 `core_engine` 插件提供了一套功能强大、职责清�
       "config": {
         "graph": "process_damage",
         "using": {
-          "damage_input": "{{ run.trigger_input.damage_amount }}"
+          "damage_input": "{{ run.triggering_input.damage_amount }}"
         }
       }
     }
@@ -788,7 +797,7 @@ Hevno 引擎通过 `core_engine` 插件提供了一套功能强大、职责清�
     {
       "runtime": "system.flow.map",
       "config": {
-        "list": "{{ world.enemies_in_area }}",
+        "list": "{{ moment.enemies_in_area }}",
         "graph": "calculate_threat",
         "using": { "enemy_data": "{{ source.item }}" },
         "collect": "{{ nodes.threat_assessment.output }}"
@@ -803,8 +812,6 @@ Hevno 引擎通过 `core_engine` 插件提供了一套功能强大、职责清�
 *   **配置**:
     *   `code` (string, 必需): 包含宏代码的字符串。
 *   **输出**: `{"output": <code字段执行后的结果>}`.
-
-
 
 ## 5. 插件生态系统：动态扩展世界
 
@@ -886,7 +893,7 @@ uvicorn backend.main:app --reload
 
 *   **添加一个开发中的、需要追踪最新版本的插件:**
     ```bash
-    # 使用 --track-latest 标志
+    # 使用 --track-latest 标志（注意：此功能在示例 cli.py 中未实现，但文档可以先行）
     hevno plugins add https://github.com/YourName/my-plugin-dev --ref main --track-latest
     ```
 
@@ -941,6 +948,119 @@ uvicorn backend.main:app --reload
 
 通过这个系统，Hevno 的世界可以像乐高积木一样被无限组合和扩展。我们期待看到您创造的精彩插件！
 
+## `core_codex` 插件文档
+
+### 1. 简介：构建动态的、分层的知识库
+
+`core_codex` 是 Hevno 引擎中的一个关键插件，它提供了一个强大、声明式、基于优先级的知识库系统。与简单的文本拼接不同，Codex 允许您将知识分解为独立的、可被条件性激活的“条目”（Entries），并根据上下文智能地将它们组合成连贯的文本。
+
+`core_codex` 的核心能力是响应动态变化。它通过**`lore` 和 `moment` 的分层设计**，让知识既有稳定的基石，又能灵活应对瞬息万变的状况：
+
+*   **基础知识 (`lore.codices`)**: 定义世界观、角色背景、核心规则等不常变化的基础信息。
+*   **情境知识 (`moment.codices`)**: 动态注入临时的、与当前情境相关的知识，例如“角色当前正处于中毒状态”、“场景中刚刚下过雨”等。这些临时知识可以在逻辑上**覆盖或增强**基础知识。
+*   **递归激活**: 一个知识条目被激活后，其产生的内容可以**再次触发**其他相关条目的激活，形成逻辑链，构建出富有深度和细节的最终文本。
+
+Codex 是构建能感知环境、拥有深度背景的 AI 代理和动态世界描述的利器。
+
+### 2. 核心概念：Lore 与 Moment 中的知识分层
+
+遵循 Hevno“状态先行”的哲学，Codex 的所有定义都驻留在 `lore` 和 `moment` 作用域下一个名为 `codices` 的结构里。当 `codex.invoke` 运行时被调用时，它会智能地将这两个来源的知识合并。
+
+#### 2.1 知识库集合 (`Codex Collection`)
+
+`lore.codices` 和 `moment.codices` 都是字典，其 `key` 为知识库的名称，`value` 为一个 `Codex` 对象。
+
+```json
+// 在 lore 中定义基础知识
+"lore": {
+  "codices": {
+    "character_background_gandalf": {
+      "entries": [
+        {"id": "base_identity", "priority": 100, "content": "甘道夫是一位埃斯塔力，是派来中土帮助对抗索伦的迈雅。"},
+        {"id": "appearance", "priority": 90, "content": "他通常以一个戴着尖顶蓝帽、身穿灰色斗篷、手持法杖的老人形象出现。"}
+      ]
+    }
+  }
+},
+// 在 moment 中定义临时状态
+"moment": {
+  "codices": {
+    "character_background_gandalf": {
+      "entries": [
+        // 这个条目会覆盖 lore 中的同名条目
+        {"id": "appearance", "priority": 95, "content": "他看起来筋疲力尽，灰色的斗篷上沾满了泥土。"},
+        // 这是一个全新的、只在当前 moment 存在的条目
+        {"id": "current_action", "priority": 120, "content": "他正在低声吟唱咒语，法杖顶端发出微光。"}
+      ]
+    }
+  }
+}
+```
+**合并规则**:
+1.  **Codex 级别**: `moment` 中的 `Codex` 会与 `lore` 中同名的 `Codex` 合并。如果 `lore` 中没有，则直接添加。
+2.  **Entry 级别**: 在合并的 `Codex` 内部，`moment` 中的条目（`Entry`）会根据其 `id` **覆盖** `lore` 中的同名条目。
+3.  **最终结果**: `codex.invoke` 总是工作在合并后的知识库上。
+
+#### 2.2 知识条目 (`Codex Entry`)
+
+每个知识条目都是一个独立的、可被逻辑控制的知识片段。
+
+```json
+{
+  "id": "unique_entry_id",
+  "content": "这是知识的具体内容，支持宏。{{ moment.player_name }}",
+  "priority": 100,
+  "trigger_mode": "on_keyword",
+  "keywords": ["战斗", "危险"],
+  "is_enabled": "{{ moment.player.in_combat }}"
+}
+```
+*   `content`: 知识的文本内容，支持宏。
+*   `priority`: 整数，决定了在最终输出时，这个条目的排序位置。数字越大，越靠前。
+*   `trigger_mode`: 激活模式。`always_on`（总是激活）或 `on_keyword`（当 `source` 文本包含 `keywords` 之一时激活）。
+*   `keywords`: 一个字符串列表，用于 `on_keyword` 模式。
+*   `is_enabled`: 一个布尔值或返回布尔值的宏，用于在最开始就决定该条目是否参与激活判断。
+
+### 3. 使用指南：`codex.invoke` 运行时
+
+`core_codex` 插件只提供一个核心运行时：`codex.invoke`。
+
+*   **功能**: 从 `lore` 和 `moment` 中收集并合并知识库，根据配置激活相关条目，最后将它们按优先级排序组合成一段单一的文本。
+*   **配置参数**:
+    *   `from` (必需): `List[Dict]` - 一个列表，定义了要从哪些知识库中、使用什么源文本来激活条目。
+        *   `codex`: `string` - 要扫描的知识库名称。
+        *   `source`: `string` (可选) - 一个包含宏的字符串，其求值结果将作为触发 `on_keyword` 模式的源文本。
+    *   `recursion_enabled` (可选): `bool` - 是否允许已激活条目的内容再次触发新的条目。默认为 `false`。
+    *   `debug` (可选): `bool` - 是否返回详细的调试信息。
+
+*   **示例**:
+    ```json
+    {
+      "id": "generate_npc_description",
+      "run": [{
+        "runtime": "codex.invoke",
+        "config": {
+          "from": [
+            {
+              "codex": "world_lore",
+              "source": "{{ run.trigger_input.user_query }}"
+            },
+            {
+              "codex": "npc_status_gandalf"
+            }
+          ],
+          "recursion_enabled": true
+        }
+      }]
+    }
+    ```
+    **执行流程**:
+    1.  从 `lore` 和 `moment` 中合并所有 `codex` 定义。
+    2.  扫描 `world_lore`，使用 `run.trigger_input.user_query` 的内容来匹配 `on_keyword` 条目。
+    3.  扫描 `npc_status_gandalf`，由于没有 `source`，只会激活其中的 `always_on` 条目。
+    4.  所有被激活的条目放入一个池中。
+    5.  由于 `recursion_enabled` 为 `true`，引擎会按优先级渲染条目，并用其输出内容递归地去激活池中其他尚未渲染的条目。
+    6.  所有最终被渲染的条目内容，按优先级从高到低拼接成最终的 `output`。
 
 ## `core_memoria` 插件文档
 
@@ -956,17 +1076,17 @@ uvicorn backend.main:app --reload
 
 `core_memoria` 将离散的事件流，编织成一张富有深度和因果关系的智慧之网，是构建真正动态、可交互 AI 世界的关键。
 
-### 2. 核心概念：世界状态中的“记忆宫殿”
+### 2. 核心概念：`moment` 状态中的“记忆宫殿”
 
-遵循 Hevno“状态先行”的哲学，所有记忆的最终真相都驻留在持久化的 `world_state` 中一个名为 `memoria` 的结构里。您可以将 `world.memoria` 想象成一个可扩展的“记忆宫殿”。
+遵循 Hevno“状态先行”的哲学，所有记忆的最终真相都驻留在**瞬时状态层 (`moment`)** 中一个名为 `memoria` 的结构里。这确保了记忆是与特定时间点绑定的，当游戏读档时，记忆也会回滚到当时的状态。
 
 #### 2.1 记忆回廊 (Memory Stream)
 
-“记忆宫殿” (`world.memoria`) 是一个字典，它的每一个键都代表一个独立的“记忆回廊”（Stream）。这允许您为不同的实体或主题（如主线故事、特定角色的思想、某个组织的历史）分别记录记忆。
+“记忆宫殿” (`moment.memoria`) 是一个字典，它的每一个键都代表一个独立的“记忆回廊”（Stream）。这允许您为不同的实体或主题（如主线故事、特定角色的思想、某个组织的历史）分别记录记忆。
 
 ```json
-// world.memoria 的结构
-"world": {
+// moment.memoria 的结构
+"moment": {
   "memoria": {
     "__global_sequence__": 12, // 内部使用的全局序列号
     "main_story": { /* ... 主线故事的 MemoryStream 对象 ... */ },
@@ -1020,7 +1140,7 @@ uvicorn backend.main:app --reload
           "stream": "main_story",
           "level": "exploration_event",
           "tags": ["dungeon", "cave", "danger"],
-          "content": "{{ f'玩家 {world.player_name} 小心地进入了那个散发着恶臭的洞穴。' }}"
+          "content": "{{ f'玩家 {moment.player_name} 小心地进入了那个散发着恶臭的洞穴。' }}"
         }
       }]
     }
@@ -1082,8 +1202,6 @@ uvicorn backend.main:app --reload
     // - 玩家进入了洞穴 (Tags: dungeon, cave)
     // - 玩家点燃了火把 (Tags: light, safety)
     ```
-> **【未来规划】**
-> `memoria.aggregate` 的功能（将列表格式化为字符串）非常通用。在未来的版本中，我们计划推出一个更强大的、系统级的 `system.format` 或 `system.join` 运行时来处理所有类似的格式化任务。届时，`memoria.aggregate` 将被视为一个便利的别名，但我们鼓励用户迁移到更通用的 `system` 运行时，以保持图逻辑的清晰和一致。
 
 ### 4. 自动化功能：记忆的自动综合
 
@@ -1093,7 +1211,7 @@ uvicorn backend.main:app --reload
 
 #### 4.1 如何配置
 
-您可以通过修改 `world.memoria` 中特定流的 `config` 对象来启用和配置此功能。这可以在图的任何地方，使用 `system.execute` 或 `system.set_world_var` 来完成。
+您可以通过修改 `moment.memoria` 中特定流的 `config` 对象来启用和配置此功能。这可以在图的任何地方，使用 `system.execute` 来完成。
 
 ```json
 // 使用 system.execute 在游戏开始时配置 main_story 流
@@ -1104,12 +1222,12 @@ uvicorn backend.main:app --reload
     "config": {
       "code": "{{
         # 确保 memoria 和 main_story 流存在
-        if 'memoria' not in world: world.memoria = {}
-        if 'main_story' not in world.memoria: world.memoria.main_story = {}
-        if 'config' not in world.memoria.main_story: world.memoria.main_story.config = {}
+        if 'memoria' not in moment: moment.memoria = {}
+        if 'main_story' not in moment.memoria: moment.memoria.main_story = {}
+        if 'config' not in moment.memoria.main_story: moment.memoria.main_story.config = {}
 
         # 定义自动综合的行为
-        world.memoria.main_story.config.auto_synthesis = {
+        moment.memoria.main_story.config.auto_synthesis = {
             'enabled': True,
             'trigger_count': 10,  // 每发生 10 次事件
             'level': 'milestone', // 就生成一个“里程碑”级别的总结
@@ -1140,7 +1258,7 @@ Events:
 
 ### 5. 高级用法：通过宏直接访问
 
-对于需要高度定制化逻辑的开发者，`world.memoria` 的完整数据结构对宏是完全透明的。您可以随时使用 `system.execute` 来编写任意 Python 代码，进行标准运行时无法完成的复杂查询和分析。
+对于需要高度定制化逻辑的开发者，`moment.memoria` 的完整数据结构对宏是完全透明的。您可以随时使用 `system.execute` 来编写任意 Python 代码，进行标准运行时无法完成的复杂查询和分析。
 
 ```json
 // 示例：计算“汉弗莱”的总结中，“背叛”一词在过去24小时内的出现频率
@@ -1148,7 +1266,7 @@ Events:
   "runtime": "system.execute",
   "config": {
     "code": "{{
-      # ... 复杂的、定制化的 Python 逻辑 ...
+      # ... 复杂的、定制化的 Python 逻辑，操作 moment.memoria ...
     }}"
   }
 }

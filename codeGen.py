@@ -115,25 +115,25 @@ def main(paths, output_file="code_collection.md"):
     return save_to_markdown(content, output_file)
 
 if __name__ == "__main__":
-    # paths = [
-    #     "./backend", 
-    #     # "./plugins/core_engine",
-    #     "./plugins/core_api",
-    #     # "./plugins/core_codex",
-    #     # "./plugins/core_memoria",
-    #     "./plugins/core_remote_hooks",
-    #     "./plugins/core_websocket",
-    #     "./plugins/core_llm",
-    #     "./plugins/core_logging",
-    #     "./plugins/core_persistence",
-    #     "./hevno.json",
-    #     "./cli.py",
-    #     # "./frontend",
-    #     # "./tests", 
-    #     # "./conftest.py",
-    #     # "./plugins/core_memoria",
-    #     # "./",
-    # ]
+    paths = [
+        "./backend", 
+        "./plugins/core_engine",
+        "./plugins/core_api",
+        "./plugins/core_codex",
+        "./plugins/core_memoria",
+        "./plugins/core_remote_hooks",
+        "./plugins/core_websocket",
+        "./plugins/core_llm",
+        "./plugins/core_logging",
+        "./plugins/core_persistence",
+        "./hevno.json",
+        "./cli.py",
+        # "./frontend",
+        # "./tests", 
+        # "./conftest.py",
+        # "./plugins/core_memoria",
+        # "./",
+    ]
 
     # paths = [
     #     "./frontend",
@@ -146,17 +146,17 @@ if __name__ == "__main__":
     #     "./index.html",
     # ]
 
-    paths = [
-        "./backend", 
-        "./frontend",
-        "./plugins/core_api",
-        "./plugins/core_goliath",
-        "./plugins/core_websocket",
-        "./plugins/core_remote_hooks",
-        "./plugins/core_persistence",
-         "./package.json",
-         "./vite.config.js",
-    ]
+    # paths = [
+    #     "./backend", 
+    #     "./frontend",
+    #     "./plugins/core_api",
+    #     "./plugins/core_goliath",
+    #     "./plugins/core_websocket",
+    #     "./plugins/core_remote_hooks",
+    #     "./plugins/core_persistence",
+    #      "./package.json",
+    #      "./vite.config.js",
+    # ]
 
     # paths = [  
         #  "dashboard/Dashboard.js",
