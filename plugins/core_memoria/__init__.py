@@ -1,22 +1,16 @@
-# plugins/core_memoria/__init__.py
+# plugins/core_memoria/__init__.py (部分修改)
 
 import logging
 from typing import Dict, List, Any
 from uuid import UUID
 
-# 从平台核心导入接口和类型
 from backend.core.contracts import Container, HookManager
-# 从 core_engine 契约中导入所需的上下文模型，以确保类型安全
 from plugins.core_engine.contracts import ExecutionContext
-
-# 导入本插件内部的组件
 from .runtimes import MemoriaAddRuntime, MemoriaQueryRuntime, MemoriaAggregateRuntime
 from .models import Memoria, MemoryEntry
 
 logger = logging.getLogger(__name__)
 
-
-# --- 服务工厂 (Service Factory) ---
 def _create_memoria_event_queue() -> Dict[UUID, List[Dict[str, Any]]]:
     """
     工厂函数：创建一个简单的、内存中的事件队列。
@@ -26,9 +20,6 @@ def _create_memoria_event_queue() -> Dict[UUID, List[Dict[str, Any]]]:
     """
     logger.debug("创建 memoria_event_queue 单例。")
     return {}
-
-
-# --- 钩子实现 (Hook Implementations) ---
 
 async def provide_memoria_runtimes(runtimes: dict) -> dict:
     """钩子实现：向引擎注册本插件提供的所有运行时。"""
@@ -47,11 +38,9 @@ async def provide_memoria_runtimes(runtimes: dict) -> dict:
 
 async def apply_pending_synthesis(context: ExecutionContext, container: Container) -> ExecutionContext:
     """
-    钩子实现：监听 'before_graph_execution' 钩子。
-    在图的逻辑开始执行之前，检查是否有待处理的综合事件，
-    并以原子方式将它们应用到当前的世界状态中。
+    【已重构】钩子实现：在图执行前应用待处理的综合事件。
+    现在操作 context.shared.moment_state。
     """
-
     event_queue: Dict[UUID, List[Dict[str, Any]]] = container.resolve("memoria_event_queue")
     sandbox_id = context.initial_snapshot.sandbox_id
     
@@ -59,11 +48,14 @@ async def apply_pending_synthesis(context: ExecutionContext, container: Containe
     if not pending_events:
         return context
 
-    logger.info(f"Memoria: 发现 {len(pending_events)} 个待处理的综合事件，正在应用到 world_state...")
+    logger.info(f"Memoria: 发现 {len(pending_events)} 个待处理的综合事件，正在应用到 moment_state...")
     
-    world_state = context.shared.world_state
+    # --- 【核心修改】 ---
+    # 从 moment_state 中获取和更新 memoria 数据
+    moment_state = context.shared.moment_state
+    memoria_data = moment_state.setdefault("memoria", {"__global_sequence__": 0})
+    # -------------------
     
-    memoria_data = world_state.setdefault("memoria", {"__global_sequence__": 0})
     memoria = Memoria.model_validate(memoria_data)
     
     for event in pending_events:
@@ -88,13 +80,14 @@ async def apply_pending_synthesis(context: ExecutionContext, container: Containe
                 memoria.set_stream(stream_name, stream)
                 logger.debug(f"已将新总结应用到流 '{stream_name}'。")
     
-    # 将更新后的 memoria 模型写回到世界状态字典中
-    world_state["memoria"] = memoria.model_dump()
+    # --- 【核心修改】 ---
+    # 将更新后的 memoria 模型写回到 moment_state
+    moment_state["memoria"] = memoria.model_dump()
+    # -------------------
 
     return context
 
-
-# --- 主注册函数 (Main Registration Function) ---
+# --- 主注册函数 (保持不变) ---
 def register_plugin(container: Container, hook_manager: HookManager):
     logger.info("--> 正在注册 [core_memoria] 插件...")
 

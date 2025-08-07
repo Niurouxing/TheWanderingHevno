@@ -1,4 +1,4 @@
-# plugins/core_engine/evaluation.py
+# plugins/core_engine/evaluation.py 
 
 import ast
 import asyncio
@@ -35,14 +35,19 @@ def build_evaluation_context(
     pipe_vars: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
-    从 ExecutionContext 构建宏的执行环境。
-    这个函数现在变得非常简单，因为它信任传入的上下文。
+    从 ExecutionContext 构建宏的执行环境，注入新的三层作用域。
     """
     context = {
         **PRE_IMPORTED_MODULES,
-        # 直接从共享上下文中获取 world 和 session
-        "world": DotAccessibleDict(exec_context.shared.world_state),
+        # 【新】注入三层作用域，并用 DotAccessibleDict 包装以支持点符号访问
+        "definition": DotAccessibleDict(exec_context.shared.definition_state),
+        "lore": DotAccessibleDict(exec_context.shared.lore_state),
+        "moment": DotAccessibleDict(exec_context.shared.moment_state),
+        
+        # 共享服务和会话信息保持不变
+        "services": exec_context.shared.services, # services 已经是 DotAccessibleDict
         "session": DotAccessibleDict(exec_context.shared.session_info),
+        
         # run 和 nodes 是当前图执行所私有的
         "run": DotAccessibleDict(exec_context.run_vars),
         "nodes": DotAccessibleDict(exec_context.node_states),
@@ -52,6 +57,7 @@ def build_evaluation_context(
         
     return context
 
+# ... (evaluate_expression 和 evaluate_data 函数保持不变) ...
 async def evaluate_expression(code_str: str, context: Dict[str, Any], lock: asyncio.Lock) -> Any:
     """..."""
     # ast.parse 可能会失败，需要 try...except

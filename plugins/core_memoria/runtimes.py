@@ -1,12 +1,12 @@
-# plugins/core_memoria/runtimes.py
+# plugins/core_memoria/runtimes.py (已重构)
 
 import logging
 from typing import Dict, Any, List
 
 from backend.core.contracts import BackgroundTaskManager 
-from plugins.core_engine.contracts import ExecutionContext
+from plugins.core_engine.contracts import ExecutionContext, RuntimeInterface
 
-from plugins.core_engine.contracts import RuntimeInterface
+# 本地导入保持不变
 from .models import Memoria, MemoryEntry
 from .tasks import run_synthesis_task
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class MemoriaAddRuntime(RuntimeInterface):
     """
     向指定的记忆流中添加一条新的记忆条目。
-    如果满足条件，会自动触发一个后台任务来执行记忆综合。
+    数据现在被写入 context.shared.moment_state。
     """
     async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
         stream_name = config.get("stream")
@@ -27,16 +27,18 @@ class MemoriaAddRuntime(RuntimeInterface):
         level = config.get("level", "event")
         tags = config.get("tags", [])
         
-        memoria_data = context.shared.world_state.setdefault("memoria", {"__global_sequence__": 0})
+        # --- 【核心修改】 ---
+        # 从 moment_state 中获取或创建 memoria 数据，而不是从 world_state
+        memoria_data = context.shared.moment_state.setdefault("memoria", {"__global_sequence__": 0})
+        # -------------------
+        
         memoria = Memoria.model_validate(memoria_data)
         
-        # 获取或创建流
         stream = memoria.get_stream(stream_name)
         if stream is None:
             from .models import MemoryStream
             stream = MemoryStream()
 
-        # 创建新条目
         new_entry = MemoryEntry(
             sequence_id=memoria.get_next_sequence_id(),
             level=level,
@@ -44,22 +46,20 @@ class MemoriaAddRuntime(RuntimeInterface):
             content=str(content)
         )
         stream.entries.append(new_entry)
-        
-        # 【修复】使用新的公共字段名
         stream.synthesis_trigger_counter += 1
         
-        # 将更新后的流写回
         memoria.set_stream(stream_name, stream)
-        context.shared.world_state["memoria"] = memoria.model_dump()
         
-        # 检查是否需要触发后台综合任务
+        # --- 【核心修改】 ---
+        # 将更新后的 memoria 数据写回到 moment_state
+        context.shared.moment_state["memoria"] = memoria.model_dump()
+        # -------------------
+        
         synth_config = stream.config.auto_synthesis
-        # 【修复】使用新的公共字段名
         if synth_config.enabled and stream.synthesis_trigger_counter >= synth_config.trigger_count:
             logger.info(f"流 '{stream_name}' 满足综合条件，正在提交后台任务。")
             
             task_manager: BackgroundTaskManager = context.shared.services.task_manager
-            
             entries_to_summarize = stream.entries[-synth_config.trigger_count:]
             
             task_manager.submit_task(
@@ -69,8 +69,8 @@ class MemoriaAddRuntime(RuntimeInterface):
                 synthesis_config=synth_config.model_dump(),
                 entries_to_summarize_dicts=[e.model_dump() for e in entries_to_summarize]
             )
-            memoria.set_stream(stream_name, stream)
-            context.shared.world_state["memoria"] = memoria.model_dump()
+            # 注意：synthesis_trigger_counter 的重置现在在 `apply_pending_synthesis` 钩子中完成
+            # 此处不再需要重置，以避免状态不一致
 
         return {"output": new_entry.model_dump()}
 
@@ -78,41 +78,40 @@ class MemoriaAddRuntime(RuntimeInterface):
 class MemoriaQueryRuntime(RuntimeInterface):
     """
     根据声明式条件从一个记忆流中检索条目。
+    数据现在从 context.shared.moment_state 读取。
     """
     async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
         stream_name = config.get("stream")
         if not stream_name:
             raise ValueError("MemoriaQueryRuntime requires a 'stream' name in its config.")
 
-        memoria_data = context.shared.world_state.get("memoria", {})
+        # 从 moment_state 中读取 memoria 数据
+        memoria_data = context.shared.moment_state.get("memoria", {})
+        # -------------------
+
         memoria = Memoria.model_validate(memoria_data)
         stream = memoria.get_stream(stream_name)
         
         if not stream:
-            return {"output": []} # 如果流不存在，返回空列表
+            return {"output": []}
 
-        # --- 过滤逻辑 ---
+        # --- 过滤逻辑 (保持不变) ---
         results = stream.entries
         
-        # 按 levels 过滤
         levels_to_get = config.get("levels")
         if isinstance(levels_to_get, list):
             results = [entry for entry in results if entry.level in levels_to_get]
 
-        # 按 tags 过滤
         tags_to_get = config.get("tags")
         if isinstance(tags_to_get, list):
             tags_set = set(tags_to_get)
             results = [entry for entry in results if tags_set.intersection(entry.tags)]
 
-        # 获取最新的 N 条
         latest_n = config.get("latest")
         if isinstance(latest_n, int):
-            # 先按 sequence_id 排序确保顺序正确
             results.sort(key=lambda e: e.sequence_id)
             results = results[-latest_n:]
             
-        # 按顺序返回
         order = config.get("order", "ascending")
         reverse = (order == "descending")
         results.sort(key=lambda e: e.sequence_id, reverse=reverse)
@@ -122,9 +121,11 @@ class MemoriaQueryRuntime(RuntimeInterface):
 
 class MemoriaAggregateRuntime(RuntimeInterface):
     """
-    将一批记忆条目（通常来自 query 的输出）聚合成一段格式化的文本。
+    【保持不变】将一批记忆条目聚合成格式化的文本。
+    此运行时只处理传入的配置，不直接与状态交互，因此无需修改。
     """
     async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
+        # ... (此函数的代码保持不变) ...
         entries_data = config.get("entries")
         template = config.get("template", "{content}")
         joiner = config.get("joiner", "\n\n")

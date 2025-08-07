@@ -1,20 +1,20 @@
-# plugins/core_engine/engine.py 
+# plugins/core_engine/engine.py (已重构)
 
 import asyncio
 import logging
 from enum import Enum, auto
-from fastapi import Request
 from typing import Dict, Any, Set, List, Optional
 from collections import defaultdict
 import traceback
 
 from backend.core.contracts import Container, HookManager
+from plugins.core_persistence.contracts import PersistenceServiceInterface # <---【新】导入持久化接口
 from .contracts import (
-    GraphDefinition, GenericNode,
-    ExecutionContext,
+    GraphDefinition, GenericNode, ExecutionContext, Sandbox, # <---【新】导入 Sandbox
+    # ... 其他 contract imports
     EngineStepStartContext, EngineStepEndContext,
-    BeforeConfigEvaluationContext, AfterMacroEvaluationContext,
     NodeExecutionStartContext, NodeExecutionSuccessContext, NodeExecutionErrorContext,
+    BeforeConfigEvaluationContext, AfterMacroEvaluationContext,
     SnapshotStoreInterface
 )
 from .dependency_parser import build_dependency_graph_async
@@ -25,6 +25,7 @@ from .state import (
     create_sub_execution_context, 
     create_next_snapshot
 )
+from .graph_resolver import GraphResolver # <---【新】导入 GraphResolver
 from .contracts import RuntimeInterface, SubGraphRunner
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ class NodeState(Enum):
     FAILED = auto()
     SKIPPED = auto()
 
+# ... (GraphRun class 保持不变) ...
 class GraphRun:
     def __init__(self, context: ExecutionContext, graph_def: GraphDefinition, dependencies: Dict[str, Set[str]]):
         self.context = context
@@ -115,10 +117,26 @@ class ExecutionEngine(SubGraphRunner):
         self.container = container
         self.hook_manager = hook_manager
         self.num_workers = num_workers
+        self.graph_resolver = GraphResolver()
         
-    async def step(self, initial_snapshot, triggering_input: Dict[str, Any] = None):
+    async def step(
+        self, 
+        sandbox: Sandbox,
+        triggering_input: Dict[str, Any] = None
+    ) -> Sandbox: 
+        """
+        【已重构】在沙盒的最新状态上执行一步计算。
+        """
         if triggering_input is None: triggering_input = {}
         
+        # 1. 获取最新的快照
+        if not sandbox.head_snapshot_id:
+            raise ValueError(f"Sandbox '{sandbox.name}' has no head snapshot to step from.")
+        snapshot_store: SnapshotStoreInterface = self.container.resolve("snapshot_store")
+        initial_snapshot = snapshot_store.get(sandbox.head_snapshot_id)
+        if not initial_snapshot:
+            raise ValueError(f"Head snapshot '{sandbox.head_snapshot_id}' not found for sandbox '{sandbox.name}'.")
+
         await self.hook_manager.trigger(
             "engine_step_start",
             context=EngineStepStartContext(
@@ -127,44 +145,56 @@ class ExecutionEngine(SubGraphRunner):
             )
         )
         
+        # 2. 调用 state.py 中的工厂函数创建运行时上下文
         context = create_main_execution_context(
             snapshot=initial_snapshot,
+            sandbox=sandbox,
             container=self.container,
-            run_vars={"triggering_input": triggering_input},
-            hook_manager=self.hook_manager
+            hook_manager=self.hook_manager,
+            run_vars={"triggering_input": triggering_input}
         )
 
         await self.hook_manager.filter("before_graph_execution", context)
-
-        main_graph_def = context.initial_snapshot.graph_collection.root.get("main")
-        if not main_graph_def: raise ValueError("'main' 图未找到。")
         
+        # 3. 调用 GraphResolver 动态解析出本次要执行的图
+        graph_collection_to_run = self.graph_resolver.resolve(context)
+        main_graph_def = graph_collection_to_run.root.get("main")
+        if not main_graph_def: raise ValueError("'main' graph not found in resolved collection.")
+        
+        # 4. 执行图
         final_node_states = await self._internal_execute_graph(main_graph_def, context)
         
-        next_snapshot = await create_next_snapshot(
+        # 5. 创建新快照和更新后的 Lore
+        new_snapshot, updated_lore = await create_next_snapshot(
             context=context, 
             final_node_states=final_node_states, 
             triggering_input=triggering_input
         )
+        
+        # 6. 【新】原子性地更新和保存状态
+        # (注意：在真实系统中，这应该在一个数据库事务中完成)
+        
+        # a. 保存新快照
+        snapshot_store.save(new_snapshot)
 
-        # 从容器中解析快照存储服务并保存
-        snapshot_store: SnapshotStoreInterface = self.container.resolve("snapshot_store")
-        snapshot_store.save(next_snapshot)
-
-        # 发布“快照已提交”事件，这是一个“即发即忘”的通知。
-        # 我们将容器实例也传递过去，方便订阅者直接使用，无需再次解析。
-        await self.hook_manager.trigger(
-            "snapshot_committed", 
-            snapshot=next_snapshot,
-            container=self.container
-        )
-
+        # b. 更新 Sandbox 对象的 Lore 和头指针
+        sandbox.lore = updated_lore
+        sandbox.head_snapshot_id = new_snapshot.id
+        
+        # c. 保存更新后的 Sandbox 对象
+        # 这里的 sandbox_store 是一个简单的 dict，所以修改是即时的。
+        # 如果使用持久化服务，会是这样:
+        # persistence: PersistenceServiceInterface = self.container.resolve("persistence_service")
+        # await persistence.save_sandbox(sandbox)
+        # 我们将在适配 core_api 阶段处理持久化
+        
         await self.hook_manager.trigger(
             "engine_step_end",
-            context=EngineStepEndContext(final_snapshot=next_snapshot)
+            context=EngineStepEndContext(final_snapshot=new_snapshot)
         )
-
-        return next_snapshot
+        
+        # 7. 返回更新后的 Sandbox 对象
+        return sandbox
 
     async def execute_graph(
         self,
@@ -172,7 +202,7 @@ class ExecutionEngine(SubGraphRunner):
         parent_context: ExecutionContext,
         inherited_inputs: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        graph_collection = parent_context.initial_snapshot.graph_collection.root
+        graph_collection = self.graph_resolver.resolve(parent_context).root
         graph_def = graph_collection.get(graph_name)
         if not graph_def:
             raise ValueError(f"Graph '{graph_name}' not found.")
@@ -187,16 +217,13 @@ class ExecutionEngine(SubGraphRunner):
 
     async def _internal_execute_graph(self, graph_def: GraphDefinition, context: ExecutionContext, inherited_inputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         
-        # 1. 提升依赖图构建职责到这里
         dependencies = await build_dependency_graph_async(
             nodes=[node.model_dump() for node in graph_def.nodes],
-            runtime_registry=self.registry # <--- 正确地传递 registry
+            runtime_registry=self.registry
         )
 
-        # 2. 将预先计算好的依赖图传递给 GraphRun 的构造函数
         run = GraphRun(context=context, graph_def=graph_def, dependencies=dependencies)
 
-        # 3. 后续逻辑保持不变
         task_queue = asyncio.Queue()
         
         if inherited_inputs:
@@ -374,6 +401,3 @@ class ExecutionEngine(SubGraphRunner):
                 error_message = f"Failed at step {i+1} ('{runtime_name}'): {type(e).__name__}: {e}"
                 return {"error": error_message, "failed_step": i, "runtime": runtime_name}
         return pipeline_state
-
-def get_engine(request: Request) -> ExecutionEngine:
-    return request.app.state.engine
