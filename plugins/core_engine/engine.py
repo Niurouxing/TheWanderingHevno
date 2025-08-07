@@ -189,6 +189,12 @@ class ExecutionEngine(SubGraphRunner):
         # 我们将在适配 core_api 阶段处理持久化
         
         await self.hook_manager.trigger(
+            "snapshot_committed", 
+            snapshot=new_snapshot,
+            container=self.container
+        )
+
+        await self.hook_manager.trigger(
             "engine_step_end",
             context=EngineStepEndContext(final_snapshot=new_snapshot)
         )

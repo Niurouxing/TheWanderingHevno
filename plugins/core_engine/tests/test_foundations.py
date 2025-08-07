@@ -76,7 +76,7 @@ class TestEnginePreExecutionChecks:
         with pytest.raises(ValueError, match="Cycle detected"):
             await engine.step(sandbox, {})
 
-    def test_invalid_graph_no_main_raises_error(self, invalid_graph_no_main: dict):
+    async def test_invalid_graph_no_main_raises_error(self, invalid_graph_no_main: dict):
         """【保持不变】测试缺少 'main' 图的 GraphCollection 在模型验证时会失败。"""
         with pytest.raises(ValueError, match="A 'main' graph must be defined"):
             GraphCollection.model_validate(invalid_graph_no_main)

@@ -1,4 +1,4 @@
-# tests/test_core_background_tasks.py
+# tests/test_core_background_tasks.py (已修复)
 
 import pytest
 import asyncio
@@ -16,74 +16,61 @@ from plugins.core_engine.contracts import (
     SnapshotStoreInterface,
     GraphCollection,
     ExecutionEngineInterface,
+    Sandbox # <--- 导入 Sandbox
 )
 
 from backend.container import Container
 from plugins.core_engine.engine import ExecutionEngine
 
-# pytest 标记，表示此文件中的所有测试都是异步的
+# pytest 标记
 pytestmark = pytest.mark.asyncio
 
 
 class TestBackgroundTaskManager:
-    """
-    对 BackgroundTaskManager 核心机制的单元测试。
-    """
+    """对 BackgroundTaskManager 核心机制的单元测试。"""
 
     async def test_submit_and_execute_task(self):
-        """
-        测试：能否成功提交并执行一个简单的后台任务。
-        """
+        # ... (这个测试类保持不变，因为它不依赖 fixture) ...
         task_completed_event = asyncio.Event()
         result_capture = []
     
-        # 类型提示使用接口是好的实践
         async def mock_task(container: ContainerInterface, a: int, b: int):
             result_capture.append(a + b)
             task_completed_event.set()
     
-        # 1. 准备
-        # 【修正】直接实例化具体的 Container 实现类
-        container = Container() 
-        
-        # 同样，直接从实现导入并实例化 BackgroundTaskManager
+        container = Container()
         from backend.core.tasks import BackgroundTaskManager
         task_manager = BackgroundTaskManager(container)
         task_manager.start()
 
-        # 2. 执行
         task_manager.submit_task(mock_task, 5, 10)
 
-        # 3.断言
         await asyncio.wait_for(task_completed_event.wait(), timeout=1.0)
         
         assert len(result_capture) == 1
         assert result_capture[0] == 15
 
-        # 4. 清理
         await task_manager.stop()
 
 
 class TestBackgroundTaskIntegration:
-    """
-    集成测试，验证从引擎事件到后台任务执行的完整流程。
-    """
+    """【已重构】集成测试，验证从引擎事件到后台任务执行的完整流程。"""
     
     @pytest.fixture
-    def test_components(self, test_engine: Tuple[ExecutionEngineInterface, ContainerInterface, HookManager]):
+    def test_components(self, test_engine_setup: Tuple[ExecutionEngineInterface, ContainerInterface, HookManager]):
         """
-        一个辅助 fixture，用于解包由 test_engine 返回的元组。
-        类型提示使用接口。
+        【已修复】辅助 fixture，依赖于正确的 `test_engine_setup` fixture。
         """
-        return test_engine
+        return test_engine_setup
 
     async def test_engine_step_triggers_background_task(
         self,
         test_components: Tuple[ExecutionEngineInterface, ContainerInterface, HookManager],
+        sandbox_factory: callable, # <--- 使用新的 sandbox_factory
         linear_collection: GraphCollection
     ):
         """
-        测试：执行一次引擎 step 是否能通过钩子触发一个后台任务。
+        【已重构】测试：执行一次引擎 step 是否能通过钩子触发一个后台任务。
         """
         engine, container, hook_manager = test_components
         
@@ -102,31 +89,40 @@ class TestBackgroundTaskIntegration:
 
         async def mock_snapshot_committed_hook(snapshot: StateSnapshot, container: ContainerInterface):
             task_manager: BackgroundTaskManagerInterface = container.resolve("task_manager")
+            # 钩子现在在一个新快照被提交后触发
+            # 快照是 StateSnapshot(frozen=True)，所以 snapshot.id 是安全的
             task_manager.submit_task(mock_summary_task, snapshot.id)
 
+        # 注册钩子实现
         hook_manager.add_implementation(
             "snapshot_committed",
             mock_snapshot_committed_hook,
             plugin_name="<test>"
         )
 
-        sandbox_id = uuid4()
-        initial_snapshot = StateSnapshot(
-            sandbox_id=sandbox_id,
+        # 1. Arrange: 使用 sandbox_factory 创建测试环境
+        sandbox = sandbox_factory(
             graph_collection=linear_collection,
+            initial_moment={"message": "start"}
         )
-        snapshot_store: SnapshotStoreInterface = container.resolve("snapshot_store")
-        snapshot_store.save(initial_snapshot)
+        initial_snapshot_id = sandbox.head_snapshot_id
 
-        new_snapshot = await engine.step(initial_snapshot, {"user_input": "start"})
+        # 2. Act: 执行一步
+        # engine.step 现在接收并返回 Sandbox 对象
+        updated_sandbox = await engine.step(sandbox, {"user_input": "continue"})
+        
+        new_snapshot_id = updated_sandbox.head_snapshot_id
 
-        assert new_snapshot is not None
-        assert new_snapshot.parent_snapshot_id == initial_snapshot.id
+        # 3. Assert: 验证引擎执行和后台任务
+        assert new_snapshot_id is not None
+        assert new_snapshot_id != initial_snapshot_id
 
+        # 等待后台任务完成
         await asyncio.wait_for(task_completed_event.wait(), timeout=2.0)
 
         assert len(result_capture) == 1
-        assert result_capture[0]["id"] == new_snapshot.id
-        assert result_capture[0]["parent_id"] == initial_snapshot.id
+        assert result_capture[0]["id"] == new_snapshot_id
+        assert result_capture[0]["parent_id"] == initial_snapshot_id
 
+        # 4. 清理
         hook_manager._hooks.pop("snapshot_committed", None)
