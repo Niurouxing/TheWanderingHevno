@@ -1,4 +1,4 @@
-# plugins/core_codex/invoke_runtime.py (已重构)
+# plugins/core_codex/invoke_runtime.py (已修复)
 
 import asyncio
 import logging
@@ -13,14 +13,51 @@ from plugins.core_engine.contracts import (
     ExecutionContext,
     MacroEvaluationServiceInterface
 )
-from .models import CodexCollection, ActivatedEntry, TriggerMode
+# 【修复】导入 Codex 模型，以便进行智能合并
+from .models import CodexCollection, ActivatedEntry, TriggerMode, Codex
 
 logger = logging.getLogger("hevno.runtime.codex")
 
 
+def _merge_codices(lore_codices: Dict[str, Any], moment_codices: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    一个更智能的合并函数，用于合并 Lore 和 Moment 中的 Codex。
+    - 它会合并同名 Codex 的条目列表。
+    - 如果条目 ID 相同，Moment 中的条目会覆盖 Lore 中的。
+    """
+    # 先深拷贝 lore 的数据作为基础，避免修改原始状态
+    from copy import deepcopy
+    merged_data = deepcopy(lore_codices)
+
+    for name, moment_codex_data in moment_codices.items():
+        if name not in merged_data:
+            # 如果 Lore 中没有这个 Codex，直接添加
+            merged_data[name] = deepcopy(moment_codex_data)
+        else:
+            # 如果 Lore 中有同名 Codex，进行条目级别的合并
+            lore_codex_data = merged_data[name]
+            
+            # 合并 config, moment 优先
+            lore_codex_data['config'] = {**lore_codex_data.get('config', {}), **moment_codex_data.get('config', {})}
+            
+            # 合并 entries, moment 优先
+            lore_entries = lore_codex_data.get('entries', [])
+            moment_entries = moment_codex_data.get('entries', [])
+            
+            # 使用字典来处理覆盖逻辑，以 entry id 为键
+            entries_map: Dict[str, Any] = {entry['id']: entry for entry in lore_entries}
+            for entry in moment_entries:
+                entries_map[entry['id']] = entry
+            
+            # 将合并后的条目转换回列表
+            lore_codex_data['entries'] = list(entries_map.values())
+    
+    return merged_data
+
+
 class InvokeRuntime(RuntimeInterface):
     """
-    codex.invoke 运行时的实现。
+    【已重构】codex.invoke 运行时的实现。
     它现在能从 Lore 和 Moment 两个作用域中合并知识库。
     """
     async def execute(
@@ -39,13 +76,11 @@ class InvokeRuntime(RuntimeInterface):
         debug_mode = config.get("debug", False)
         lock = context.shared.global_write_lock
         
-        # 1. 从 Lore 和 Moment 中分别获取 codex 数据
+
         lore_codices = context.shared.lore_state.get("codices", {})
         moment_codices = context.shared.moment_state.get("codices", {})
         
-        # 2. 合并两个作用域的知识库，Moment 中的同名 Codex 会覆盖 Lore 中的
-        #    这是新模型的关键实现点
-        unified_codex_data = {**lore_codices, **moment_codices}
+        unified_codex_data = _merge_codices(lore_codices, moment_codices)
         
         if not unified_codex_data:
             logger.warning("No codices found in lore_state or moment_state.")
@@ -55,7 +90,7 @@ class InvokeRuntime(RuntimeInterface):
             codex_collection = CodexCollection.model_validate(unified_codex_data).root
         except ValidationError as e:
             raise ValueError(f"Invalid codex structure after merging lore and moment: {e}")
-
+            
         initial_pool: List[ActivatedEntry] = []
         structural_eval_context = macro_service.build_context(context)
 
