@@ -1,6 +1,6 @@
 # plugins/core_llm/reporters.py
 from typing import Any
-from plugins.core_api.contracts import Reportable
+from plugins.core_diagnostics.contracts import Reportable
 from .registry import ProviderRegistry
 
 

@@ -1,0 +1,10 @@
+{
+    "id": "core_diagnostics",
+    "name": "core_diagnostics",
+    "version": "1.0.0",
+    "description": "Provides system-wide diagnostics and reporting capabilities via the Auditor service.",
+    "author": "Hevno Team",
+    "backend": {
+        "priority": 80
+    }
+}

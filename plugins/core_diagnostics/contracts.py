@@ -1,4 +1,4 @@
-# plugins/core_api/contracts.py (新文件)
+# plugins/core_diagnostics/contracts.py
 
 from __future__ import annotations
 from abc import ABC, abstractmethod

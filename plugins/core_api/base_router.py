@@ -3,10 +3,10 @@
 from typing import List, Dict 
 from fastapi import APIRouter, Depends
 
-# --- 导入修改 ---
 from backend.core.dependencies import Service
 from backend.core.contracts import HookManager
-from .contracts import AuditorInterface # 导入接口
+
+from plugins.core_diagnostics.contracts import AuditorInterface
 
 router = APIRouter(prefix="/api", tags=["System"])
 
@@ -19,8 +19,5 @@ async def get_system_report(auditor: AuditorInterface = Depends(Service("auditor
 async def get_backend_hooks_manifest(
     hook_manager: HookManager = Depends(Service("hook_manager"))
 ):
-    """
-    获取一个包含所有已在后端注册的钩子名称的列表。
-    供前端在启动时同步。
-    """
+    """获取一个包含所有已在后端注册的钩子名称的列表。"""
     return {"hooks": list(hook_manager._hooks.keys())}
