@@ -1,4 +1,4 @@
-// plugins/core_goliath/src/views/SandboxHomeView.jsx (Grid V2 API
+// plugins/core_goliath/src/views/SandboxHomeView.jsx
 import React, { useState, useEffect } from 'react';
 import Box from '@mui/material/Box';
 import Grid from '@mui/material/Grid';
@@ -41,6 +41,7 @@ export default function SandboxHomeView() {
             await updateSandboxIcon(selectedSandbox.id, file);
         } catch (error) {
             console.error("Failed to update icon:", error);
+            // 可以在这里添加一个 toast 通知用户失败
         }
     };
 
@@ -63,7 +64,7 @@ export default function SandboxHomeView() {
         if (!selectedSandbox) return;
         const link = document.createElement('a');
         link.href = `/api/sandboxes/${selectedSandbox.id}/export`;
-        link.setAttribute('download', ''); 
+        link.setAttribute('download', `${selectedSandbox.name || 'sandbox'}.png`); 
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -72,11 +73,12 @@ export default function SandboxHomeView() {
     const handleDelete = async () => {
         if (!selectedSandbox) return;
         await deleteSandbox(selectedSandbox.id);
-        setDeleteConfirmOpen(false);
+        setDeleteConfirmOpen(false); // 对话框会在沙盒被删除后自动关闭
     };
 
     if (!selectedSandbox) {
-        return null;
+        // 通常不会在这里渲染，因为 Dashboard 会显示 WelcomeView
+        return null; 
     }
 
     return (
@@ -85,9 +87,7 @@ export default function SandboxHomeView() {
                 Sandbox Home: {selectedSandbox.name}
             </Typography>
             
-            {/* 关键修正：Grid V2 用法 */}
             <Grid container spacing={3}>
-                {/* 不再需要 'item' prop */}
                 <Grid xs={12} md={4}>
                     <Card>
                         <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -161,7 +161,7 @@ export default function SandboxHomeView() {
                     </DialogContentText>
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={() => setDeleteConfirmOpen(false)}>Cancel</Button>
+                    <Button onClick={() => setDeleteConfirmOpen(false)} disabled={loading}>Cancel</Button>
                     <Button onClick={handleDelete} color="error" autoFocus>
                         {loading ? <CircularProgress size={24} color="inherit" /> : 'Delete'}
                     </Button>

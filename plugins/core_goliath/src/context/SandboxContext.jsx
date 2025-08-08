@@ -2,9 +2,8 @@
 
 import React, { createContext, useState, useContext, useCallback } from 'react';
 
-// 1. 更新 Context 的默认值以反映新的 API 和方法
 const SandboxContext = createContext({
-    sandboxes: [], // 将存储 SandboxListItem 对象
+    sandboxes: [],
     selectedSandbox: null,
     activeView: 'Home',
     loading: false,
@@ -40,17 +39,18 @@ export const SandboxProvider = ({ children }) => {
             setLoading(false);
         }
     }, []);
-
-    // ✨ 关键修复：把 selectSandbox 的定义移到前面
+    
     const selectSandbox = useCallback((sandbox) => {
         setSelectedSandbox(sandbox);
         if (sandbox) {
             setActiveView('Home');
             console.log(`[SandboxContext] Sandbox selected: ${sandbox.name} (${sandbox.id})`);
         } else {
+             // 当没有沙盒被选择时，回到欢迎界面
+            setActiveView('Welcome');
             console.log(`[SandboxContext] Sandbox deselected.`);
         }
-    }, []); // setActiveView 通常不需要作为依赖，因为它是 setState 函数
+    }, []);
 
     const importSandbox = useCallback(async (file) => {
         setLoading(true);
@@ -58,46 +58,47 @@ export const SandboxProvider = ({ children }) => {
         formData.append('file', file);
 
         try {
-            const response = await fetch('/api/sandboxes/import', {
+            // ==========================================================
+            // 关键修复 #1: API端点应为 /api/sandboxes:import，使用冒号
+            // ==========================================================
+            const response = await fetch('/api/sandboxes:import', {
                 method: 'POST',
                 body: formData,
             });
 
             if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || 'Failed to import sandbox');
+                const errorData = await response.json().catch(() => ({ detail: 'Failed to import sandbox' }));
+                throw new Error(errorData.detail || `Server responded with ${response.status}`);
             }
-            const importedSandboxStub = await response.json();
             
-            // 刷新列表
-            await fetchSandboxes();
+            const importedSandbox = await response.json();
             
-            // 使用函数式更新来安全地从最新的 state 中查找并选择
-            setSandboxes(currentSandboxes => {
-                const newSandboxInList = currentSandboxes.find(s => s.id === importedSandboxStub.id);
-                if (newSandboxInList) {
-                    selectSandbox(newSandboxInList);
-                } else {
-                    // 如果在列表中找不到（不太可能发生，但作为防御性编程），取消选择以避免不一致的状态
-                    selectSandbox(null);
-                }
-                return currentSandboxes; // 返回未修改的列表
-            });
+            // ====================================================================
+            // 关键修复 #2: 优化选择逻辑，直接在此处获取新列表以避免竞态条件
+            // ====================================================================
+            // 重新获取完整的沙盒列表
+            const listResponse = await fetch('/api/sandboxes');
+            const newSandboxesList = await listResponse.json();
+            setSandboxes(newSandboxesList); // 更新全局状态
+
+            // 从刚刚获取的新列表中找到我们导入的那个
+            const newSandboxInList = newSandboxesList.find(s => s.id === importedSandbox.id);
+            if (newSandboxInList) {
+                selectSandbox(newSandboxInList); // 设为当前选中项
+            } else {
+                // 如果找不到（理论上不应该发生），则刷新列表并取消选择
+                selectSandbox(null);
+            }
 
         } catch (error) {
             console.error(error);
-            throw error;
+            throw error; // 抛出错误，让UI组件可以捕获并显示
         } finally {
             setLoading(false);
         }
-    }, [fetchSandboxes, selectSandbox]);// 添加 selectSandbox 到依赖数组
+    }, [selectSandbox]); // 依赖 selectSandbox，因为我们在函数内部调用了它
 
 
-    /**
-     * 更新指定沙盒的图标。
-     * @param {string} sandboxId - 沙盒的 ID。
-     * @param {File} file - 用户选择的新 PNG 文件。
-     */
     const updateSandboxIcon = useCallback(async (sandboxId, file) => {
         setLoading(true);
         const formData = new FormData();
@@ -109,11 +110,10 @@ export const SandboxProvider = ({ children }) => {
                 body: formData,
             });
             if (!response.ok) {
-                 const errorData = await response.json();
-                throw new Error(errorData.detail || 'Failed to update icon');
+                 const errorData = await response.json().catch(() => ({ detail: 'Failed to update icon' }));
+                throw new Error(errorData.detail);
             }
             console.log(`[SandboxContext] Icon for sandbox ${sandboxId} updated.`);
-            // 关键：必须重新获取列表以获得新的带版本号的 icon_url
             await fetchSandboxes();
         } catch (error) {
             console.error(error);
@@ -123,28 +123,19 @@ export const SandboxProvider = ({ children }) => {
         }
     }, [fetchSandboxes]);
     
-    /**
-     * 更新沙盒名称。
-     * (假设后端有 PUT /api/sandboxes/{id} 端点)
-     * @param {string} sandboxId 
-     * @param {string} newName 
-     */
     const updateSandboxName = useCallback(async (sandboxId, newName) => {
         setLoading(true);
         try {
-            // 关键修正：使用 PATCH 方法，并确保 URL 是正确的根相对路径
             const response = await fetch(`/api/sandboxes/${sandboxId}`, {
-                method: 'PATCH', // 使用 PATCH 更符合语义
+                method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: newName }),
             });
              if (!response.ok) {
-                // 后端可能会返回更详细的错误信息
                 const errorData = await response.json().catch(() => ({ detail: response.statusText }));
                 throw new Error(errorData.detail || 'Failed to update name');
             }
             console.log(`[SandboxContext] Name for sandbox ${sandboxId} updated.`);
-            // 乐观更新：在前端直接修改状态，避免重新请求列表
             setSandboxes(prev => 
                 prev.map(s => s.id === sandboxId ? { ...s, name: newName } : s)
             );
@@ -161,11 +152,6 @@ export const SandboxProvider = ({ children }) => {
 
 
 
-    /**
-     * 删除一个沙盒。
-     * (假设后端有 DELETE /api/sandboxes/{id} 端点)
-     * @param {string} sandboxId 
-     */
     const deleteSandbox = useCallback(async (sandboxId) => {
         setLoading(true);
         try {
@@ -173,25 +159,23 @@ export const SandboxProvider = ({ children }) => {
                 method: 'DELETE',
             });
              if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || 'Failed to delete sandbox');
+                const errorData = await response.json().catch(() => ({ detail: 'Failed to delete sandbox' }));
+                throw new Error(errorData.detail);
             }
             console.log(`[SandboxContext] Sandbox ${sandboxId} deleted.`);
-            // 如果删除的是当前选中的沙盒，则取消选择
             if (selectedSandbox?.id === sandboxId) {
-                setSelectedSandbox(null);
+                selectSandbox(null);
             }
-            await fetchSandboxes(); // 重新获取列表
+            await fetchSandboxes();
         } catch (error) {
             console.error(error);
             throw error;
         } finally {
             setLoading(false);
         }
-    }, [selectedSandbox, fetchSandboxes]);
+    }, [selectedSandbox, fetchSandboxes, selectSandbox]);
 
 
-    // 3. 将所有新的和更新后的方法打包到 value 对象中
     const value = {
         sandboxes,
         selectedSandbox,
@@ -213,7 +197,6 @@ export const SandboxProvider = ({ children }) => {
     );
 };
 
-// 自定义 Hook 保持不变
 export const useSandbox = () => {
     const context = useContext(SandboxContext);
     if (context === undefined) {

@@ -12,18 +12,15 @@ import Divider from '@mui/material/Divider';
 import { styled } from '@mui/material/styles';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import DevicesRoundedIcon from '@mui/icons-material/DevicesRounded';
-import ConstructionRoundedIcon from '@mui/icons-material/ConstructionRounded';
 
 import { useSandbox } from '../context/SandboxContext';
 
-// Avatar 和 ListItemAvatar 样式保持不变
 const Avatar = styled(MuiAvatar)(({ theme }) => ({
   width: 28,
   height: 28,
   backgroundColor: (theme.vars || theme).palette.background.paper,
   color: (theme.vars || theme).palette.text.secondary,
   border: `1px solid ${(theme.vars || theme).palette.divider}`,
-  // 1. 确保图片填充整个Avatar，而不是被裁剪
   '& .MuiAvatar-img': {
     objectFit: 'cover',
   },
@@ -35,8 +32,8 @@ const ListItemAvatar = styled(MuiListItemAvatar)({
 });
 
 const DEFAULT_DISPLAY_ITEM = {
-    name: 'Sitemark-web',
-    icon_url: null, // 默认项没有icon_url
+    name: 'Select Sandbox',
+    icon_url: null,
 };
 
 export default function SelectContent() {
@@ -64,7 +61,6 @@ export default function SelectContent() {
   };
   
   const handleCreateClick = () => {
-    console.log('[SelectContent] "Add product" clicked, triggering import dialog...');
     const hookManager = window.Hevno.services.get('hookManager');
     if (hookManager) {
         hookManager.trigger('ui.show.importSandboxDialog');
@@ -82,7 +78,7 @@ export default function SelectContent() {
       onChange={handleChange}
       disabled={loading}
       displayEmpty 
-      inputProps={{ 'aria-label': 'Select company' }}
+      inputProps={{ 'aria-label': 'Select Sandbox' }}
       fullWidth
       sx={{
         maxHeight: 56,
@@ -90,73 +86,51 @@ export default function SelectContent() {
         [`& .${selectClasses.select}`]: {
           display: 'flex',
           alignItems: 'center',
-          gap: '2px',
+          gap: '12px',
           pl: 1,
         },
       }}
-      // 2. 修改 renderValue 以显示图标
       renderValue={() => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <>
           <ListItemAvatar sx={{ minWidth: 0 }}>
-            {/* Avatar现在会尝试加载icon_url，如果失败则显示默认图标 */}
             <Avatar src={currentDisplayItem.icon_url}>
               <DevicesRoundedIcon sx={{ fontSize: '1rem' }} />
             </Avatar>
           </ListItemAvatar>
           <ListItemText 
               primary={loading ? 'Loading...' : currentDisplayItem.name}
-              secondary="Web app"
+              secondary={currentSelectionId ? "Selected" : "No sandbox selected"}
               primaryTypographyProps={{ style: { textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}}
           />
-        </div>
+        </>
       )}
     >
-      <ListSubheader sx={{ pt: 0 }}>Production</ListSubheader>
+      <ListSubheader sx={{ pt: 0 }}>Your Sandboxes</ListSubheader>
       
-      {/* 3. 修改 MenuItem 列表以显示图标 */}
-      {sandboxes.length > 0 
-        ? (
-            sandboxes.map((sandbox) => (
-              <MenuItem key={sandbox.id} value={sandbox.id}>
-                  <ListItemAvatar>
-                    <Avatar src={sandbox.icon_url}>
-                      {/* 如果 sandbox.icon_url 无效，则显示此默认图标 */}
-                      <DevicesRoundedIcon sx={{ fontSize: '1rem' }} />
-                    </Avatar>
-                  </ListItemAvatar>
-                  <ListItemText primary={sandbox.name} secondary="Web app" />
-              </MenuItem>
-            ))
-        ) 
-        : (
-            <MenuItem key="none-item" value="" disabled>
-                <ListItemAvatar>
-                  <Avatar> {/* 无 src，总是显示默认图标 */}
-                    <DevicesRoundedIcon sx={{ fontSize: '1rem' }} />
-                  </Avatar>
-                </ListItemAvatar>
-                <ListItemText primary={DEFAULT_DISPLAY_ITEM.name} secondary="Web app" />
-            </MenuItem>
-        )
-      }
+      {sandboxes.length > 0 ? (
+        sandboxes.map((sandbox) => (
+          <MenuItem key={sandbox.id} value={sandbox.id}>
+              <ListItemAvatar>
+                <Avatar src={sandbox.icon_url}>
+                  <DevicesRoundedIcon sx={{ fontSize: '1rem' }} />
+                </Avatar>
+              </ListItemAvatar>
+              <ListItemText primary={sandbox.name} />
+          </MenuItem>
+        ))
+      ) : (
+        <MenuItem disabled>
+            <ListItemText primary="No sandboxes found." sx={{ fontStyle: 'italic' }}/>
+        </MenuItem>
+      )}
 
-      <ListSubheader>Development</ListSubheader>
-      <MenuItem value="dev_placeholder" disabled>
-        <ListItemAvatar>
-          <Avatar> {/* 无 src */}
-            <ConstructionRoundedIcon sx={{ fontSize: '1rem' }} />
-          </Avatar>
-        </ListItemAvatar>
-        <ListItemText primary="Sitemark-Admin" secondary="Web app" />
-      </MenuItem>
-      
-      <Divider sx={{ mx: -1 }} />
+      <Divider sx={{ mx: -1, my: 1 }} />
 
       <MenuItem value="create_new" onClick={handleCreateClick}>
         <ListItemIcon>
           <AddRoundedIcon />
         </ListItemIcon>
-        <ListItemText primary="Add product" />
+        <ListItemText primary="Import from PNG..." />
       </MenuItem>
     </Select>
   );
