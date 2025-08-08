@@ -1,0 +1,106 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hevno.com/schemas/lore.schema.json",
+  "title": "Lore",
+  "description": "The evolutionary knowledge of the sandbox, containing all possible graphs and codices.",
+  "type": "object",
+  "properties": {
+    "graphs": { "$ref": "#/$defs/graphsContainer" },
+    "codices": { "$ref": "#/$defs/codicesContainer" }
+  },
+  "required": ["graphs", "codices"],
+
+  "$defs": {
+    "graphsContainer": {
+      "title": "Graphs",
+      "description": "A collection of all executable graphs in the world.",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/graphDefinition" },
+      "ui:field": "CollapsibleObjectField",
+      "ui:options": { "startCollapsed": true }
+    },
+    "graphDefinition": {
+      "title": "Graph",
+      "description": "A sequence of nodes that define a specific logic or behavior.",
+      "type": "object",
+      "properties": {
+        "description": { "title": "Graph Description", "type": "string", "ui:widget": "textarea" },
+        "nodes": {
+          "title": "Nodes",
+          "description": "The list of executable nodes in this graph.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/node" }
+        }
+      },
+      "required": ["nodes"]
+    },
+    "node": {
+      "title": "Node",
+      "description": "A single step in a graph's execution.",
+      "type": "object",
+      "properties": {
+        "id": { "title": "Node ID", "type": "string", "readOnly": true, "ui:widget": "hidden" },
+        "type": { "title": "Node Type", "type": "string", "enum": ["LLM", "Code", "If", "Switch"] },
+        "enabled": { "title": "Enabled", "type": "boolean", "default": true }
+      },
+      "required": ["id", "type", "enabled"],
+      "oneOf": [
+        { "properties": { "type": { "const": "LLM" }, "config": { "$ref": "#/$defs/configLlm" } } },
+        { "properties": { "type": { "const": "Code" }, "config": { "$ref": "#/$defs/configCode" } } },
+        { "properties": { "type": { "const": "If" }, "config": { "$ref": "#/$defs/configIf" } } }
+      ]
+    },
+    "configLlm": {
+      "title": "LLM Configuration",
+      "type": "object",
+      "properties": {
+        "provider": { "title": "LLM Provider", "type": "string", "enum": ["gemini", "openai", "claude"] },
+        "prompt": { "title": "System Prompt", "type": "string", "ui:widget": "textarea", "ui:options": { "rows": 10 } },
+        "temperature": { "title": "Temperature", "type": "number", "minimum": 0, "maximum": 2, "default": 0.7, "ui:widget": "range" }
+      },
+      "required": ["provider", "prompt"]
+    },
+    "configCode": {
+      "title": "Code Configuration",
+      "type": "object",
+      "properties": {
+        "language": { "title": "Language", "type": "string", "const": "python", "readOnly": true },
+        "code": { "title": "Python Code", "type": "string", "ui:widget": "CodeEditor", "ui:options": { "language": "python" } }
+      },
+      "required": ["code"]
+    },
+    "configIf": {
+      "title": "If Condition",
+      "type": "object",
+      "properties": { "condition": { "title": "JMESPath Condition", "description": "A JMESPath expression that evaluates to true or false.", "type": "string" } },
+      "required": ["condition"]
+    },
+    "codicesContainer": {
+      "title": "Codices",
+      "description": "A collection of all knowledge bases in the world.",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/codexDefinition" },
+      "ui:field": "CollapsibleObjectField",
+      "ui:options": { "startCollapsed": true }
+    },
+    "codexDefinition": {
+      "title": "Codex",
+      "type": "object",
+      "properties": {
+        "description": { "title": "Codex Description", "type": "string", "ui:widget": "textarea" },
+        "entries": { "title": "Entries", "type": "array", "items": { "$ref": "#/$defs/codexEntry" } }
+      }
+    },
+    "codexEntry": {
+      "title": "Codex Entry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "readOnly": true, "ui:widget": "hidden" },
+        "content": { "title": "Content", "description": "The text content of this knowledge entry.", "type": "string", "ui:widget": "textarea" },
+        "enabled": { "title": "Enabled", "type": "boolean", "default": true },
+        "metadata": { "title": "Metadata", "type": "object", "description": "Custom key-value pairs for this entry." }
+      },
+      "required": ["id", "content", "enabled"]
+    }
+  }
+}

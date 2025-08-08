@@ -22,7 +22,11 @@
     "dayjs": "latest",
     "prop-types": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "@rjsf/core": "^5.18.1",
+    "@rjsf/mui": "^5.18.1",
+    "@rjsf/validator-ajv8": "^5.18.1",
+    "@monaco-editor/react": "^4.6.1"
   },
   "devDependencies": {
     "@types/react": "latest",
