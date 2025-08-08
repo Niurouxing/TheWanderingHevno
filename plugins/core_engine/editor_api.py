@@ -41,14 +41,13 @@ def get_sandbox(
         raise HTTPException(status_code=404, detail=f"Sandbox with ID '{sandbox_id}' not found.")
     return sandbox
 
-# --- 作用域 API ---
-@editor_router.get("/{scope}", response_model=Dict[str, Any], summary="Get the full content of a scope")
-async def get_scope_content(
+# --- 辅助函数：获取作用域内容 ---
+def get_scope_content_data(
     scope: Scope,
-    sandbox: Sandbox = Depends(get_sandbox),
-    snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
-):
-    """获取指定作用域的完整内容。"""
+    sandbox: Sandbox,
+    snapshot_store: SnapshotStoreInterface
+) -> Dict[str, Any]:
+    """内部辅助函数，用于获取指定作用域的字典数据。"""
     if scope == "definition":
         return sandbox.definition
     if scope == "lore":
@@ -60,6 +59,19 @@ async def get_scope_content(
         if not head_snapshot:
             raise HTTPException(status_code=404, detail=f"Head snapshot for sandbox '{sandbox.id}' not found.")
         return head_snapshot.moment
+    # 这行理论上不会被达到，因为 Scope 类型限制了输入
+    raise HTTPException(status_code=400, detail=f"Invalid scope '{scope}'")
+
+
+# --- 作用域 API ---
+@editor_router.get("/{scope}", response_model=Dict[str, Any], summary="Get the full content of a scope")
+async def get_scope_content(
+    scope: Scope,
+    sandbox: Sandbox = Depends(get_sandbox),
+    snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
+):
+    """获取指定作用域的完整内容。"""
+    return get_scope_content_data(scope, sandbox, snapshot_store)
 
 @editor_router.put("/{scope}", response_model=Sandbox, summary="Completely replace the content of a scope")
 async def replace_scope_content(
@@ -91,14 +103,17 @@ async def patch_scope_content(
     """使用 **JSON-Patch (RFC 6902)** 对作用域进行原子性的局部修改。"""
     try:
         if scope == "definition":
-            def patch_definition(s: Sandbox): jsonpatch.apply_patch(s.definition, patch, inplace=True)
+            # 【修复 1】 inplace -> in_place
+            def patch_definition(s: Sandbox): jsonpatch.apply_patch(s.definition, patch, in_place=True)
             return editor_utils.perform_sandbox_update(sandbox, patch_definition)
         if scope == "lore":
-            def patch_lore(s: Sandbox): jsonpatch.apply_patch(s.lore, patch, inplace=True)
+            # 【修复 1】 inplace -> in_place
+            def patch_lore(s: Sandbox): jsonpatch.apply_patch(s.lore, patch, in_place=True)
             return editor_utils.perform_sandbox_update(sandbox, patch_lore)
         if scope == "moment":
             def apply_patch_to_moment(m: Dict[str, Any]) -> Dict[str, Any]:
-                jsonpatch.apply_patch(m, patch, inplace=True)
+                # 【修复 1】 inplace -> in_place
+                jsonpatch.apply_patch(m, patch, in_place=True)
                 return m
             return editor_utils.perform_live_moment_update(sandbox, snapshot_store, apply_patch_to_moment)
     except jsonpatch.JsonPatchException as e:
@@ -119,13 +134,24 @@ async def list_graphs(
     snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
 ):
     """获取指定作用域下的所有图定义。"""
-    if scope == "definition": return sandbox.definition.get("graphs", {})
-    if scope == "lore": return sandbox.lore.get("graphs", {})
-    if scope == "moment":
-        if not sandbox.head_snapshot_id: return {}
-        head_snapshot = snapshot_store.get(sandbox.head_snapshot_id)
-        if not head_snapshot: return {}
-        return dict(head_snapshot.moment).get("graphs", {})
+    scope_data = get_scope_content_data(scope, sandbox, snapshot_store)
+    return scope_data.get("graphs", {})
+
+# 【修复 2】新增 GET /{scope}/graphs/{graph_name} 端点
+@editor_router.get("/{scope}/graphs/{graph_name}", response_model=GraphDefinition, summary="Get a single graph by name")
+async def get_graph(
+    scope: Scope,
+    graph_name: str,
+    sandbox: Sandbox = Depends(get_sandbox),
+    snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
+):
+    """通过名称获取单个图的定义。"""
+    scope_data = get_scope_content_data(scope, sandbox, snapshot_store)
+    graphs = scope_data.get("graphs", {})
+    graph_def = graphs.get(graph_name)
+    if graph_def is None:
+        raise HTTPException(status_code=404, detail=f"Graph '{graph_name}' not found in scope '{scope}'.")
+    return graph_def
 
 @editor_router.put("/{scope}/graphs/{graph_name}", response_model=Sandbox, summary="Create or update a graph")
 async def upsert_graph(
@@ -145,6 +171,7 @@ async def upsert_graph(
     if scope == "moment":
         return editor_utils.perform_live_moment_update(sandbox, snapshot_store, update_logic)
     else:
+        # 这里需要直接修改 sandbox 对象，所以 lambda s: ... 是正确的
         editor_utils.perform_sandbox_update(sandbox, lambda s: update_logic(getattr(s, scope)))
         return sandbox
 
@@ -188,7 +215,7 @@ async def add_node(
     def update_logic(s_scope: Dict[str, Any]):
         graph = s_scope.get("graphs", {}).get(graph_name)
         if not graph:
-            raise HTTPException(status_code=404, detail=f"Graph '{graph_name}' not found.")
+            raise HTTPException(status_code=404, detail=f"Graph '{graph_name}' not found in scope '{scope}'.")
         
         nodes = graph.setdefault("nodes", [])
         if any(n.get('id') == node.id for n in nodes):
@@ -218,7 +245,11 @@ async def update_node(
         raise HTTPException(status_code=400, detail="Node ID in path does not match Node ID in body.")
 
     def update_logic(s_scope: Dict[str, Any]):
-        nodes = s_scope.get("graphs", {}).get(graph_name, {}).get("nodes", [])
+        graph = s_scope.get("graphs", {}).get(graph_name)
+        if not graph:
+            raise HTTPException(status_code=404, detail=f"Graph '{graph_name}' not found in scope '{scope}'.")
+
+        nodes = graph.get("nodes", [])
         for i, n in enumerate(nodes):
             if n.get('id') == node_id:
                 nodes[i] = node_data.model_dump(exclude_unset=True)
@@ -242,7 +273,11 @@ async def delete_node(
 ):
     """从图中删除一个节点。"""
     def update_logic(s_scope: Dict[str, Any]):
-        nodes = s_scope.get("graphs", {}).get(graph_name, {}).get("nodes", [])
+        graph = s_scope.get("graphs", {}).get(graph_name)
+        if not graph:
+            raise HTTPException(status_code=404, detail=f"Graph '{graph_name}' not found in scope '{scope}'.")
+            
+        nodes = graph.get("nodes", [])
         node_to_remove_idx = next((i for i, n in enumerate(nodes) if n.get('id') == node_id), None)
         if node_to_remove_idx is not None:
             del nodes[node_to_remove_idx]
@@ -297,7 +332,10 @@ async def add_instruction(
 ):
     """在节点的指令列表末尾添加一个新指令。"""
     def update_logic(s_scope: Dict[str, Any]):
-        node = next((n for n in s_scope.get("graphs",{}).get(graph_name,{}).get("nodes",[]) if n.get("id") == node_id), None)
+        graph = s_scope.get("graphs", {}).get(graph_name)
+        if not graph:
+            raise HTTPException(status_code=404, detail=f"Graph '{graph_name}' not found in scope '{scope}'.")
+        node = next((n for n in graph.get("nodes",[]) if n.get("id") == node_id), None)
         if not node: raise HTTPException(status_code=404, detail=f"Node '{node_id}' not found.")
         node.setdefault("run", []).append(instruction.model_dump(exclude_unset=True))
         return s_scope
@@ -321,7 +359,10 @@ async def update_instruction(
 ):
     """更新指定索引的指令。"""
     def update_logic(s_scope: Dict[str, Any]):
-        node = next((n for n in s_scope.get("graphs",{}).get(graph_name,{}).get("nodes",[]) if n.get("id") == node_id), None)
+        graph = s_scope.get("graphs", {}).get(graph_name)
+        if not graph:
+            raise HTTPException(status_code=404, detail=f"Graph '{graph_name}' not found in scope '{scope}'.")
+        node = next((n for n in graph.get("nodes",[]) if n.get("id") == node_id), None)
         if not node: raise HTTPException(status_code=404, detail=f"Node '{node_id}' not found.")
         runtimes = node.get("run", [])
         if not 0 <= runtime_index < len(runtimes): raise HTTPException(status_code=404, detail=f"Runtime index {runtime_index} out of bounds.")
@@ -346,7 +387,10 @@ async def delete_instruction(
 ):
     """删除指定索引的指令。"""
     def update_logic(s_scope: Dict[str, Any]):
-        node = next((n for n in s_scope.get("graphs",{}).get(graph_name,{}).get("nodes",[]) if n.get("id") == node_id), None)
+        graph = s_scope.get("graphs", {}).get(graph_name)
+        if not graph:
+            raise HTTPException(status_code=404, detail=f"Graph '{graph_name}' not found in scope '{scope}'.")
+        node = next((n for n in graph.get("nodes",[]) if n.get("id") == node_id), None)
         if not node: raise HTTPException(status_code=404, detail=f"Node '{node_id}' not found.")
         runtimes = node.get("run", [])
         if not 0 <= runtime_index < len(runtimes): raise HTTPException(status_code=404, detail=f"Runtime index {runtime_index} out of bounds.")
@@ -371,7 +415,10 @@ async def replace_all_instructions(
 ):
     """完整替换一个节点的所有指令，用于重排序或批量修改。"""
     def update_logic(s_scope: Dict[str, Any]):
-        node = next((n for n in s_scope.get("graphs",{}).get(graph_name,{}).get("nodes",[]) if n.get("id") == node_id), None)
+        graph = s_scope.get("graphs", {}).get(graph_name)
+        if not graph:
+            raise HTTPException(status_code=404, detail=f"Graph '{graph_name}' not found in scope '{scope}'.")
+        node = next((n for n in graph.get("nodes",[]) if n.get("id") == node_id), None)
         if not node: raise HTTPException(status_code=404, detail=f"Node '{node_id}' not found.")
         node["run"] = [instr.model_dump(exclude_unset=True) for instr in instructions]
         return s_scope

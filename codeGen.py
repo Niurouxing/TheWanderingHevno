@@ -116,10 +116,10 @@ def main(paths, output_file="code_collection.md"):
 
 if __name__ == "__main__":
     paths = [
-        # "./backend", 
-        # "./plugins/core_engine",
-        # "./plugins/core_api",
-        "./plugins/core_codex",
+        "./backend", 
+        "./plugins/core_engine",
+        "./plugins/core_api",
+        # "./plugins/core_codex",
         # "./plugins/diagnostics",
         # "./plugins/core_memoria",
         # "./plugins/core_remote_hooks",
@@ -130,8 +130,8 @@ if __name__ == "__main__":
         # "./hevno.json",
         # "./cli.py",
         # "./frontend",
-        # "./tests", 
-        # "./conftest.py",
+        "./tests", 
+        "./conftest.py",
         # "./plugins/core_memoria",
         # "./",
     ]
