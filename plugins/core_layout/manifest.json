@@ -1,13 +1,13 @@
 {
     "id": "core_layout",
-    "name": "Application Host & Minimalist Layout",
-    "version": "1.2.0",
-    "description": "Initializes application-layer services (Commands, Layout) and provides a single, primary mounting point for the main UI plugin (e.g., core_goliath).",
+    "name": "React Application Host",
+    "version": "2.0.0",
+    "description": "Provides the main application shell using React, including layout, theme, and a host for other page plugins.",
     "author": "Hevno Team",
     "frontend": {
-        "type": "layout",
+        "type": "host",
         "priority": 100,
         "entryPoint": "dist/main.js",
-        "srcEntryPoint": "src/main.js" 
+        "srcEntryPoint": "src/main.jsx" 
     }
 }

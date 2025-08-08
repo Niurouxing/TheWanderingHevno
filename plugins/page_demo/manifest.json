@@ -1,0 +1,26 @@
+{
+    "id": "page_demo",
+    "name": "Demo Page Plugin",
+    "version": "1.0.0",
+    "description": "Provides a simple page component to be hosted by core_layout.",
+    "author": "Hevno Team",
+    "frontend": {
+        "type": "page-component",
+        "priority": 200,
+        "entryPoint": "dist/main.js",
+        "srcEntryPoint": "src/DemoPage.jsx",
+        "contributions": {
+            "pageComponents": [
+                {
+                    "id": "page_demo.main_view",
+                    "componentExportName": "DemoPage",
+                    "menu": {
+                        "path": "/demo",
+                        "title": "Demo Page",
+                        "icon": "Science"
+                    }
+                }
+            ]
+        }
+    }
+}

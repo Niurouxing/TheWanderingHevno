@@ -1,12 +1,21 @@
 {
   "name": "hevno-plugin-core-layout",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "vite build"
   },
+  "dependencies": {
+    "@emotion/react": "latest",
+    "@emotion/styled": "latest",
+    "@mui/icons-material": "latest",
+    "@mui/material": "latest",
+    "react": "latest",
+    "react-dom": "latest"
+  },
   "devDependencies": {
-    "vite": "^5.2.11"
+    "@vitejs/plugin-react": "latest",
+    "vite": "latest"
   }
 }
