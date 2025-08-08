@@ -20,7 +20,7 @@ def collect_code_files(paths, output_file_path):
         'node_modules', '.git', '__pycache__', 'dist', 'build', 
         '.vscode', '.idea', 'venv', '.env', 'target', 'out', '.venv',
         'bower_components', 'coverage', '.cache', '.pytest_cache'
-        , 'tests', "shared-theme"
+        # , 'tests', "shared-theme"
     }
     excluded_files = {
         'package-lock.json', 'yarn.lock', '.DS_Store', 'pnpm-lock.yaml',
@@ -116,18 +116,19 @@ def main(paths, output_file="code_collection.md"):
 
 if __name__ == "__main__":
     paths = [
-        "./backend", 
-        "./plugins/core_engine",
-        "./plugins/core_api",
+        # "./backend", 
+        # "./plugins/core_engine",
+        # "./plugins/core_api",
         "./plugins/core_codex",
-        "./plugins/core_memoria",
-        "./plugins/core_remote_hooks",
-        "./plugins/core_websocket",
-        "./plugins/core_llm",
-        "./plugins/core_logging",
-        "./plugins/core_persistence",
-        "./hevno.json",
-        "./cli.py",
+        # "./plugins/diagnostics",
+        # "./plugins/core_memoria",
+        # "./plugins/core_remote_hooks",
+        # "./plugins/core_websocket",
+        # "./plugins/core_llm",
+        # "./plugins/core_logging",
+        # "./plugins/core_persistence",
+        # "./hevno.json",
+        # "./cli.py",
         # "./frontend",
         # "./tests", 
         # "./conftest.py",

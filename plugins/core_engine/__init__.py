@@ -11,12 +11,13 @@ from .state import SnapshotStore
 from .contracts import RuntimeInterface
 from .evaluation_service import MacroEvaluationService
 
-# --- 从新的运行时模块和API模块导入 ---
+
 from .runtimes.io_runtimes import InputRuntime, LogRuntime
 from .runtimes.data_runtimes import FormatRuntime, ParseRuntime, RegexRuntime
 from .runtimes.flow_runtimes import ExecuteRuntime, CallRuntime, MapRuntime
 from .api import router as sandbox_router
-
+from .editor_api import editor_router
+from .editor_utils import EditorUtilsService
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,9 @@ def _create_execution_engine(container: Container) -> ExecutionEngine:
         hook_manager=container.resolve("hook_manager")
     )
 
+def _create_editor_utils_service() -> EditorUtilsService:
+    return EditorUtilsService()
+
 # --- 钩子实现 ---
 async def populate_runtime_registry(container: Container):
     logger.debug("Async task: Populating runtime registry from other plugins...")
@@ -55,7 +59,8 @@ async def populate_runtime_registry(container: Container):
 async def provide_api_router(routers: List[APIRouter]) -> List[APIRouter]:
     """钩子实现：将本插件的路由添加到收集中。"""
     routers.append(sandbox_router)
-    logger.debug("Provided sandbox API router to the application.")
+    routers.append(editor_router)
+    logger.debug("Provided sandbox runner and editor API routers to the application.")
     return routers
 
 # --- 主注册函数 ---
@@ -67,6 +72,7 @@ def register_plugin(container: Container, hook_manager: HookManager):
     container.register("runtime_registry", _create_runtime_registry, singleton=True)
     container.register("execution_engine", _create_execution_engine, singleton=True)
     container.register("macro_evaluation_service", lambda: MacroEvaluationService(), singleton=True)
+    container.register("editor_utils_service", _create_editor_utils_service, singleton=True)
     
     hook_manager.add_implementation(
         "services_post_register", 

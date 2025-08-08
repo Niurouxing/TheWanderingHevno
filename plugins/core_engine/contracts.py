@@ -184,6 +184,27 @@ class RuntimeInterface(ABC):
         """
         return {}
 
+# 】编辑器工具服务接口
+class EditorUtilsServiceInterface(ABC):
+    """
+    定义了用于安全地执行“创作式”修改的核心工具的接口。
+    这个服务由 core_engine 提供，可被其他插件注入以确保状态修改逻辑的一致性。
+    """
+    @abstractmethod
+    def perform_sandbox_update(self, sandbox: Sandbox, update_function: Callable[[Sandbox], None]) -> Sandbox:
+        """直接在 Sandbox 对象上执行一个修改函数 (用于 lore/definition)。"""
+        raise NotImplementedError
+
+    @abstractmethod
+    def perform_live_moment_update(
+        self,
+        sandbox: Sandbox,
+        snapshot_store: SnapshotStoreInterface,
+        update_function: Callable[[Dict[str, Any]], Dict[str, Any]]
+    ) -> Sandbox:
+        """安全地修改当前 'moment' 状态，并创建一个新的历史快照。"""
+        raise NotImplementedError
+
 class MacroEvaluationServiceInterface(ABC):
     """为宏求值逻辑定义服务接口。"""
     @abstractmethod

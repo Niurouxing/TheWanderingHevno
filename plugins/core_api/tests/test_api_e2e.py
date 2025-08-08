@@ -210,7 +210,7 @@ class TestSandboxImportExport:
 
         # --- 步骤 5: 导入PNG文件 ---
         import_resp = test_client.post(
-            "/api/sandboxes/import",
+            "/api/sandboxes:import",
             files={"file": ("imported.png", png_bytes, "image/png")}
         )
         assert import_resp.status_code == 200, import_resp.text
@@ -240,7 +240,7 @@ class TestSandboxImportExport:
         png_package = create_test_png_package(manifest, data_files)
         
         import_resp = test_client.post(
-            "/api/sandboxes/import",
+            "/api/sandboxes:import",
             files={"file": ("wrong_type.png", png_package, "image/png")}
         )
         assert import_resp.status_code == 400
@@ -275,7 +275,7 @@ class TestSandboxImportExport:
         png_package = create_test_png_package(manifest_data, data_files)
 
         import_resp = test_client.post(
-            "/api/sandboxes/import",
+            "/api/sandboxes:import",
             files={"file": ("conflict.png", png_package, "image/png")}
         )
         

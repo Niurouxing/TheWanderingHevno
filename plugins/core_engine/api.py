@@ -285,13 +285,16 @@ async def export_sandbox(
     return Response(content=png_bytes, media_type="image/png", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
-@router.post("/import", response_model=Sandbox, summary="Import a Sandbox from PNG")
+@router.post(":import", response_model=Sandbox, summary="Import a Sandbox from PNG")
 async def import_sandbox(
     file: UploadFile = File(...),
     sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store")),
     snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
     persistence_service: PersistenceServiceInterface = Depends(Service("persistence_service"))
 ) -> Sandbox:
+    """
+    通过一个专门的动作端点从 PNG 文件导入沙盒。
+    """
     if not file.filename or not file.filename.endswith(".png"):
         raise HTTPException(status_code=400, detail="Invalid file type. Please upload a .png file.")
 
