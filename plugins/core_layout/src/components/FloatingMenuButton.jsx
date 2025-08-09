@@ -1,3 +1,4 @@
+// plugins/core_layout/src/components/FloatingMenuButton.jsx
 import React, { useState, useRef, useEffect, useCallback } from 'react'; // 1. 导入新钩子
 import Draggable from 'react-draggable';
 import { useLayout } from '../context/LayoutContext';
