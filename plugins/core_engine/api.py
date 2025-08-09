@@ -3,7 +3,7 @@
 import io
 import logging
 import json
-import uuid
+import uuid  # <-- [新] 导入 uuid 模块
 from typing import Dict, Any, List, Optional
 from uuid import UUID
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from PIL import Image
 
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File
-from fastapi.responses import Response, FileResponse
+from fastapi.responses import Response, FileResponse, JSONResponse  # <-- [新] 导入 JSONResponse
 
 # 导入核心依赖解析器和所有必要的接口与数据模型（契约）
 from backend.core.dependencies import Service
@@ -35,6 +35,9 @@ router = APIRouter(
 )
 
 # --- Request/Response Models ---
+
+# ... (现有的 CreateSandboxRequest, SandboxListItem, UpdateSandboxRequest 模型保持不变) ...
+
 class CreateSandboxRequest(BaseModel):
     name: str = Field(..., description="沙盒的人类可读名称。")
     definition: Dict[str, Any] = Field(
@@ -58,7 +61,16 @@ class SandboxListItem(BaseModel):
 class UpdateSandboxRequest(BaseModel):
     name: str = Field(..., min_length=1, description="沙盒的新名称。")
 
+# --- [新] 用于 JSON 导入/导出的数据模型 ---
+class SandboxArchiveJSON(BaseModel):
+    """一个自包含的沙盒归档，用于纯JSON格式的导入和导出。"""
+    sandbox: Sandbox
+    snapshots: List[StateSnapshot]
+# --- 结束新模型定义 ---
+
+
 # --- Sandbox Lifecycle API ---
+# ... (现有的 create_sandbox, execute_sandbox_step, revert_sandbox_to_snapshot 保持不变) ...
 @router.post("", response_model=Sandbox, status_code=201, summary="Create a new Sandbox")
 async def create_sandbox(
     request_body: CreateSandboxRequest, 
@@ -129,6 +141,7 @@ async def revert_sandbox_to_snapshot(
 
 
 # --- 其他端点 ---
+# ... (现有的 get_sandbox_history, update_sandbox_details, delete_sandbox, list_sandboxes 等保持不变) ...
 @router.get("/{sandbox_id}/history", response_model=List[StateSnapshot], summary="Get history")
 async def get_sandbox_history(
     sandbox_id: UUID,
@@ -237,6 +250,101 @@ async def upload_sandbox_icon(
     sandbox.icon_updated_at = datetime.now(timezone.utc)
     
     return {"message": "Icon updated successfully."}
+
+
+@router.get(
+    "/{sandbox_id}/export/json", 
+    response_class=JSONResponse, 
+    summary="Export a Sandbox as JSON"
+)
+async def export_sandbox_json(
+    sandbox_id: UUID,
+    sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store")),
+    snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
+):
+    """
+    将单个沙盒及其所有历史快照导出为一个自包含的 JSON 文件。
+    """
+    sandbox = sandbox_store.get(sandbox_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Sandbox not found")
+
+    snapshots = snapshot_store.find_by_sandbox(sandbox_id)
+    if not snapshots:
+        raise HTTPException(status_code=404, detail="No snapshots found for this sandbox to export.")
+
+    # 使用我们定义的新模型构建归档对象
+    archive = SandboxArchiveJSON(sandbox=sandbox, snapshots=snapshots)
+
+    # 准备文件名和响应头
+    filename = f"hevno_sandbox_{sandbox.name.replace(' ', '_')}_{sandbox_id}.json"
+    headers = {"Content-Disposition": f"attachment; filename={filename}"}
+    
+    # 使用 JSONResponse 返回，可以设置自定义头
+    # model_dump(mode='json') 会将 UUID 和 datetime 等对象正确序列化为 JSON 兼容的字符串
+    return JSONResponse(content=archive.model_dump(mode="json"), headers=headers)
+
+
+@router.post(
+    "/import/json", 
+    response_model=Sandbox, 
+    status_code=201, 
+    summary="Import a Sandbox from JSON"
+)
+async def import_sandbox_json(
+    file: UploadFile = File(...),
+    sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store")),
+    snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
+) -> Sandbox:
+    """
+    从一个 JSON 文件导入一个完整的沙盒。
+    为避免冲突，将为导入的沙盒及其所有快照生成新的 UUID。
+    """
+    if not file.content_type == "application/json":
+        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a .json file.")
+
+    try:
+        content = await file.read()
+        data = json.loads(content)
+        archive = SandboxArchiveJSON.model_validate(data)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="Invalid JSON file.")
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=f"Invalid sandbox archive format: {e}")
+
+    # --- 核心逻辑：重新映射所有ID以避免冲突 ---
+    # 1. 为沙盒和每个快照生成新的ID
+    old_sandbox_id = archive.sandbox.id
+    new_sandbox_id = uuid.uuid4()
+    snapshot_id_map = {snap.id: uuid.uuid4() for snap in archive.snapshots}
+    
+    # 2. 存储并应用新的快照
+    for old_snapshot in archive.snapshots:
+        new_snapshot = old_snapshot.model_copy(update={
+            'id': snapshot_id_map[old_snapshot.id],
+            'sandbox_id': new_sandbox_id,
+            'parent_snapshot_id': snapshot_id_map.get(old_snapshot.parent_snapshot_id)
+        })
+        snapshot_store.save(new_snapshot)
+    
+    # 3. 创建并存储新的沙盒对象
+    new_head_id = snapshot_id_map.get(archive.sandbox.head_snapshot_id)
+    new_sandbox = archive.sandbox.model_copy(update={
+        'id': new_sandbox_id,
+        'head_snapshot_id': new_head_id,
+        'name': f"{archive.sandbox.name} (Imported)",
+        'created_at': datetime.now(timezone.utc),
+        'icon_updated_at': None # 导入的JSON不包含图标信息
+    })
+
+    if new_sandbox.id in sandbox_store:
+         raise HTTPException(status_code=409, detail=f"A sandbox with the newly generated ID '{new_sandbox.id}' already exists. This is highly unlikely, please try again.")
+    
+    sandbox_store[new_sandbox.id] = new_sandbox
+
+    logger.info(f"Successfully imported sandbox from JSON, new ID is '{new_sandbox.id}'. Original ID was '{old_sandbox_id}'.")
+    return new_sandbox
+
 
 
 @router.get("/{sandbox_id}/export", response_class=Response, summary="Export a Sandbox as PNG")
