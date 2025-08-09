@@ -1,6 +1,6 @@
 // plugins/sandbox_editor/src/SandboxEditorPage.jsx
 import React, { useState, useEffect, useCallback } from 'react';
-import { Box, Typography, Tabs, Tab, CircularProgress, List, ListItem, ListItemText, ListItemIcon, Collapse, IconButton, Button, Switch, TextField, MenuItem, Select, Chip, InputAdornment } from '@mui/material';
+import { Box, Typography, Tabs, Tab, CircularProgress, List, ListItem, ListItemText, ListItemIcon, Collapse, IconButton, Button, Switch, TextField, MenuItem, Select, Chip, InputAdornment, Alert } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import FolderIcon from '@mui/icons-material/Folder';
@@ -21,6 +21,7 @@ function CodexEditor({ sandboxId, scope, codexName, codexData, onBack, onSave })
   const [entries, setEntries] = useState(codexData.entries || []);
   const [expanded, setExpanded] = useState({});
   const [editingEntries, setEditingEntries] = useState({}); // 使用对象来跟踪每个条目的编辑状态
+  const [errorMessage, setErrorMessage] = useState(''); // For user-visible error messages
 
   const toggleExpand = (id) => {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -31,9 +32,11 @@ function CodexEditor({ sandboxId, scope, codexName, codexData, onBack, onSave })
   };
 
   const handleSaveEntry = async (id) => {
+    setErrorMessage(''); // Clear previous error
     const index = entries.findIndex(e => e.id === id);
     if (index === -1) return;
 
+    const originalEntries = [...entries]; // Backup for rollback
     const updatedEntries = [...entries];
     updatedEntries[index] = editingEntries[id];
     setEntries(updatedEntries);
@@ -41,33 +44,48 @@ function CodexEditor({ sandboxId, scope, codexName, codexData, onBack, onSave })
 
     // 调用 API 保存
     try {
-      await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries/${id}`, {
+      const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editingEntries[id]),
       });
+      if (!response.ok) {
+        throw new Error(`Failed to save entry: ${response.statusText}`);
+      }
       if (onSave) onSave();
     } catch (e) {
       console.error('Failed to save entry:', e);
+      setErrorMessage('Failed to save entry. Please try again.');
+      // Rollback UI on failure
+      setEntries(originalEntries);
+      setEditingEntries((prev) => ({ ...prev, [id]: { ...originalEntries[index] } })); // Re-enter edit mode with original data
     }
   };
 
   const handleDeleteEntry = async (index, id) => {
+    setErrorMessage(''); // Clear previous error
+    const originalEntries = [...entries]; // Backup for rollback
     const updatedEntries = entries.filter((_, i) => i !== index);
     setEntries(updatedEntries);
 
     // 调用 API 删除
     try {
-      await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries/${id}`, {
+      const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries/${id}`, {
         method: 'DELETE',
       });
+      if (!response.ok) {
+        throw new Error(`Failed to delete entry: ${response.statusText}`);
+      }
       if (onSave) onSave();
     } catch (e) {
       console.error('Failed to delete entry:', e);
+      setErrorMessage('Failed to delete entry. Please try again.');
+      setEntries(originalEntries); // Rollback UI on failure
     }
   };
 
   const handleAddEntry = async () => {
+    setErrorMessage(''); // Clear previous error
     const newEntry = {
       id: `entry_${Date.now()}`,
       content: '',
@@ -76,6 +94,7 @@ function CodexEditor({ sandboxId, scope, codexName, codexData, onBack, onSave })
       keywords: [],
       is_enabled: true,
     };
+    const originalEntries = [...entries]; // Backup for rollback
     const updatedEntries = [...entries, newEntry];
     setEntries(updatedEntries);
     setExpanded((prev) => ({ ...prev, [newEntry.id]: true }));
@@ -83,14 +102,22 @@ function CodexEditor({ sandboxId, scope, codexName, codexData, onBack, onSave })
 
     // 调用 API 添加
     try {
-      await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries`, {
+      const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newEntry),
       });
+      if (!response.ok) {
+        throw new Error(`Failed to add entry: ${response.statusText}`);
+      }
       if (onSave) onSave();
     } catch (e) {
       console.error('Failed to add entry:', e);
+      setErrorMessage('Failed to add entry. Please try again.');
+      // Rollback UI on failure
+      setEntries(originalEntries);
+      setExpanded((prev) => ({ ...prev, [newEntry.id]: false }));
+      setEditingEntries((prev) => { const { [newEntry.id]: _, ...rest } = prev; return rest; });
     }
   };
 
@@ -98,10 +125,12 @@ function CodexEditor({ sandboxId, scope, codexName, codexData, onBack, onSave })
     setEditingEntries((prev) => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
   };
 
-  const handleToggleEnabled = (id, checked) => {
+  const handleToggleEnabled = async (id, checked) => {
+    setErrorMessage(''); // Clear previous error
     const index = entries.findIndex(e => e.id === id);
     if (index === -1) return;
 
+    const originalEntries = [...entries]; // Backup for rollback
     const updatedEntries = [...entries];
     updatedEntries[index].is_enabled = checked;
     setEntries(updatedEntries);
@@ -112,11 +141,25 @@ function CodexEditor({ sandboxId, scope, codexName, codexData, onBack, onSave })
     }
 
     // 调用 API 更新 enabled
-    fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ is_enabled: checked }),
-    }).catch(e => console.error('Failed to toggle enabled:', e));
+    try {
+      const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_enabled: checked }),
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to toggle enabled: ${response.statusText}`);
+      }
+    } catch (e) {
+      console.error('Failed to toggle enabled:', e);
+      setErrorMessage('Failed to toggle entry status. Please try again.');
+      // Rollback UI on failure
+      updatedEntries[index].is_enabled = !checked;
+      setEntries(updatedEntries);
+      if (editingEntries[id]) {
+        setEditingEntries((prev) => ({ ...prev, [id]: { ...prev[id], is_enabled: !checked } }));
+      }
+    }
   };
 
   return (
@@ -124,36 +167,32 @@ function CodexEditor({ sandboxId, scope, codexName, codexData, onBack, onSave })
       <Typography variant="h5" gutterBottom>Editing Codex: {codexName}</Typography>
       <Button variant="outlined" onClick={onBack} sx={{ mb: 2 }}>Back to Overview</Button>
       <Button variant="contained" startIcon={<AddIcon />} onClick={handleAddEntry} sx={{ mb: 2, ml: 2 }}>Add Entry</Button>
+      {errorMessage && <Alert severity="error" sx={{ mb: 2 }}>{errorMessage}</Alert>}
       <List>
         {entries.map((entry, index) => {
-          const isEditing = !!editingEntries[entry.id];
           const editData = editingEntries[entry.id] || entry;
 
           return (
-          <React.Fragment key={entry.id}>
-            <ListItem
-              button
-              onClick={() => toggleExpand(entry.id)}
-            >
-              <ListItemIcon>
-                {expanded[entry.id] ? <ExpandMoreIcon /> : <ChevronRightIcon />}
-              </ListItemIcon>
-              <ListItemText
-                primary={entry.id || 'Untitled Entry'}
-                secondary={`Priority: ${entry.priority}`}
-              />
-              <Switch
-                checked={entry.is_enabled}
-                onChange={(e) => handleToggleEnabled(entry.id, e.target.checked)}
-                onClick={(e) => e.stopPropagation()} // 防止点击开关触发展开
-              />
-              <IconButton onClick={(e) => { e.stopPropagation(); handleDeleteEntry(index, entry.id); }}>
-                <DeleteIcon />
-              </IconButton>
-            </ListItem>
-            <Collapse in={expanded[entry.id]} timeout="auto" unmountOnExit>
-              <Box sx={{ pl: 4, pb: 2 }}>
-                <>
+            <React.Fragment key={entry.id}>
+              <ListItem button onClick={() => toggleExpand(entry.id)}>
+                <ListItemIcon>
+                  {expanded[entry.id] ? <ExpandMoreIcon /> : <ChevronRightIcon />}
+                </ListItemIcon>
+                <ListItemText
+                  primary={entry.id || 'Untitled Entry'}
+                  secondary={`Priority: ${entry.priority}`}
+                />
+                <Switch
+                  checked={entry.is_enabled}
+                  onChange={(e) => handleToggleEnabled(entry.id, e.target.checked)}
+                  onClick={(e) => e.stopPropagation()}
+                />
+                <IconButton onClick={(e) => { e.stopPropagation(); handleDeleteEntry(index, entry.id); }}>
+                  <DeleteIcon />
+                </IconButton>
+              </ListItem>
+              <Collapse in={expanded[entry.id]} timeout="auto" unmountOnExit>
+                <Box sx={{ pl: 4, pb: 2 }}>
                   <TextField
                     label="ID"
                     value={editData.id}
@@ -206,18 +245,18 @@ function CodexEditor({ sandboxId, scope, codexName, codexData, onBack, onSave })
                   <Button variant="contained" startIcon={<SaveIcon />} onClick={() => handleSaveEntry(entry.id)} sx={{ mt: 2 }}>
                     Save
                   </Button>
-                </>
-              </Box>
-            </Collapse>
-          </React.Fragment>
-        )})}
+                </Box>
+              </Collapse>
+            </React.Fragment>
+          );
+        })}
       </List>
     </Box>
   );
 }
 
 // 递归渲染数据的组件，用于显示树状结构
-function DataTree({ data, path = '', onEdit }) {
+function DataTree({ data, path = '', onEdit, activeScope }) {  // 添加 activeScope 参数
   const [expanded, setExpanded] = useState({});
 
   const toggleExpand = (key) => {
@@ -240,7 +279,7 @@ function DataTree({ data, path = '', onEdit }) {
               onClick={isExpandable ? () => toggleExpand(currentPath) : undefined}
               secondaryAction={
                 isCodex ? (
-                  <IconButton edge="end" onClick={() => onEdit(currentPath, value, key)}>
+                  <IconButton edge="end" onClick={() => onEdit(currentPath, value, key, activeScope)}>
                     <EditIcon />
                   </IconButton>
                 ) : null
@@ -265,7 +304,7 @@ function DataTree({ data, path = '', onEdit }) {
             </ListItem>
             {isExpandable && (
               <Collapse in={expanded[currentPath]} timeout="auto" unmountOnExit>
-                <DataTree data={value} path={currentPath} onEdit={onEdit} />
+                <DataTree data={value} path={currentPath} onEdit={onEdit} activeScope={activeScope} />
               </Collapse>
             )}
           </React.Fragment>
@@ -320,9 +359,18 @@ export function SandboxEditorPage({ services }) {
     setActiveScope(newValue);
   };
 
-  const handleEdit = (path, value, codexName) => {
-    if (value.entries) {
-      setEditingCodex({ name: codexName || path.split('.').pop(), data: value });
+  const handleEdit = (path, value, codexName, activeScopeIndex) => {
+    if (value.entries && Array.isArray(value.entries)) {
+      let effectiveScope = SCOPE_TABS[activeScopeIndex];
+      if (activeScopeIndex === 0) { // 'definition' tab
+        const parts = path.split('.');
+        if (parts[0] === 'initial_lore') {
+          effectiveScope = 'initial_lore';
+        } else if (parts[0] === 'initial_moment') {
+          effectiveScope = 'initial_moment';
+        }
+      }
+      setEditingCodex({ name: codexName || path.split('.').pop(), data: value, scope: effectiveScope });
     } else {
       console.log(`Editing path: ${path}`, value);
       alert(`Edit functionality for "${path}" is not yet implemented. Value: ${JSON.stringify(value, null, 2)}`);
@@ -362,7 +410,7 @@ export function SandboxEditorPage({ services }) {
     return (
       <CodexEditor
         sandboxId={currentSandboxId}
-        scope={SCOPE_TABS[activeScope]}
+        scope={editingCodex.scope}
         codexName={editingCodex.name}
         codexData={editingCodex.data}
         onBack={handleBackFromCodex}
@@ -383,7 +431,7 @@ export function SandboxEditorPage({ services }) {
       
       <Box sx={{ mt: 2 }}>
         {currentScopeData ? (
-          <DataTree data={currentScopeData} onEdit={handleEdit} />
+          <DataTree data={currentScopeData} onEdit={(path, value, codexName) => handleEdit(path, value, codexName, activeScope)} activeScope={activeScope} />
         ) : (
           <Typography color="text.secondary">No data available for this scope.</Typography>
         )}
