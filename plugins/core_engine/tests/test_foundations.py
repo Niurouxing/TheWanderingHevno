@@ -96,7 +96,7 @@ class TestEnginePreExecutionChecks:
         with pytest.raises(ValueError, match="Cycle detected"):
             await engine.step(sandbox, {})
 
-    def test_graph_collection_validation_fails_without_main(self, invalid_graph_no_main: dict):
+    async def test_graph_collection_validation_fails_without_main(self, invalid_graph_no_main: dict):
         """
         【模型单元测试】
         测试 GraphCollection Pydantic 模型本身的验证逻辑。

@@ -199,3 +199,23 @@ class TestAdvancedMacrosAndRuntimes:
         c3po_final_state = final_robots[1]
         assert isinstance(c3po_final_state, Robot)
         assert c3po_final_state.hp == 100
+
+    async def test_can_store_and_use_dynamically_defined_class(
+        self,
+        test_engine_setup: Tuple[ExecutionEngineInterface, Container, HookManager],
+        sandbox_factory: callable,
+        dynamic_class_collection: GraphCollection
+    ):
+        engine, container, _ = test_engine_setup
+        sandbox = await sandbox_factory(graph_collection=dynamic_class_collection)
+        updated_sandbox = await engine.step(sandbox, {})
+        snapshot_store = container.resolve("snapshot_store")
+        final_snapshot = snapshot_store.get(updated_sandbox.head_snapshot_id)
+
+        # 节点输出是更新后的 hp
+        assert final_snapshot.run_output["use_robot"]["output"] == 70
+        
+        # 状态中的 robot 实例也被更新了
+        final_robot = final_snapshot.moment["robot_instance"]
+        assert final_robot.name == "R2-D2"
+        assert final_robot.hp == 70

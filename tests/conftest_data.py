@@ -79,31 +79,56 @@ def graph_evolution_collection() -> GraphCollection:
 @pytest.fixture(scope="session")
 def advanced_macro_collection() -> GraphCollection:
     """
-    【最终修复版 v3】
-    测试在一个宏内定义和使用函数，并进行状态修改。
-    这个 fixture 不再尝试跨节点共享或在 moment 中存储函数对象，
-    因为动态定义的函数是不可 pickle 的。
+    【Cloudpickle 支持版】
+    测试在宏中动态定义函数、将其存储在 moment 中，并在后续节点中加载和使用。
+    这现在是可行的，因为 cloudpickle 可以序列化动态定义的函数。
     """
-    # 修复：将函数定义和调用合并到一个宏中。
-    # 这个宏的隐式返回值将是 calc(3, 4) 的结果，即 5.0。
-    use_skill_code = """
+    # 这个宏在宏内部定义一个函数，并将其附加到 moment 状态上
+    define_skill_code = """
 def calc(a, b):
     import math
     return math.sqrt(a*a + b*b)
 
-calc(3, 4)
+moment.skill = calc
 """
     
-    # 这个节点用于测试状态修改，与函数调用解耦
+    # 这个宏从 moment 状态中加载函数，并调用它
+    use_skill_code = "moment.skill(3, 4)"
+    
     propose_change_code = """
 "{{ moment.game_difficulty = 'hard' }}"
 """
     return GraphCollection.model_validate({"main": {"nodes": [
-        # 这个节点现在只负责执行包含函数定义和调用的复杂逻辑
-        {"id": "use_skill", "run": [{"runtime": "system.execute", "config": {"code": use_skill_code}}]},
-        # 这两个节点负责测试状态修改
+        {"id": "teach_skill", "run": [{"runtime": "system.execute", "config": {"code": define_skill_code}}]},
+        # use_skill 依赖于 teach_skill 来确保 moment.skill 存在
+        {"id": "use_skill", "depends_on": ["teach_skill"], "run": [{"runtime": "system.execute", "config": {"code": use_skill_code}}]},
         {"id": "llm_propose_change", "run": [{"runtime": "system.io.input", "config": {"value": propose_change_code}}]},
         {"id": "apply_change", "depends_on": ["llm_propose_change"], "run": [{"runtime": "system.execute", "config": {"code": "{{ nodes.llm_propose_change.output }}"}}]}
+    ]}})
+
+# 同样，我们可以为动态定义的类编写一个 fixture
+@pytest.fixture(scope="session")
+def dynamic_class_collection() -> GraphCollection:
+    """测试在宏中动态定义类，并存储/使用其实例。"""
+    create_robot_code = """
+class Robot:
+    def __init__(self, name, hp=100):
+        self.name = name
+        self.hp = hp
+    def take_damage(self, amount):
+        self.hp -= amount
+
+moment.robot_instance = Robot('R2-D2')
+"""
+    use_robot_code = """
+robot = moment.robot_instance
+robot.take_damage(30)
+# 返回一个可序列化的值以供断言
+robot.hp
+"""
+    return GraphCollection.model_validate({"main": {"nodes": [
+        {"id": "create_robot", "run": [{"runtime": "system.execute", "config": {"code": create_robot_code}}]},
+        {"id": "use_robot", "depends_on": ["create_robot"], "run": [{"runtime": "system.execute", "config": {"code": use_robot_code}}]},
     ]}})
 
 @pytest.fixture(scope="session")
