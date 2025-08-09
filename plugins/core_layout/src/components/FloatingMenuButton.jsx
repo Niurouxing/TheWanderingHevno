@@ -1,14 +1,11 @@
-// plugins/core_layout/src/components/FloatingMenuButton.jsx
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react'; // 1. 导入新钩子
+import Draggable from 'react-draggable';
 import { useLayout } from '../context/LayoutContext';
-import Fab from '@mui/material/Fab';
-import Menu from '@mui/material/Menu';
-import MenuItem from '@mui/material/MenuItem';
-import ListItemText from '@mui/material/ListItemText';
-import ListItemIcon from '@mui/material/ListItemIcon';
-import MenuRoundedIcon from '@mui/icons-material/MenuRounded';
+import Box from '@mui/material/Box';
+import SpeedDial from '@mui/material/SpeedDial';
+import SpeedDialIcon from '@mui/material/SpeedDialIcon';
+import SpeedDialAction from '@mui/material/SpeedDialAction';
 import HomeRoundedIcon from '@mui/icons-material/HomeRounded';
-// 动态加载MUI图标
 import * as MuiIcons from '@mui/icons-material';
 
 const DynamicIcon = ({ name }) => {
@@ -18,43 +15,104 @@ const DynamicIcon = ({ name }) => {
 
 export function FloatingMenuButton() {
   const { pages, activePageId, setActivePageId } = useLayout();
-  const [anchorEl, setAnchorEl] = useState(null);
-  const open = Boolean(anchorEl);
+  const draggableRef = useRef(null);
 
-  const handleClick = (event) => setAnchorEl(event.currentTarget);
-  const handleClose = () => setAnchorEl(null);
+  // 2. 添加新的状态来控制方向
+  const [direction, setDirection] = useState('up');
+  const [tooltipPlacement, setTooltipPlacement] = useState('left');
 
-  const handleMenuItemClick = (pageId) => {
+  // 3. 创建位置检测函数，并用 useCallback 优化
+  const updateDirections = useCallback(() => {
+    if (!draggableRef.current) return;
+
+    const rect = draggableRef.current.getBoundingClientRect();
+    const viewHeight = window.innerHeight;
+    const viewWidth = window.innerWidth;
+    
+    // 检查垂直位置
+    // 如果按钮的上边缘在屏幕下半部分，则向上展开，反之向下
+    setDirection(rect.top > viewHeight / 2 ? 'up' : 'down');
+    
+    // 检查水平位置
+    // 如果按钮的左边缘在屏幕右半部分，则标签在左侧，反之在右侧
+    setTooltipPlacement(rect.left > viewWidth / 2 ? 'left' : 'right');
+  }, []); // 空依赖数组，函数只创建一次
+
+  // 4. 在组件首次加载时运行方向检测
+  useEffect(() => {
+    updateDirections();
+  }, [updateDirections]);
+
+
+  const actions = [
+    { 
+      icon: <HomeRoundedIcon />, 
+      name: 'Home',
+      pageId: null,
+    },
+    ...pages.map(page => ({
+      icon: <DynamicIcon name={page.menu.icon} />,
+      name: page.menu.title,
+      pageId: page.id
+    }))
+  ];
+
+  const handleActionClick = (pageId) => {
     setActivePageId(pageId);
-    handleClose();
+  };
+  
+  // 5. 定义拖拽结束时的回调函数
+  const handleDragStop = () => {
+    // 拖拽结束后，重新计算方向
+    updateDirections();
   };
 
   return (
-    <>
-      <Fab
-        color="primary"
-        aria-label="main menu"
-        onClick={handleClick}
-        sx={{ position: 'fixed', bottom: 24, right: 24, zIndex: 1300 }}
+    <Draggable 
+      nodeRef={draggableRef}
+      handle=".MuiFab-primary"
+      bounds="parent"
+      onStop={handleDragStop} // 6. 挂载拖拽结束回调
+    >
+      <Box 
+        ref={draggableRef} 
+        sx={{ 
+          position: 'absolute', 
+          // 初始位置，可以保持不变或调整
+          bottom: 24, 
+          right: 24, 
+          zIndex: 1300 
+        }}
       >
-        <MenuRoundedIcon />
-      </Fab>
-      <Menu anchorEl={anchorEl} open={open} onClose={handleClose}>
-        <MenuItem onClick={() => handleMenuItemClick(null)} selected={activePageId === null}>
-          <ListItemIcon><HomeRoundedIcon fontSize="small" /></ListItemIcon>
-          <ListItemText>Home</ListItemText>
-        </MenuItem>
-        {pages.map((page) => (
-          <MenuItem
-            key={page.id}
-            onClick={() => handleMenuItemClick(page.id)}
-            selected={page.id === activePageId}
-          >
-            <ListItemIcon><DynamicIcon name={page.menu.icon} /></ListItemIcon>
-            <ListItemText>{page.menu.title}</ListItemText>
-          </MenuItem>
-        ))}
-      </Menu>
-    </>
+        <SpeedDial
+          ariaLabel="Main navigation"
+          icon={<SpeedDialIcon />}
+          direction={direction} // 7. 应用动态方向
+        >
+          {actions.map((action) => (
+            <SpeedDialAction
+              key={action.name}
+              icon={action.icon}
+              tooltipTitle={action.name}
+              tooltipPlacement={tooltipPlacement} // 8. 应用动态标签位置
+              onClick={() => handleActionClick(action.pageId)}
+              sx={
+                activePageId === action.pageId 
+                ? {
+                    '& .MuiFab-root': {
+                      bgcolor: 'primary.main',
+                      color: 'common.white',
+                      '&:hover': {
+                        bgcolor: 'primary.dark',
+                      },
+                    },
+                  }
+                : {} 
+              }
+            />
+          ))}
+        </SpeedDial>
+      </Box>
+    </Draggable>
   );
 }

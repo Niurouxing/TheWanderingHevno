@@ -14,10 +14,8 @@ export function App() {
       <CssBaseline />
       <Box sx={{ width: '100vw', height: '100vh', display: 'flex' }}>
         <Box component="main" sx={{ flexGrow: 1, position: 'relative' }}>
-          {/* 渲染活动页面的容器 */}
-          <PageContainer />
-          {/* 浮动按钮现在渲染在主内容区之上 */}
-          <FloatingMenuButton />
+        <PageContainer />
+        <FloatingMenuButton />
         </Box>
       </Box>
     </ThemeProvider>

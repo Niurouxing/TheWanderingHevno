@@ -12,7 +12,8 @@
     "@mui/icons-material": "latest",
     "@mui/material": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "react-draggable": "^4.5.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "latest",
