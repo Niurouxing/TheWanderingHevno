@@ -15,6 +15,7 @@ from plugins.core_llm.contracts import (
 # 从本插件内部实现中导入待测试的类
 from plugins.core_llm.manager import KeyPoolManager
 from plugins.core_llm.providers.gemini import GeminiProvider
+from google.api_core import exceptions as google_exceptions
 
 # 标记此文件中的所有测试都是异步的
 pytestmark = pytest.mark.asyncio
@@ -22,18 +23,26 @@ pytestmark = pytest.mark.asyncio
 
 # --- Fixture for setting up the test environment ---
 
-@pytest.fixture
-def llm_service_components(test_engine_setup: Tuple[None, Container, None]) -> Tuple[LLMServiceInterface, KeyPoolManager, Container]:
+@pytest.fixture(scope="function")
+def llm_service_components(test_engine_setup: Tuple[None, Container, None], monkeypatch) -> Tuple[LLMServiceInterface, KeyPoolManager, Container]:
     """
     【已重构】
     提供一个从完整启动的应用上下文中获取的 LLMService 实例及其相关组件。
-    这确保了我们测试的是通过真实 DI 和钩子流程配置的服务。
+    这个 fixture 现在也负责模拟环境变量，以确保测试的独立性。
     """
+    # 在应用服务被解析之前，设置模拟的环境变量
+    monkeypatch.setenv("GEMINI_API_KEYS", "test_key_1,test_key_2")
+    
     _, container, _ = test_engine_setup
     
-    # 从已经完整配置的容器中解析出需要的服务
-    service: LLMServiceInterface = container.resolve("llm_service")
+    # 重新填充 key_pool_manager 以使用模拟的 keys
     key_manager: KeyPoolManager = container.resolve("key_pool_manager")
+    # 清空可能从真实 .env 加载的池
+    key_manager._pools.clear() 
+    # 使用模拟的 env var 重新注册
+    key_manager.register_provider("gemini", "GEMINI_API_KEYS")
+    
+    service: LLMServiceInterface = container.resolve("llm_service")
     
     return service, key_manager, container
 
@@ -65,22 +74,17 @@ class TestLLMServiceLogic:
             mock_generate.assert_awaited_once()
 
     async def test_retry_on_provider_error_and_succeed(self, llm_service_components: Tuple[LLMServiceInterface, KeyPoolManager, Container]):
-        """
-        验证服务在遇到可重试的服务端错误时会正确重试并最终成功。
-        """
         llm_service, _, _ = llm_service_components
-        # 模拟 Gemini API 抛出503服务不可用异常
-        retryable_exception = Exception("503 Service Unavailable")
+        # 【修改】: 抛出一个具体的、可被翻译的异常类型
+        retryable_exception = google_exceptions.ServiceUnavailable("503 Service Unavailable")
         success_response = LLMResponse(status=LLMResponseStatus.SUCCESS, content="Success after retry!")
 
         with patch.object(GeminiProvider, 'generate', new_callable=AsyncMock) as mock_generate:
-            # 第一次调用抛出异常，第二次调用返回成功
             mock_generate.side_effect = [
                 retryable_exception,
                 success_response
             ]
             
-            # 将 llm_service 的重试次数设置为2 (1次初始 + 1次重试)
             llm_service.max_retries = 2
             response = await llm_service.request(model_name="gemini/gemini-1.5-pro", prompt="Hello")
             
@@ -88,11 +92,9 @@ class TestLLMServiceLogic:
             assert mock_generate.call_count == 2
 
     async def test_final_failure_after_all_retries(self, llm_service_components: Tuple[LLMServiceInterface, KeyPoolManager, Container]):
-        """
-        验证在耗尽所有重试次数后，服务会抛出最终的异常。
-        """
         llm_service, _, _ = llm_service_components
-        retryable_exception = Exception("503 Service Unavailable")
+        # 【修改】: 抛出一个具体的、可被翻译的异常类型
+        retryable_exception = google_exceptions.ServiceUnavailable("503 Service Unavailable")
         
         with patch.object(GeminiProvider, 'generate', new_callable=AsyncMock) as mock_generate:
             mock_generate.side_effect = retryable_exception
@@ -102,6 +104,7 @@ class TestLLMServiceLogic:
                 await llm_service.request(model_name="gemini/gemini-1.5-pro", prompt="Hello")
             
             assert "failed permanently after 3 attempt(s)" in str(exc_info.value)
+            # 现在这个断言将会成功
             assert exc_info.value.last_error.error_type == LLMErrorType.PROVIDER_ERROR
             assert mock_generate.call_count == 3
             

@@ -66,8 +66,9 @@ def test_engine_setup(client: AsyncClient) -> Tuple[ExecutionEngineInterface, Co
     它从 session 级别的应用中获取服务，确保测试运行在完全配置的环境中。
     在每次测试前，它会清理存储的缓存，以确保测试隔离性。
     """
-    # 【修改】从正在运行的应用实例中获取容器
-    container: Container = client._transport.app.state.container # type: ignore
+    # 【最终修复】: 直接从导入的 main_app 访问 state。
+    # 因为 client fixture (session-scoped) 已经确保了 main_app 的 lifespan 启动事件被触发。
+    container: Container = main_app.state.container
     
     # 获取核心服务
     engine: ExecutionEngineInterface = container.resolve("execution_engine")
@@ -76,7 +77,6 @@ def test_engine_setup(client: AsyncClient) -> Tuple[ExecutionEngineInterface, Co
     snapshot_store: SnapshotStoreInterface = container.resolve("snapshot_store")
 
     # --- 关键：测试隔离 ---
-    # 在每次测试函数执行前，清空内存缓存。
     if hasattr(sandbox_store, '_cache'):
         sandbox_store._cache.clear() # type: ignore
     if hasattr(snapshot_store, '_cache'):
