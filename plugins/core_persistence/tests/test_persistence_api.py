@@ -1,23 +1,40 @@
 # plugins/core_persistence/tests/test_persistence_api.py
 
 import pytest
-import io
-import json
-import zipfile
-from uuid import UUID
+from httpx import AsyncClient
 
-from fastapi.testclient import TestClient
+from plugins.core_engine.contracts import Sandbox
 
-from backend.core.contracts import Container
-from plugins.core_engine.contracts import GraphCollection, SnapshotStoreInterface
+pytestmark = pytest.mark.e2e
 
-@pytest.mark.e2e
 class TestPersistenceAPI:
-    """测试与持久化相关的 API 端点。"""
+    """Tests persistence-related API endpoints."""
 
+    async def test_list_assets_sandbox(self, client: AsyncClient, sandbox_factory):
+        """
+        Tests that the list_assets endpoint for sandboxes correctly reflects
+        the creation and deletion of a sandbox.
+        """
+        # 1. Initially, the list should be empty (or not contain our new sandbox)
+        response = await client.get("/api/persistence/assets/sandbox")
+        response.raise_for_status()
+        initial_sandboxes = response.json()
 
-    def test_list_assets_is_empty(self, test_client: TestClient):
-        # 这是一个新的、针对 persistence 插件 API 的简单测试
-        response = test_client.get("/api/persistence/assets/graph")
-        assert response.status_code == 200
-        assert response.json() == []
+        # 2. Create a sandbox via the proper engine API
+        create_res = await client.post("/api/sandboxes", json={
+            "name": "AssetListTest",
+            "definition": {"initial_lore": {}, "initial_moment": {}}
+        })
+        create_res.raise_for_status()
+        new_sandbox = Sandbox.model_validate(create_res.json())
+
+        # 3. Check the asset list again
+        response_after_create = await client.get("/api/persistence/assets/sandbox")
+        response_after_create.raise_for_status()
+        sandboxes_after_create = response_after_create.json()
+        
+        assert len(sandboxes_after_create) == len(initial_sandboxes) + 1
+        assert str(new_sandbox.id) in sandboxes_after_create
+
+        # 4. Cleanup
+        await client.delete(f"/api/sandboxes/{new_sandbox.id}")

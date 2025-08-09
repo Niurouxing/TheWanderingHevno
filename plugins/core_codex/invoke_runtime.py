@@ -1,9 +1,10 @@
-# plugins/core_codex/invoke_runtime.py (已修复)
+# plugins/core_codex/invoke_runtime.py
 
 import asyncio
 import logging
 import re
 from typing import Dict, Any, List, Optional, Set
+from copy import deepcopy
 
 from pydantic import ValidationError
 
@@ -13,7 +14,6 @@ from plugins.core_engine.contracts import (
     ExecutionContext,
     MacroEvaluationServiceInterface
 )
-# 导入 Codex 模型，以便进行智能合并
 from .models import CodexCollection, ActivatedEntry, TriggerMode, Codex
 
 logger = logging.getLogger("hevno.runtime.codex")
@@ -21,12 +21,11 @@ logger = logging.getLogger("hevno.runtime.codex")
 
 def _merge_codices(lore_codices: Dict[str, Any], moment_codices: Dict[str, Any]) -> Dict[str, Any]:
     """
-    一个更智能的合并函数，用于合并 Lore 和 Moment 中的 Codex。
+    智能地合并 Lore 和 Moment 中的 Codex。
     - 它会合并同名 Codex 的条目列表。
     - 如果条目 ID 相同，Moment 中的条目会覆盖 Lore 中的。
     """
     # 先深拷贝 lore 的数据作为基础，避免修改原始状态
-    from copy import deepcopy
     merged_data = deepcopy(lore_codices)
 
     for name, moment_codex_data in moment_codices.items():
@@ -108,7 +107,7 @@ class InvokeRuntime(RuntimeInterface):
             source_text_macro = source_config.get("source", "")
             source_text = await macro_service.evaluate(source_text_macro, structural_eval_context, lock) if source_text_macro else ""
             
-            logger.debug(f"Scanning codex '{codex_name}' with source text: '{source_text}'")
+            logger.debug(f"Scanning codex '{codex_name}' with source text: '{str(source_text)[:100]}...'")
 
             for entry in codex_model.entries:
                 is_enabled = await macro_service.evaluate(entry.is_enabled, structural_eval_context, lock)
@@ -216,6 +215,7 @@ class InvokeRuntime(RuntimeInterface):
         logger.debug("--- [CODEX.INVOKE END] ---")
 
         if debug_mode:
-            return { "output": { "final_text": final_text, "trace": {} } }
+            # 调试输出可以更丰富，但目前保持简单
+            return {"output": final_text, "debug_info": {"rendered_ids": list(rendered_entry_ids)}}
         
         return {"output": final_text}

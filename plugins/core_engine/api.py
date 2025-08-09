@@ -67,6 +67,19 @@ class SandboxArchiveJSON(BaseModel):
 
 # --- Sandbox Lifecycle API ---
 
+@router.get("/{sandbox_id}", response_model=Sandbox, summary="Get a single Sandbox by ID")
+async def get_sandbox_by_id(
+    sandbox_id: UUID,
+    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store"))
+):
+    """
+    通过其 ID 检索单个沙盒的完整对象。
+    """
+    sandbox = sandbox_store.get(sandbox_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Sandbox not found.")
+    return sandbox
+    
 @router.post("", response_model=Sandbox, status_code=201, summary="Create a new Sandbox")
 async def create_sandbox(
     request_body: CreateSandboxRequest, 

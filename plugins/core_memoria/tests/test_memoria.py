@@ -1,146 +1,224 @@
-# plugins/core_memoria/tests/test_memoria.py (已修复)
+# plugins/core_memoria/tests/test_memoria.py
 
 import asyncio
 import uuid
 from unittest.mock import MagicMock, AsyncMock
+from typing import Tuple, cast
 
 import pytest
 
-# 从平台核心契约导入
+# Core contracts
 from backend.core.contracts import Container, BackgroundTaskManager, HookManager
-# 从依赖插件 (core_engine) 的契约中导入
-from plugins.core_engine.contracts import Sandbox, ExecutionEngineInterface, StateSnapshot
-# 从本插件的组件导入
+from plugins.core_engine.contracts import Sandbox, ExecutionEngineInterface, StateSnapshot, GraphCollection
+from plugins.core_llm.contracts import LLMResponse, LLMResponseStatus
+
+# Plugin-specific components to test
 from plugins.core_memoria.tasks import run_synthesis_task
-# 从依赖插件 (core_llm) 的组件导入
-from plugins.core_llm.contracts import LLMResponse, LLMResponseStatus, LLMError, LLMErrorType
-from typing import Tuple # 导入 Tuple
 
 # Mark all tests in this file as async
 pytestmark = pytest.mark.asyncio
 
+@pytest.fixture
+def memoria_sandbox_factory(sandbox_factory: callable) -> callable:
+    """
+    A convenience factory for memoria tests. It wraps the main sandbox_factory
+    to simplify creating sandboxes with specific graph definitions and initial states.
+    """
+    async def _create(
+        graph_collection_dict: dict,
+        initial_lore: dict = None,
+        initial_moment: dict = None
+    ) -> Sandbox:
+        graph_collection = GraphCollection.model_validate(graph_collection_dict)
+        return await sandbox_factory(
+            graph_collection=graph_collection,
+            initial_lore=initial_lore or {},
+            initial_moment=initial_moment or {}
+        )
+    return _create
 
-# --- 集成测试 (Integration Tests) ---
+# --- Integration Tests ---
 
 async def test_memoria_add_and_query(
-    memoria_test_setup: Tuple[ExecutionEngineInterface, Container, HookManager],
+    test_engine_setup: Tuple[ExecutionEngineInterface, Container, HookManager],
     memoria_sandbox_factory: callable
 ):
     """
-    集成测试：验证 memoria.add 和 memoria.query 在引擎中的端到端行为。
+    Tests the basic end-to-end functionality of adding and then querying a memory.
     """
-    # 为 container 和 hook_manager 使用有意义的变量名
-    engine, container, _ = memoria_test_setup
+    engine, container, _ = test_engine_setup
 
-    # Arrange: 创建一个沙盒，并定义一个使用 memoria 运行时的图
-    sandbox = memoria_sandbox_factory(
+    sandbox = await memoria_sandbox_factory(
         graph_collection_dict={
             "main": {
                 "nodes": [
-                    {"id": "add_memory", "run": [{"runtime": "memoria.add", "config": {"stream": "events", "content": "The player entered the village."}}]},
-                    {"id": "query_memory", "depends_on": ["add_memory"], "run": [{"runtime": "memoria.query", "config": {"stream": "events", "latest": 1}}]}
+                    {"id": "add", "run": [{"runtime": "memoria.add", "config": {"stream": "events", "content": "The player entered the village."}}]},
+                    {"id": "query", "depends_on": ["add"], "run": [{"runtime": "memoria.query", "config": {"stream": "events", "latest": 1}}]}
                 ]
             }
         }
     )
 
-    # Act: 执行一步
     final_sandbox = await engine.step(sandbox, {})
-
-    # Assert: 检查最终快照的 moment 和 run_output
-    # 现在使用正确的 'container' 变量来解析服务
     snapshot_store = container.resolve("snapshot_store")
     final_snapshot = snapshot_store.get(final_sandbox.head_snapshot_id)
+    assert final_snapshot is not None
 
-    # 1. 检查 moment 状态
     moment = final_snapshot.moment
-    assert "memoria" in moment
-    assert "events" in moment["memoria"]
+    assert "memoria" in moment and "events" in moment["memoria"]
     assert len(moment["memoria"]["events"]["entries"]) == 1
     assert moment["memoria"]["events"]["entries"][0]["content"] == "The player entered the village."
 
-    # 2. 检查节点输出
-    run_output = final_snapshot.run_output
-    query_output = run_output["query_memory"]["output"]
+    query_output = final_snapshot.run_output["query"]["output"]
     assert len(query_output) == 1
     assert query_output[0]["content"] == "The player entered the village."
 
 
-async def test_synthesis_task_trigger_and_application(
-    memoria_test_setup: Tuple[ExecutionEngineInterface, Container, HookManager],
+async def test_memoria_aggregate_runtime(
+    test_engine_setup: Tuple[ExecutionEngineInterface, Container, HookManager],
     memoria_sandbox_factory: callable
 ):
     """
-    集成测试：验证自动综合任务的完整流程。
+    Tests the full flow from adding, querying, to aggregating memories into a string.
     """
-    # 为 container 使用有意义的变量名
-    engine, container, _ = memoria_test_setup
+    engine, container, _ = test_engine_setup
+    sandbox = await memoria_sandbox_factory(
+        graph_collection_dict={
+            "main": {
+                "nodes": [
+                    {"id": "add1", "run": [{"runtime": "memoria.add", "config": {"stream": "log", "content": "First event."}}]},
+                    {"id": "add2", "run": [{"runtime": "memoria.add", "config": {"stream": "log", "content": "Second event."}}]},
+                    {"id": "query", "depends_on": ["add1", "add2"], "run": [{"runtime": "memoria.query", "config": {"stream": "log", "latest": 2}}]},
+                    {"id": "aggregate", "run": [{"runtime": "memoria.aggregate", "config": {
+                        "entries": "{{ nodes.query.output }}",
+                        "template": "Event #{sequence_id}: {content}",
+                        "joiner": " | "
+                    }}]}
+                ]
+            }
+        }
+    )
 
-    # Arrange
-    # 1. Mock LLM service to return a predictable summary
+    final_sandbox = await engine.step(sandbox, {})
+    snapshot_store = container.resolve("snapshot_store")
+    final_snapshot = snapshot_store.get(final_sandbox.head_snapshot_id)
+    assert final_snapshot is not None
+
+    expected_string = "Event #1: First event. | Event #2: Second event."
+    assert final_snapshot.run_output["aggregate"]["output"] == expected_string
+
+
+async def test_complex_query_with_tags_and_levels(
+    test_engine_setup: Tuple[ExecutionEngineInterface, Container, HookManager],
+    memoria_sandbox_factory: callable
+):
+    """
+    Tests querying with multiple filters (tags and levels) to ensure correctness.
+    """
+    engine, container, _ = test_engine_setup
+    sandbox = await memoria_sandbox_factory(
+        graph_collection_dict={
+            "main": {
+                "nodes": [
+                    {"id": "add1", "run": [{"runtime": "memoria.add", "config": {"stream": "all", "level": "event", "tags": ["combat"], "content": "A"}}]},
+                    {"id": "add2", "run": [{"runtime": "memoria.add", "config": {"stream": "all", "level": "thought", "tags": ["player"], "content": "B"}}]},
+                    {"id": "add3", "run": [{"runtime": "memoria.add", "config": {"stream": "all", "level": "event", "tags": ["social", "player"], "content": "C"}}]},
+                    {"id": "query", "depends_on": ["add1", "add2", "add3"], "run": [{"runtime": "memoria.query", "config": {
+                        "stream": "all",
+                        "levels": ["event"],
+                        "tags": ["player"]
+                    }}]}
+                ]
+            }
+        }
+    )
+
+    final_sandbox = await engine.step(sandbox, {})
+    snapshot_store = container.resolve("snapshot_store")
+    final_snapshot = snapshot_store.get(final_sandbox.head_snapshot_id)
+    assert final_snapshot is not None
+    
+    query_output = final_snapshot.run_output["query"]["output"]
+    assert len(query_output) == 1
+    assert query_output[0]["content"] == "C"
+
+
+async def test_synthesis_task_trigger_and_application(
+    test_engine_setup: Tuple[ExecutionEngineInterface, Container, HookManager],
+    memoria_sandbox_factory: callable
+):
+    """
+    Tests the full auto-synthesis flow: triggering a background task via
+    memoria.add, and applying the result on a subsequent step.
+    """
+    engine, container, _ = test_engine_setup
+
     llm_service_mock = container.resolve("llm_service")
     llm_service_mock.request = AsyncMock(
         return_value=LLMResponse(status=LLMResponseStatus.SUCCESS, content="A grand adventure began.")
     )
+    
+    task_manager = cast(BackgroundTaskManager, container.resolve("task_manager"))
+    queue = task_manager._queue
 
-    # 2. 创建一个沙盒，其 lore 中包含触发综合的配置
-    sandbox = memoria_sandbox_factory(
+    sandbox = await memoria_sandbox_factory(
         graph_collection_dict={
-            "main": {"nodes": [{"id": "add_mem", "run": [{"runtime": "memoria.add", "config": {"stream": "story", "content": "Event {{ moment.counter }}"}}]}]},
-            "second_step": {"nodes": [{"id": "noop", "run": [{"runtime": "system.io.log", "config": {"message": "second step"}}]}]}
+            "main": {"nodes": [{"id": "add_mem", "run": [{"runtime": "memoria.add", "config": {"stream": "story", "content": "Event X"}}]}
+            ]}
         },
         initial_moment={
             "memoria": {
                 "__global_sequence__": 0,
                 "story": {
-                    "config": {
-                        "auto_synthesis": {"enabled": True, "trigger_count": 2}
-                    },
-                    "entries": [],
+                    "config": {"auto_synthesis": {"enabled": True, "trigger_count": 2}},
+                    "entries": [], "synthesis_trigger_counter": 0
                 }
-            },
-            "counter": 0
+            }
         }
     )
     
-    # Act: 连续执行两次，第二次应该会触发综合
-    sandbox.lore['graphs']['main']['nodes'][0]['run'][0]['config']['content'] = "Event 1"
+    # Act 1: First event, counter becomes 1.
     sandbox = await engine.step(sandbox, {})
     
-    sandbox.lore['graphs']['main']['nodes'][0]['run'][0]['config']['content'] = "Event 2"
+    # Act 2: Second event, counter becomes 2, synthesis is triggered.
     sandbox = await engine.step(sandbox, {})
+    assert not queue.empty()
     
-    # Assert (after step 2): 任务已被提交
-    task_manager: BackgroundTaskManager = container.resolve("task_manager")
-    # 等待后台任务执行完成
-    await asyncio.sleep(0.1)
+    # Manually execute the background task.
+    task_func, args, kwargs = await queue.get()
+    await task_func(container, *args, **kwargs)
+    queue.task_done()
     llm_service_mock.request.assert_awaited_once()
 
-    # Act (step 3): 执行一个空操作，触发 `before_graph_execution` 钩子
+    # 【修复】Act 3: 为沙盒设置一个无副作用的图，以触发钩子而不添加新记忆。
     sandbox.lore['graphs'] = {"main": {"nodes": [{"id": "noop", "run": []}]}}
     final_sandbox = await engine.step(sandbox, {})
     
-    # Assert (after step 3): 总结已被应用
+    # Assert: The summary has been applied.
     snapshot_store = container.resolve("snapshot_store")
     final_snapshot = snapshot_store.get(final_sandbox.head_snapshot_id)
-    moment = final_snapshot.moment
+    assert final_snapshot is not None
     
+    moment = final_snapshot.moment
     story_stream = moment["memoria"]["story"]
-    assert len(story_stream["entries"]) == 3 # 2 events + 1 summary
+    
+    # 期望结果: 2个原始事件 + 1个总结 = 3个条目
+    assert len(story_stream["entries"]) == 3
+    
     summary_entry = story_stream["entries"][-1]
     assert summary_entry["content"] == "A grand adventure began."
     assert summary_entry["level"] == "summary"
     assert story_stream["synthesis_trigger_counter"] == 0
 
-# ... (单元测试部分保持不变，因为它不使用 memoria_test_setup) ...
+
+# --- Unit Test ---
+
 async def test_run_synthesis_task_unit_test():
-    """单元测试：验证 `run_synthesis_task` 纯函数的逻辑。"""
-    # Arrange
+    """Unit test for the `run_synthesis_task` pure function logic."""
     mock_container = MagicMock(spec=Container)
     llm_service_mock = AsyncMock()
     llm_service_mock.request.return_value = LLMResponse(status=LLMResponseStatus.SUCCESS, content="A summary.")
     
-    # 模拟 `memoria_event_queue` 字典
     event_queue = {}
     
     mock_container.resolve.side_effect = lambda name: {
@@ -150,7 +228,6 @@ async def test_run_synthesis_task_unit_test():
 
     sandbox_id = uuid.uuid4()
     
-    # Act
     await run_synthesis_task(
         mock_container,
         sandbox_id=sandbox_id,
@@ -159,7 +236,6 @@ async def test_run_synthesis_task_unit_test():
         entries_to_summarize_dicts=[{"content": "e1"}]
     )
 
-    # Assert
     llm_service_mock.request.assert_awaited_once_with(model_name="test", prompt="- e1")
     assert sandbox_id in event_queue
     assert len(event_queue[sandbox_id]) == 1

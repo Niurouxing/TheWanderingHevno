@@ -6,15 +6,12 @@ from typing import Dict, Any, List, Literal
 from fastapi import APIRouter, Depends, HTTPException, Body, Response, status
 from pydantic import BaseModel
 
-# --- 核心依赖 ---
 from backend.core.dependencies import Service
 from plugins.core_engine.contracts import (
     Sandbox,
     EditorUtilsServiceInterface,
-    SnapshotStoreInterface # 仍然需要它来解析依赖，即使不直接传给函数
+    SnapshotStoreInterface # 仍然需要它来解析依赖
 )
-
-# --- 导入本插件的模型 ---
 from .models import Codex, CodexEntry
 
 logger = logging.getLogger(__name__)
@@ -27,7 +24,7 @@ codex_router = APIRouter(
     tags=["Editor API - Codex"]
 )
 
-# --- 辅助函数 (保持不变) ---
+# --- 辅助函数 ---
 def get_sandbox(
     sandbox_id: UUID,
     sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store"))
@@ -51,7 +48,7 @@ def _get_target_scope_dict(sandbox: Sandbox, scope: CodexScope) -> Dict[str, Any
 
 @codex_router.put(
     "/{codex_name}",
-    response_model=Codex, # 【API 优化】返回被操作的Codex本身
+    response_model=Codex,
     summary="Create or update a codex and persist changes"
 )
 async def upsert_codex(
@@ -67,18 +64,16 @@ async def upsert_codex(
         return target_dict
 
     if scope == "moment":
-        # 调用已是异步，且不再需要 snapshot_store 参数
         await editor_utils.perform_live_moment_update(sandbox, update_logic)
     else:
         target_scope_dict = _get_target_scope_dict(sandbox, scope)
-        # 添加 await 来触发持久化
         await editor_utils.perform_sandbox_update(sandbox, lambda s: update_logic(target_scope_dict))
     
     return codex_def
 
 @codex_router.delete(
     "/{codex_name}",
-    status_code=status.HTTP_204_NO_CONTENT, # 【API 优化】使用 204 No Content
+    status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
     summary="Delete a codex and persist changes"
 )
@@ -96,11 +91,9 @@ async def delete_codex(
         return target_dict
 
     if scope == "moment":
-        # 调用已是异步，且不再需要 snapshot_store 参数
         await editor_utils.perform_live_moment_update(sandbox, update_logic)
     else:
         target_scope_dict = _get_target_scope_dict(sandbox, scope)
-        # 添加 await 来触发持久化
         await editor_utils.perform_sandbox_update(sandbox, lambda s: update_logic(target_scope_dict))
     
     return None
@@ -145,7 +138,6 @@ async def add_codex_entry(
 
 @codex_router.post(
     "/{codex_name}/entries:reorder",
-    # 【API优化】返回 204 No Content 表示操作成功但无内容返回，更高效。
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
     summary="Reorder all entries in a codex and persist changes"
@@ -157,39 +149,26 @@ async def reorder_codex_entries(
     sandbox: Sandbox = Depends(get_sandbox),
     editor_utils: EditorUtilsServiceInterface = Depends(Service("editor_utils_service")),
 ):
-    """
-    重新排序指定知识库中的条目。
-    此端点在成功后返回 204 No Content，表示操作已应用。
-    """
-    # 核心的修改逻辑，在字典上就地操作。
     def update_logic(target_dict: Dict[str, Any]):
         codex = target_dict.get("codices", {}).get(codex_name)
         if not codex:
             raise HTTPException(status_code=404, detail=f"Codex '{codex_name}' not found in scope '{scope}'.")
         
         entries = codex.get("entries", [])
-        # 使用字典进行快速查找和验证
         entry_map = {e['id']: e for e in entries if 'id' in e}
         
-        # 验证传入的ID集合是否与现有ID集合完全匹配
         if set(entry_map.keys()) != set(order_request.entry_ids):
              raise HTTPException(status_code=400, detail="Provided entry IDs do not match the existing set of entries.")
         
-        # 根据请求的顺序重新构建条目列表
         codex['entries'] = [entry_map[eid] for eid in order_request.entry_ids]
         return target_dict
 
-    # 根据作用域，调用正确的、异步的、持久化的更新方法
     if scope == "moment":
-        # 对 'moment' 的修改会创建新的快照
         await editor_utils.perform_live_moment_update(sandbox, update_logic)
     else:
-        # 对 'lore' 或 'definition' 的修改直接在沙盒对象上进行
         target_scope_dict = _get_target_scope_dict(sandbox, scope)
         await editor_utils.perform_sandbox_update(sandbox, lambda s: update_logic(target_scope_dict))
 
-    # 【API优化】由于状态码是 204, FastAPI 会自动处理，无需返回任何内容。
-    # 返回 None 是最清晰的做法。
     return None
     
 @codex_router.put(

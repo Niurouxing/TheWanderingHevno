@@ -106,7 +106,22 @@ class PersistenceService(PersistenceServiceInterface):
             return snapshots
         return await asyncio.to_thread(_sync_read_files)
         
-    # ... (所有其他方法，如包导入导出、图标处理等，保持不变) ...
+    async def list_assets(self, asset_type: AssetType) -> List[str]:
+        """Lists all assets of a given type by scanning the assets directory."""
+        if asset_type == AssetType.SANDBOX:
+             # Sandboxes are directories, not files with extensions
+            return await self.list_sandbox_ids()
+
+        ext = FILE_EXTENSIONS.get(asset_type)
+        if not ext:
+            raise ValueError(f"Unknown asset type '{asset_type}' with no defined file extension.")
+
+        # For other asset types, we'd define their storage location.
+        # As of now, only sandboxes are fully implemented, so we return empty for others.
+        # For example: search_dir = self.assets_base_dir / asset_type.value
+        # This implementation assumes other assets aren't stored yet.
+        return []
+
     async def _embed_zip_in_png(self, zip_bytes: bytes, base_image_bytes: Optional[bytes] = None) -> bytes:
         def _sync_embed():
             encoded_data = base64.b64encode(zip_bytes).decode('ascii')
