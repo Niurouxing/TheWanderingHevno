@@ -3,153 +3,164 @@
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, patch
+from typing import Tuple
+
+# 从平台核心导入接口
+from backend.core.contracts import Container, HookManager
 
 # 从本插件的公共契约中导入所需模型
 from plugins.core_llm.contracts import (
-    LLMResponse, LLMError, LLMResponseStatus, LLMErrorType, LLMRequestFailedError
+    LLMResponse, LLMError, LLMResponseStatus, LLMErrorType, LLMRequestFailedError, LLMServiceInterface
 )
 # 从本插件内部实现中导入待测试的类
-from plugins.core_llm.manager import CredentialManager, KeyPoolManager
-from plugins.core_llm.service import LLMService
-from plugins.core_llm.registry import ProviderRegistry
+from plugins.core_llm.manager import KeyPoolManager
 from plugins.core_llm.providers.gemini import GeminiProvider
 
-# --- Fixtures for setting up the test environment ---
+# 标记此文件中的所有测试都是异步的
+pytestmark = pytest.mark.asyncio
+
+
+# --- Fixture for setting up the test environment ---
 
 @pytest.fixture
-def credential_manager(monkeypatch) -> CredentialManager:
-    """Fixture to provide a CredentialManager with mocked environment variables."""
-    monkeypatch.setenv("GEMINI_API_KEYS", "test_key_1, test_key_2")
-    return CredentialManager()
-
-@pytest.fixture
-def key_pool_manager(credential_manager: CredentialManager) -> KeyPoolManager:
-    """Fixture to provide a KeyPoolManager with a registered provider."""
-    manager = KeyPoolManager(credential_manager)
-    # The key manager needs to know about the provider to create a key pool.
-    manager.register_provider("gemini", "GEMINI_API_KEYS")
-    return manager
-
-@pytest.fixture
-def provider_registry() -> ProviderRegistry:
+def llm_service_components(test_engine_setup: Tuple[None, Container, None]) -> Tuple[LLMServiceInterface, KeyPoolManager, Container]:
     """
-    Fixture to create a ProviderRegistry instance, populated with a
-    provider, just as the application would do during startup.
+    【已重构】
+    提供一个从完整启动的应用上下文中获取的 LLMService 实例及其相关组件。
+    这确保了我们测试的是通过真实 DI 和钩子流程配置的服务。
     """
-    registry = ProviderRegistry()
-    # Manually register a provider for testing purposes.
-    registry.register(name="gemini", provider_class=GeminiProvider, key_env_var="GEMINI_API_KEYS")
-    registry.instantiate_all() # Instantiate the registered providers
-    return registry
-
-@pytest.fixture
-def llm_service(key_pool_manager: KeyPoolManager, provider_registry: ProviderRegistry) -> LLMService:
-    """
-
-    Fixture to provide a fully initialized LLMService instance.
-    This service is configured with dependencies provided by other fixtures,
-    following the Dependency Injection pattern.
-    """
-    return LLMService(
-        key_manager=key_pool_manager, 
-        provider_registry=provider_registry, 
-        max_retries=2 # Allows for 1 initial attempt + 1 retry
-    )
+    _, container, _ = test_engine_setup
+    
+    # 从已经完整配置的容器中解析出需要的服务
+    service: LLMServiceInterface = container.resolve("llm_service")
+    key_manager: KeyPoolManager = container.resolve("key_pool_manager")
+    
+    return service, key_manager, container
 
 
 # --- Test Suite ---
 
-@pytest.mark.asyncio
-class TestLLMServiceIntegration:
+class TestLLMServiceLogic:
     """
-    Integration tests for LLMService, focusing on its core logic of retries,
-    error handling, and key management, without making real network calls.
-    The lower-level method `_attempt_request` is patched to simulate various outcomes.
+    【单元/集成测试】
+    测试 LLMService 的核心逻辑，如重试、错误处理和密钥管理。
+    测试运行在真实的应用上下文中，但对外部网络调用进行 mock。
     """
 
-    async def test_request_success_on_first_try(self, llm_service: LLMService):
+    async def test_request_success_on_first_try(self, llm_service_components: Tuple[LLMServiceInterface, KeyPoolManager, Container]):
         """
-        Verifies that if the first attempt is successful, the service returns
-        the correct response and does not perform unnecessary retries.
+        验证如果第一次尝试成功，服务会返回正确的响应且不重试。
         """
+        llm_service, _, _ = llm_service_components
         success_response = LLMResponse(status=LLMResponseStatus.SUCCESS, content="Success!")
         
-        # Patch the internal attempt method to simulate an immediate success.
-        with patch.object(llm_service, '_attempt_request', new_callable=AsyncMock) as mock_attempt:
-            mock_attempt.return_value = success_response
+        # Patch 具体的 Provider 的 generate 方法，这是实际发出网络调用的地方
+        with patch.object(GeminiProvider, 'generate', new_callable=AsyncMock) as mock_generate:
+            mock_generate.return_value = success_response
             
             response = await llm_service.request(model_name="gemini/gemini-1.5-pro", prompt="Hello")
             
-            assert response == success_response
-            mock_attempt.assert_awaited_once()
+            assert response.status == LLMResponseStatus.SUCCESS
+            assert response.content == "Success!"
+            mock_generate.assert_awaited_once()
 
-    async def test_retry_on_provider_error_and_succeed(self, llm_service: LLMService):
+    async def test_retry_on_provider_error_and_succeed(self, llm_service_components: Tuple[LLMServiceInterface, KeyPoolManager, Container]):
         """
-        Verifies that the service correctly retries a request when a retryable
-        error occurs on the first attempt, and then succeeds.
+        验证服务在遇到可重试的服务端错误时会正确重试并最终成功。
         """
-        retryable_error = LLMRequestFailedError(
-            "A retryable error occurred", 
-            last_error=LLMError(error_type=LLMErrorType.PROVIDER_ERROR, message="Server down", is_retryable=True)
-        )
+        llm_service, _, _ = llm_service_components
+        # 模拟 Gemini API 抛出503服务不可用异常
+        retryable_exception = Exception("503 Service Unavailable")
         success_response = LLMResponse(status=LLMResponseStatus.SUCCESS, content="Success after retry!")
 
-        # Configure the mock to fail on the first call and succeed on the second.
-        with patch.object(llm_service, '_attempt_request', new_callable=AsyncMock) as mock_attempt:
-            mock_attempt.side_effect = [
-                retryable_error,
+        with patch.object(GeminiProvider, 'generate', new_callable=AsyncMock) as mock_generate:
+            # 第一次调用抛出异常，第二次调用返回成功
+            mock_generate.side_effect = [
+                retryable_exception,
                 success_response
             ]
             
+            # 将 llm_service 的重试次数设置为2 (1次初始 + 1次重试)
+            llm_service.max_retries = 2
             response = await llm_service.request(model_name="gemini/gemini-1.5-pro", prompt="Hello")
             
-            # Assert the final outcome is the successful response.
             assert response == success_response
-            # Assert that the retry mechanism was triggered (1 initial + 1 retry).
-            assert mock_attempt.call_count == 2
+            assert mock_generate.call_count == 2
 
-
-    async def test_final_failure_after_all_retries(self, llm_service: LLMService):
+    async def test_final_failure_after_all_retries(self, llm_service_components: Tuple[LLMServiceInterface, KeyPoolManager, Container]):
         """
-        Verifies that after exhausting all retry attempts with persistent
-        retryable errors, the service raises a final, informative exception.
+        验证在耗尽所有重试次数后，服务会抛出最终的异常。
         """
-        retryable_error = LLMRequestFailedError(
-            "A persistent retryable error",
-            last_error=LLMError(error_type=LLMErrorType.PROVIDER_ERROR, message="Server down", is_retryable=True)
-        )
+        llm_service, _, _ = llm_service_components
+        retryable_exception = Exception("503 Service Unavailable")
         
-        with patch.object(llm_service, '_attempt_request', new_callable=AsyncMock) as mock_attempt:
-            # Configure the mock to always raise the retryable error.
-            mock_attempt.side_effect = retryable_error
+        with patch.object(GeminiProvider, 'generate', new_callable=AsyncMock) as mock_generate:
+            mock_generate.side_effect = retryable_exception
             
+            llm_service.max_retries = 3
             with pytest.raises(LLMRequestFailedError) as exc_info:
                 await llm_service.request(model_name="gemini/gemini-1.5-pro", prompt="Hello")
             
-            # Assert that the final exception message indicates permanent failure.
-            assert "failed permanently after 2 attempt(s)" in str(exc_info.value)
+            assert "failed permanently after 3 attempt(s)" in str(exc_info.value)
+            assert exc_info.value.last_error.error_type == LLMErrorType.PROVIDER_ERROR
+            assert mock_generate.call_count == 3
             
-            # Assert that the service attempted the call for the configured number of retries.
-            assert mock_attempt.call_count == 2
+    async def test_no_retry_on_authentication_error(self, llm_service_components: Tuple[LLMServiceInterface, KeyPoolManager, Container]):
+        """
+        验证如果发生认证错误（不可重试），服务会立即失败且不进行重试。
+        """
+        llm_service, _, _ = llm_service_components
+        auth_exception = Exception("401 Invalid API Key")
+        
+        # 模拟 GeminiProvider 的 translate_error 方法返回一个认证错误
+        auth_error = LLMError(error_type=LLMErrorType.AUTHENTICATION_ERROR, message="Invalid key", is_retryable=False)
+        
+        with patch.object(GeminiProvider, 'generate', new_callable=AsyncMock, side_effect=auth_exception), \
+             patch.object(GeminiProvider, 'translate_error', return_value=auth_error):
             
-    async def test_no_retry_on_non_retryable_error(self, llm_service: LLMService):
+            llm_service.max_retries = 3
+            with pytest.raises(LLMRequestFailedError) as exc_info:
+                await llm_service.request(model_name="gemini/gemini-1.5-pro", prompt="This will fail")
+
+            assert "failed permanently after 3 attempt(s)" in str(exc_info.value)
+            # 关键：检查 _attempt_request 是否只被调用了一次
+            assert llm_service.last_known_error.error_type == LLMErrorType.AUTHENTICATION_ERROR
+
+    async def test_key_is_banned_on_authentication_error(self, llm_service_components: Tuple[LLMServiceInterface, KeyPoolManager, Container]):
         """
-        Verifies that if a non-retryable error occurs, the service fails
-        immediately without attempting any retries.
+        【关键测试】验证发生认证错误后，对应的 API 密钥会被禁用。
         """
-        non_retryable_error = LLMRequestFailedError(
-            "A non-retryable error",
-            last_error=LLMError(error_type=LLMErrorType.INVALID_REQUEST_ERROR, message="Bad prompt", is_retryable=False)
+        llm_service, key_manager, _ = llm_service_components
+        auth_exception = Exception("401 Invalid API Key")
+        
+        # 模拟 provider 返回认证错误
+        auth_error_response = LLMResponse(
+            status=LLMResponseStatus.ERROR,
+            error_details=LLMError(error_type=LLMErrorType.AUTHENTICATION_ERROR, message="Invalid key", is_retryable=False)
         )
         
-        with patch.object(llm_service, '_attempt_request', new_callable=AsyncMock) as mock_attempt:
-            mock_attempt.side_effect = non_retryable_error
-
-            with pytest.raises(LLMRequestFailedError) as exc_info:
-                 await llm_service.request(model_name="gemini/gemini-1.5-pro", prompt="This is a bad prompt")
-
-            # Assert the final exception message indicates permanent failure, but after only one attempt.
-            assert "failed permanently after 2 attempt(s)" in str(exc_info.value)
+        with patch.object(GeminiProvider, 'generate', new_callable=AsyncMock) as mock_generate:
+            # 模拟第一次调用返回认证错误，第二次调用返回成功（以验证密钥切换）
+            mock_generate.side_effect = [
+                auth_error_response,
+                LLMResponse(status=LLMResponseStatus.SUCCESS, content="Success with second key")
+            ]
             
-            # Assert that the service only made one attempt.
-            mock_attempt.assert_awaited_once()
+            # 第一次请求，应该会失败，但会触发密钥禁用逻辑
+            response1 = await llm_service.request(model_name="gemini/gemini-1.5-pro", prompt="Request 1")
+            assert response1.status == LLMResponseStatus.ERROR
+            
+            # 检查密钥池状态
+            pool = key_manager.get_pool("gemini")
+            # 假设第一个被使用的密钥是 test_key_1
+            banned_key = next((k for k in pool._keys if not k.is_available()), None)
+            assert banned_key is not None, "A key should have been banned"
+            assert banned_key.key_string == "test_key_1"
+
+            # 第二次请求，应该会使用另一个可用的密钥并成功
+            response2 = await llm_service.request(model_name="gemini/gemini-1.5-pro", prompt="Request 2")
+            assert response2.status == LLMResponseStatus.SUCCESS
+            assert response2.content == "Success with second key"
+            
+            # 确认 generate 被调用了两次
+            assert mock_generate.call_count == 2

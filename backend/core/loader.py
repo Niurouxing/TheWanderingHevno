@@ -4,11 +4,9 @@ import json
 from pathlib import Path
 import logging
 import importlib
-import importlib.resources
 import traceback
 from typing import List, Dict
 
-# 导入类型提示，而不是实现
 from backend.core.contracts import Container, HookManager, PluginRegisterFunc
 
 logger = logging.getLogger(__name__)
@@ -17,35 +15,39 @@ class PluginLoader:
     def __init__(self, container: Container, hook_manager: HookManager):
         self._container = container
         self._hook_manager = hook_manager
+        self._loaded_plugins_metadata: List[Dict] = [] 
 
     def load_plugins(self):
         """执行插件加载的全过程：发现、排序、注册。"""
-        # 在日志系统配置前使用 print
         print("\n--- Hevno 插件系统：开始加载 ---")
         
-        # 阶段一：发现
         all_plugins = self._discover_plugins()
         if not all_plugins:
             print("警告：在 'plugins' 目录中未发现任何插件。")
             print("--- Hevno 插件系统：加载完成 ---\n")
             return
 
-        # 阶段二：排序 (根据 manifest['backend']['priority'] 中获取)
         sorted_plugins = sorted(
             all_plugins, 
             key=lambda p: (p['manifest']['backend'].get('priority', 100), p['name'])
+        )
+        
+        self._loaded_plugins_metadata = [p['manifest'] for p in sorted_plugins]
+        self._container.register(
+            "loaded_plugins_manifests", 
+            lambda: self._loaded_plugins_metadata, 
+            singleton=True
         )
         
         print("插件加载顺序已确定：")
         for i, p_info in enumerate(sorted_plugins):
             print(f"  {i+1}. {p_info['name']} (优先级: {p_info['manifest']['backend'].get('priority', 100)})")
 
-        # 阶段三：注册
         self._register_plugins(sorted_plugins)
         
         logger.info("所有已发现的插件均已加载并注册完毕。")
         print("--- Hevno 插件系统：加载完成 ---\n")
-
+    
     def _discover_plugins(self) -> List[Dict]:
         discovered = []
         plugins_root_dir = Path(__file__).parent.parent.parent / 'plugins'
@@ -66,13 +68,11 @@ class PluginLoader:
                 with open(manifest_path, 'r', encoding='utf-8') as f:
                     manifest = json.load(f)
                 
-                # 【修改点】不再检查 type，而是检查 manifest 中是否存在 "backend" 键
                 if "backend" in manifest:
-                    # 构造 Python 导入路径
                     import_path = f"plugins.{plugin_path.name}"
                     
                     plugin_info = {
-                        "name": manifest.get('id', plugin_path.name), # 使用 'id' 字段作为权威名称
+                        "name": manifest.get('id', plugin_path.name),
                         "manifest": manifest,
                         "import_path": import_path
                     }
@@ -97,7 +97,6 @@ class PluginLoader:
                     continue
                 
                 register_func: PluginRegisterFunc = getattr(plugin_module, "register_plugin")
-                # 将核心服务注入到插件的注册函数中
                 register_func(self._container, self._hook_manager)
 
             except Exception as e:
