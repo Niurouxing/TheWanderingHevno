@@ -7,6 +7,7 @@ from typing import Tuple, Dict, Any, Callable, AsyncGenerator
 from fastapi import FastAPI
 from httpx import AsyncClient
 from httpx import ASGITransport 
+from fastapi.testclient import TestClient
 from asgi_lifespan import LifespanManager # <--- 关键导入
 
 # 平台核心
@@ -24,6 +25,24 @@ from plugins.core_engine.contracts import (
 # 【修改】从 core_engine 导入存储接口，这是它们现在所属的位置
 from plugins.core_engine.contracts import SandboxStoreInterface, SnapshotStoreInterface
 
+@pytest.fixture(scope="session")
+def app() -> FastAPI:
+    """
+    创建一个 session 级别的 FastAPI 应用实例。
+    这将触发应用的完整启动生命周期（lifespan），包括插件加载和服务注册。
+    只执行一次，以提高测试速度。
+    """
+    return create_app()
+
+@pytest.fixture(scope="session")
+def test_client(app: FastAPI) -> TestClient:
+    """
+    【用于同步 API 测试】
+    提供一个 session 级别的、传统的 FastAPI TestClient。
+    注意：在新的异步 API 中，推荐使用下面的 AsyncClient。
+    """
+    with TestClient(app) as client:
+        yield client
 
 
 
@@ -36,9 +55,6 @@ def event_loop():
     yield loop
     loop.close()
 
-# 【移除】不再需要单独的 app fixture，因为它现在由 client fixture 管理
-
-# 【移除】不再需要 test_client fixture，因为它基于已弃用的 TestClient
 
 @pytest.fixture(scope="session")
 async def client() -> AsyncGenerator[AsyncClient, None]:
