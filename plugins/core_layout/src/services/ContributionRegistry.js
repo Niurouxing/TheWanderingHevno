@@ -1,4 +1,4 @@
-// plugins/core_layout/src/App.jsx
+// plugins/core_layout/src/services/ContributionRegistry.js
 export class ContributionRegistry {
     constructor(manifestProvider) {
         this.pageComponents = [];
@@ -14,7 +14,7 @@ export class ContributionRegistry {
 
         for (const manifest of pagePlugins) {
             for (const pageDef of manifest.frontend.contributions.pageComponents) {
-                if (pageDef.id && pageDef.componentExportName && pageDef.menu) {
+                if (pageDef.id && pageDef.componentExportName) { // 修改: menu 变为可选
                     this.pageComponents.push({
                         ...pageDef,
                         pluginId: manifest.id,

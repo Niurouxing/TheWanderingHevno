@@ -13,11 +13,14 @@ export function LayoutProvider({ children, services }) {
 
   const [pages] = useState(() => contributionRegistry.getPageComponents());
   const [activePageId, setActivePageId] = useState(null);
+  const [currentSandboxId, setCurrentSandboxId] = useState(null); // 新增: 用于编辑器传递 sandboxId
 
   const value = {
     pages,
     activePageId,
     setActivePageId,
+    currentSandboxId,
+    setCurrentSandboxId,
     services, // 将平台服务传递下去
   };
 

@@ -6,6 +6,7 @@ import { Box, Grid, Typography, CircularProgress } from '@mui/material';
 import { SandboxCard } from './components/SandboxCard';
 import { CreateSandboxDialog } from './components/CreateSandboxDialog';
 import { AddSandboxCard } from './components/AddSandboxCard';
+import { useLayout } from '../../core_layout/src/context/LayoutContext'; 
 
 // --- API 调用函数 ---
 // 将这些函数放在组件外部，因为它们不依赖于组件状态
@@ -65,6 +66,7 @@ export function SandboxExplorerPage({ services }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [isCreateDialogOpen, setCreateDialogOpen] = useState(false);
+  const { setActivePageId, setCurrentSandboxId } = useLayout(); // 新增: 从 LayoutContext 获取 setter
   
   // 从宿主传入的服务中获取 hookManager
   const hookManager = services.get('hookManager');
@@ -117,6 +119,12 @@ export function SandboxExplorerPage({ services }) {
     alert(`Sandbox ${sandboxId} selected! (Hook triggered)`);
   };
 
+  const handleEdit = (sandboxId) => {
+    // 新逻辑: 设置当前沙盒 ID 并切换到编辑器页面
+    setCurrentSandboxId(sandboxId);
+    setActivePageId('sandbox_editor.main_view');
+  };
+
   // --- 渲染逻辑 ---
   if (loading) {
     return <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}><CircularProgress /></Box>;
@@ -137,18 +145,16 @@ export function SandboxExplorerPage({ services }) {
       <Typography variant="h4" gutterBottom>My Sandboxes</Typography>
       
       <Grid container spacing={3}>
-        {/* 第一项：总是显示添加卡片 */}
         <Grid item xs={12} sm={6} md={4} lg={3}>
           <AddSandboxCard onClick={() => setCreateDialogOpen(true)} />
         </Grid>
 
-        {/* 后续项：渲染已有的沙盒卡片 */}
         {sandboxes.map((sandbox) => (
           <Grid item key={sandbox.id} xs={12} sm={6} md={4} lg={3}>
             <SandboxCard 
                 sandbox={sandbox}
                 onSelect={handleSelect}
-                onEdit={() => alert(`Editing ${sandbox.name}`)}
+                onEdit={() => handleEdit(sandbox.id)} // 修改: 使用 handleEdit
                 onRun={() => alert(`Running ${sandbox.name}`)}
                 onDelete={handleDelete}
             />
