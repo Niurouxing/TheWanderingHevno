@@ -41,8 +41,7 @@ class PersistenceService(PersistenceServiceInterface):
     # --- 沙盒持久化方法 (异步) ---
     async def save_sandbox(self, sandbox: Sandbox) -> None:
         sandbox_dir = self._get_sandbox_dir(sandbox.id)
-        # mkdir is fast and can remain synchronous
-        sandbox_dir.mkdir(exist_ok=True)
+        sandbox_dir.mkdir(parents=True, exist_ok=True)
         file_path = sandbox_dir / "sandbox.json"
         async with aiofiles.open(file_path, mode='w', encoding='utf-8') as f:
             await f.write(sandbox.model_dump_json(indent=2))
@@ -74,7 +73,7 @@ class PersistenceService(PersistenceServiceInterface):
     # --- 快照持久化方法 (异步) ---
     async def save_snapshot(self, snapshot: StateSnapshot) -> None:
         snapshot_dir = self._get_sandbox_dir(snapshot.sandbox_id) / "snapshots"
-        snapshot_dir.mkdir(exist_ok=True)
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
         file_path = snapshot_dir / f"{snapshot.id}.json"
         async with aiofiles.open(file_path, mode='w', encoding='utf-8') as f:
             await f.write(snapshot.model_dump_json(indent=2))
@@ -154,13 +153,16 @@ class PersistenceService(PersistenceServiceInterface):
         logger.info(f"Saved icon for sandbox {sandbox_id} to {icon_path}")
         return icon_path
 
-    async def export_package(self, manifest: PackageManifest, data_files: Dict[str, BaseModel], base_image_bytes: Optional[bytes] = None) -> bytes:
+    async def export_package(self, manifest: PackageManifest, data_files: Dict[str, Any], base_image_bytes: Optional[bytes] = None) -> bytes:
         def _sync_zip():
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr('manifest.json', manifest.model_dump_json(indent=2))
                 for filename, model_instance in data_files.items():
-                    file_content = model_instance.model_dump_json(indent=2)
+                    if isinstance(model_instance, BaseModel):
+                        file_content = model_instance.model_dump_json(indent=2)
+                    else:
+                        file_content = json.dumps(model_instance, indent=2)
                     zf.writestr(f'data/{filename}', file_content)
             return zip_buffer.getvalue()
 

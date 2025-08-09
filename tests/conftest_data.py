@@ -1,3 +1,5 @@
+# tests/conftest_data.py
+
 import pytest
 from plugins.core_engine.contracts import GraphCollection
 
@@ -21,7 +23,7 @@ def parallel_collection() -> GraphCollection:
 
 @pytest.fixture(scope="session")
 def pipeline_collection() -> GraphCollection:
-    # 【已修改】 world.main_character -> moment.main_character
+    # 已更新: world.main_character -> moment.main_character
     return GraphCollection.model_validate({"main": {"nodes": [{"id": "A", "run": [
         {"runtime": "system.execute", "config": {"code": "moment.main_character = 'Sir Reginald'"}},
         {"runtime": "system.io.input", "config": {"value": "A secret message"}},
@@ -30,7 +32,7 @@ def pipeline_collection() -> GraphCollection:
 
 @pytest.fixture(scope="session")
 def world_vars_collection() -> GraphCollection:
-    # 【已修改】 world.theme -> moment.theme
+    # 已更新: world.theme -> moment.theme
     return GraphCollection.model_validate({"main": {"nodes": [
         {"id": "setter", "run": [{"runtime": "system.execute", "config": {"code": "moment.theme = 'cyberpunk'"}}]},
         {"id": "reader", "depends_on": ["setter"], "run": [{"runtime": "system.io.input", "config": {"value": "{{ f'The theme is: {moment.theme}'}}"}}]}
@@ -38,7 +40,7 @@ def world_vars_collection() -> GraphCollection:
 
 @pytest.fixture(scope="session")
 def execute_runtime_collection() -> GraphCollection:
-    # 【已修改】 world.player_status -> moment.player_status
+    # 已更新: world.player_status -> moment.player_status
     return GraphCollection.model_validate({"main": {"nodes": [
         {"id": "A_generate_code", "run": [{"runtime": "system.io.input", "config": {"value": "moment.player_status = 'empowered'"}}]},
         {"id": "B_execute_code", "run": [{"runtime": "system.execute", "config": {"code": "{{ nodes.A_generate_code.output }}"}}]}
@@ -67,7 +69,7 @@ def invalid_graph_no_main() -> dict:
 
 @pytest.fixture(scope="session")
 def graph_evolution_collection() -> GraphCollection:
-    # 【已重构】现在通过写入 lore.graphs 来实现图的演化
+    # 已重构: 通过向 lore.graphs 写入来实现图的演化
     new_graph_dict = {"main": {"nodes": [{"id": "new_node", "run": [{"runtime": "system.io.input", "config": {"value": "This is the evolved graph!"}}]}]}}
     return GraphCollection.model_validate({"main": {"nodes": [{"id": "graph_generator", "run": [{
         "runtime": "system.execute",
@@ -76,22 +78,29 @@ def graph_evolution_collection() -> GraphCollection:
 
 @pytest.fixture(scope="session")
 def advanced_macro_collection() -> GraphCollection:
-    # 【已修改】 world. -> moment.
+    # 【修复】将函数体作为字符串存入 lore，而不是将函数对象存入 moment。
+    # 这样可以保证所有状态都是可序列化的。
+    hypot_function_string = "import math\\ndef calculate_hypotenuse(a, b): return math.sqrt(a**2 + b**2)"
+
     return GraphCollection.model_validate({"main": {"nodes": [
-        {"id": "teach_skill", "run": [{"runtime": "system.execute", "config": {"code": """
-import math
-def calculate_hypotenuse(a, b): return math.sqrt(a**2 + b**2)
-if not hasattr(moment, 'math_utils'): moment.math_utils = {}
-moment.math_utils.hypot = calculate_hypotenuse
+        {"id": "teach_skill", "run": [{"runtime": "system.execute", "config": {
+            "code": f"lore.math_utils_code = '{hypot_function_string}'"}}]},
+        
+        {"id": "use_skill", "depends_on": ["teach_skill"], "run": [{"runtime": "system.execute", "config": {
+            "code": """
+# 在执行上下文中动态定义函数
+exec(lore.math_utils_code, globals())
+# 调用刚刚定义的函数
+return calculate_hypotenuse(3, 4)
 """}}]},
-        {"id": "use_skill", "depends_on": ["teach_skill"], "run": [{"runtime": "system.io.input", "config": {"value": "{{ moment.math_utils.hypot(3, 4) }}"}}]},
+        
         {"id": "llm_propose_change", "run": [{"runtime": "system.io.input", "config": {"value": "moment.game_difficulty = 'hard'"}}]},
         {"id": "execute_change", "run": [{"runtime": "system.execute", "config": {"code": "{{ nodes.llm_propose_change.output }}"}}]}
     ]}})
 
 @pytest.fixture(scope="session")
 def subgraph_call_collection() -> GraphCollection:
-    # 【已修改】 world.global_setting -> moment.global_setting
+    # 已更新: world.global_setting -> moment.global_setting
     return GraphCollection.model_validate({"main": {"nodes": [
         {"id": "data_provider", "run": [{"runtime": "system.io.input", "config": {"value": "Hello from main"}}]},
         {"id": "main_caller", "run": [{"runtime": "system.flow.call", "config": {"graph": "process_item", "using": {"item_input": "{{ nodes.data_provider.output }}"}}}]}
@@ -109,7 +118,7 @@ def subgraph_call_to_nonexistent_graph_collection() -> GraphCollection:
 
 @pytest.fixture(scope="session")
 def subgraph_modifies_world_collection() -> GraphCollection:
-    # 【已修改】 world.counter -> moment.counter
+    # 已更新: world.counter -> moment.counter
     return GraphCollection.model_validate({"main": {"nodes": [
         {"id": "caller", "run": [{"runtime": "system.flow.call", "config": {"graph": "modifier", "using": {"amount": 10}}}]},
         {"id": "reader", "run": [{"runtime": "system.io.input", "config": {"value": "{{ f'Final counter: {moment.counter}, Subgraph raw output: {nodes.caller.output}' }}"}}]}
@@ -127,14 +136,14 @@ def subgraph_with_failure_collection() -> GraphCollection:
 
 @pytest.fixture(scope="session")
 def dynamic_subgraph_call_collection() -> GraphCollection:
-    # 【已修改】 world.target_graph -> lore.target_graph (更符合逻辑)
+    # 已更新: world.target_graph -> lore.target_graph (更符合逻辑)
     return GraphCollection.model_validate({"main": {"nodes": [{"id": "dynamic_caller", "run": [{"runtime": "system.flow.call", "config": {"graph": "{{ lore.target_graph }}", "using": {"data": "dynamic data"}}}]}]},
         "sub_a": {"nodes": [{"id": "processor_a", "run": [{"runtime": "system.io.input", "config": {"value": "{{ f'Processed by A: {nodes.data.output}' }}"}}]}]},
         "sub_b": {"nodes": [{"id": "processor_b", "run": [{"runtime": "system.io.input", "config": {"value": "{{ f'Processed by B: {nodes.data.output}' }}"}}]}]}})
 
 @pytest.fixture(scope="session")
 def concurrent_write_collection() -> GraphCollection:
-    # 【已修改】 world.counter -> moment.counter
+    # 已更新: world.counter -> moment.counter
     increment_code = "for i in range(100):\n    moment.counter += 1"
     return GraphCollection.model_validate({"main": {"nodes": [
         {"id": "inc_A", "run": [{"runtime": "system.execute", "config": {"code": increment_code}}]},
@@ -162,7 +171,7 @@ def map_collection_with_collect(map_collection_basic: GraphCollection) -> GraphC
 
 @pytest.fixture(scope="session")
 def map_collection_concurrent_write() -> GraphCollection:
-    # 【已修改】 world.gold -> moment.gold
+    # 已更新: world.gold -> moment.gold
     return GraphCollection.model_validate({"main": {"nodes": [
         {"id": "task_provider", "run": [{"runtime": "system.io.input", "config": {"value": list(range(10))}}]},
         {"id": "concurrent_adder_map", "run": [{"runtime": "system.flow.map", "config": {"list": "{{ nodes.task_provider.output }}", "graph": "add_gold"}}]},
@@ -180,26 +189,50 @@ def map_collection_with_failure() -> GraphCollection:
         }}]}
     ]}, "process_name": {"nodes": [{"id": "get_name", "run": [{"runtime": "system.io.input", "config": {"value": "{{ nodes.character_data.output.name }}"}}]}]}})
 
+
+@pytest.fixture(scope="session")
+def map_collection_with_collect_and_subgraph_node_ref() -> GraphCollection:
+    return GraphCollection.model_validate({
+        "main": { "nodes": [{"id": "mapper", "run": [{"runtime": "system.flow.map", "config": {
+                            "list": ["apple", "banana"],
+                            "graph": "process_with_index",
+                            "using": {"fruit": "{{ source.item }}", "idx": "{{ source.index }}"},
+                            "collect": "{{ nodes.processor.output }}" }}]}]
+        },
+        "process_with_index": {"nodes": [{"id": "processor", "run": [{"runtime": "system.io.input", "config": {
+                        "value": "{{ f'Item: {nodes.fruit.output} at index {nodes.idx.output}' }}"}}]}]
+        }})
+
+@pytest.fixture(scope="session")
+def call_collection_with_using_node_ref() -> GraphCollection:
+    return GraphCollection.model_validate({
+        "main": {"nodes": [{"id": "data_provider", "run": [{"runtime": "system.io.input", "config": {"value": "External Data"}}]},
+                           {"id": "caller", "run": [{"runtime": "system.flow.call", "config": {"graph": "processor_graph", "using": {
+                               "input_from_main": "{{ nodes.data_provider.output }}"}}}]}]},
+        "processor_graph": {"nodes": [{"id": "processor", "run": [{"runtime": "system.io.input", "config": {
+                        "value": "{{ f'Processed: {nodes.input_from_main.output}' }}"}}]}]
+        }})
+
+
 # --- Codex Data Fixtures (已全部重构) ---
 
 @pytest.fixture(scope="session")
 def codex_basic_data() -> dict:
-    """【已重构】将 codices 放入 lore 作用域。"""
+    """已重构: 将 codices 放入 lore 作用域。"""
     return {
         "lore": {
             "graphs": {"main": {"nodes": [{"id": "invoke_test", "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "info"}]}}]}]}},
-            "codices": {
-                "info": {"entries": [
+            "codices": { "info": {"entries": [
                     {"id": "greeting", "content": "你好，冒险者！", "priority": 10},
                     {"id": "intro", "content": "欢迎来到这个奇幻的世界。", "priority": 5}
-                ]}
-            }
-        }
+                ]}}
+        },
+        "moment": {}
     }
 
 @pytest.fixture(scope="session")
 def codex_keyword_and_priority_data() -> dict:
-    """【已重构】将 codices 放入 lore 作用域。"""
+    """已重构: 将 codices 放入 lore 作用域。"""
     return {
         "lore": {
             "graphs": {"main": {"nodes": [
@@ -210,12 +243,13 @@ def codex_keyword_and_priority_data() -> dict:
                 "weather": {"entries": [{"id": "magic", "content": "魔法能量活跃", "trigger_mode": "on_keyword", "keywords": ["魔法天气"], "priority": 30}]},
                 "mood": {"entries": [{"id": "happy", "content": "你很高兴", "trigger_mode": "on_keyword", "keywords": ["开心"], "priority": 5}]}
             }
-        }
+        },
+        "moment": {}
     }
 
 @pytest.fixture(scope="session")
 def codex_macro_eval_data() -> dict:
-    """【已重构】将 codices 放入 lore，将动态状态放入 moment。"""
+    """已重构: 将静态 codex 放入 lore，动态状态放入 moment。"""
     return {
         "lore": {
             "graphs": {"main": {"nodes": [{"id": "get_report", "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "dynamic", "source": "告诉我关于秘密"}]}}]}]}},
@@ -224,7 +258,6 @@ def codex_macro_eval_data() -> dict:
                 {"id": "secret_info", "content": "你提到了秘密", "trigger_mode": "on_keyword", "keywords": "{{ [moment.hidden_keyword] }}"}
             ]}}
         },
-        # moment 提供了 is_night 和 hidden_keyword 的值
         "moment": {
             "is_night": True,
             "hidden_keyword": "秘密"
@@ -233,22 +266,23 @@ def codex_macro_eval_data() -> dict:
 
 @pytest.fixture(scope="session")
 def codex_recursion_data() -> dict:
-    """【已重构】将 codices 放入 lore 作用域。"""
+    """已重构: 将 codices 放入 lore 作用域。"""
     return {
         "lore": {
-            "graphs": {"main": {"nodes": [{"id": "recursive_invoke", "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "lore", "source": "A"}], "recursion_enabled": True, "debug": True}}]}]}},
+            "graphs": {"main": {"nodes": [{"id": "recursive_invoke", "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "lore", "source": "A"}], "recursion_enabled": True}}]}]}},
             "codices": {"lore": {"entries": [
                 {"id": "entry_A", "content": "这是关于A的信息，它引出B。", "trigger_mode": "on_keyword", "keywords": ["A"], "priority": 10},
                 {"id": "entry_B", "content": "B被A触发了，它又引出C。", "trigger_mode": "on_keyword", "keywords": ["B"], "priority": 20},
                 {"id": "entry_C", "content": "C被B触发了，这是最终信息。", "trigger_mode": "on_keyword", "keywords": ["C"], "priority": 30},
                 {"id": "entry_D_always_on", "content": "这是一个总是存在的背景信息。", "trigger_mode": "always_on", "priority": 5}
             ]}}
-        }
+        },
+        "moment": {}
     }
 
 @pytest.fixture(scope="session")
 def codex_concurrent_world_write_data() -> dict:
-    """【已重构】将 codices 放入 lore, counter 放入 moment。"""
+    """已重构: 将 codices 放入 lore, counter 放入 moment。"""
     return {
         "lore": {
             "graphs": {"main": {"nodes": [
@@ -268,85 +302,11 @@ def codex_concurrent_world_write_data() -> dict:
 
 @pytest.fixture(scope="session")
 def codex_nonexistent_codex_data() -> dict:
-    """【已重构】将 codices 放入 lore 作用域。"""
+    """已重构: 将 codices 放入 lore 作用域。"""
     return {
         "lore": {
             "graphs": {"main": {"nodes": [{"id": "invoke_nonexistent", "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "nonexistent_codex"}]}}]}]}},
             "codices": {}
-        }
+        },
+        "moment": {}
     }
-
-# --- Fixtures for dependency parser tests (保持不变，因为它们不依赖宏) ---
-@pytest.fixture(scope="session")
-def map_collection_with_collect_and_subgraph_node_ref() -> GraphCollection:
-    # ... (保持不变) ...
-    return GraphCollection.model_validate({
-        "main": {
-            "nodes": [
-                {
-                    "id": "mapper",
-                    "run": [{
-                        "runtime": "system.flow.map",
-                        "config": {
-                            "list": ["apple", "banana"],
-                            "graph": "process_with_index",
-                            "using": {
-                                "fruit": "{{ source.item }}",
-                                "idx": "{{ source.index }}"
-                            },
-                            "collect": "{{ nodes.processor.output }}" 
-                        }
-                    }]
-                }
-            ]
-        },
-        "process_with_index": {
-            "nodes": [
-                {
-                    "id": "processor",
-                    "run": [{"runtime": "system.io.input", "config": {
-                        "value": "{{ f'Item: {nodes.fruit.output} at index {nodes.idx.output}' }}"
-                    }}]
-                }
-            ]
-        }
-    })
-
-@pytest.fixture(scope="session")
-def call_collection_with_using_node_ref() -> GraphCollection:
-    # ... (保持不变) ...
-    return GraphCollection.model_validate({
-        "main": {
-            "nodes": [
-                {
-                    "id": "data_provider",
-                    "run": [{
-                        "runtime": "system.io.input",
-                        "config": {"value": "External Data"}
-                    }]
-                },
-                {
-                    "id": "caller",
-                    "run": [{
-                        "runtime": "system.flow.call",
-                        "config": {
-                            "graph": "processor_graph",
-                            "using": {
-                                "input_from_main": "{{ nodes.data_provider.output }}"
-                            }
-                        }
-                    }]
-                }
-            ]
-        },
-        "processor_graph": {
-            "nodes": [
-                {
-                    "id": "processor",
-                    "run": [{"runtime": "system.io.input", "config": {
-                        "value": "{{ f'Processed: {nodes.input_from_main.output}' }}"
-                    }}]
-                }
-            ]
-        }
-    })
