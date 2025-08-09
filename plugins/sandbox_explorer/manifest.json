@@ -1,0 +1,26 @@
+{
+    "id": "sandbox_explorer",
+    "name": "Sandbox Explorer",
+    "version": "1.0.0",
+    "description": "Provides a UI to browse, create, and manage sandboxes.",
+    "author": "Hevno Team",
+    "frontend": {
+        "type": "page-component",
+        "priority": 100,
+        "entryPoint": "dist/main.js",
+        "srcEntryPoint": "src/SandboxExplorerPage.jsx",
+        "contributions": {
+            "pageComponents": [
+                {
+                    "id": "sandbox_explorer.main_view",
+                    "componentExportName": "SandboxExplorerPage",
+                    "menu": {
+                        "path": "/sandboxes",
+                        "title": "My Sandboxes",
+                        "icon": "DashboardCustomizeRounded"
+                    }
+                }
+            ]
+        }
+    }
+}
