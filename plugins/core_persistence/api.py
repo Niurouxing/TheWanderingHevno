@@ -25,7 +25,7 @@ async def list_assets_by_type(
     列出指定类型的所有已保存资产的名称。
     """
     try:
-        return service.list_assets(asset_type)
+        return await service.list_assets(asset_type)
     except Exception as e:
         logger.error(f"Failed to list assets of type '{asset_type.value}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while listing assets.")

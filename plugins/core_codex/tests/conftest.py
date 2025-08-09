@@ -20,7 +20,7 @@ async def client():
     一个能在应用生命周期内与测试 FastAPI 应用交互的 AsyncClient。
     """
     async with LifespanManager(app):
-        # --- 【修复】将 app 对象包装在 ASGITransport 中，并作为 transport 参数传递 ---
+        # --- 将 app 对象包装在 ASGITransport 中，并作为 transport 参数传递 ---
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             yield c
 

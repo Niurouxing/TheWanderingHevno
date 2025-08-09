@@ -172,21 +172,17 @@ class ExecutionEngine(SubGraphRunner):
         )
         
         # 6. 【新】原子性地更新和保存状态
-        # (注意：在真实系统中，这应该在一个数据库事务中完成)
-        
         # a. 保存新快照
-        snapshot_store.save(new_snapshot)
+        snapshot_store: SnapshotStoreInterface = self.container.resolve("snapshot_store")
+        await snapshot_store.save(new_snapshot) # <-- 添加 await
 
         # b. 更新 Sandbox 对象的 Lore 和头指针
         sandbox.lore = updated_lore
         sandbox.head_snapshot_id = new_snapshot.id
         
         # c. 保存更新后的 Sandbox 对象
-        # 这里的 sandbox_store 是一个简单的 dict，所以修改是即时的。
-        # 如果使用持久化服务，会是这样:
-        # persistence: PersistenceServiceInterface = self.container.resolve("persistence_service")
-        # await persistence.save_sandbox(sandbox)
-        # 我们将在适配 core_api 阶段处理持久化
+        sandbox_store: PersistentSandboxStore = self.container.resolve("sandbox_store")
+        await sandbox_store.save(sandbox)
         
         await self.hook_manager.trigger(
             "snapshot_committed", 

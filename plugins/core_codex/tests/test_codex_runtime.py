@@ -29,7 +29,7 @@ def codex_sandbox_factory(
         if 'graphs' in initial_lore:
             del initial_lore['graphs']
             
-        # --- 【修复】核心变更点 ---
+        # --- 核心变更点 ---
         # 1. 将图的字典验证为 Pydantic 模型实例
         graph_collection_obj = GraphCollection.model_validate(graph_collection_dict)
 
@@ -52,7 +52,7 @@ async def test_basic_invoke_always_on(
     """测试 'always_on' 模式和优先级排序。"""
     engine, container, _ = test_engine_setup
     
-    # 【修复】从测试数据中提取图，因为 codex_sandbox_factory 不再处理它
+    # 从测试数据中提取图，因为 codex_sandbox_factory 不再处理它
     codex_basic_data["lore"]["graphs"] = {"main": {"nodes": [{"id": "invoke_test", "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "info"}]}}]}]}}
     sandbox = codex_sandbox_factory(codex_basic_data)
     
@@ -73,7 +73,7 @@ async def test_invoke_recursion_enabled(
     """测试递归激活功能。"""
     engine, container, _ = test_engine_setup
     
-    # 【修复】从测试数据中提取图
+    # 从测试数据中提取图
     codex_recursion_data["lore"]["graphs"] = {"main": {"nodes": [{"id": "recursive_invoke", "run": [{"runtime": "codex.invoke", "config": {"from": [{"codex": "lore", "source": "A"}], "recursion_enabled": True, "debug": True}}]}]}}
     sandbox = codex_sandbox_factory(codex_recursion_data)
 

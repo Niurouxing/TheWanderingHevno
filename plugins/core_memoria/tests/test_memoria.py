@@ -29,7 +29,7 @@ async def test_memoria_add_and_query(
     """
     集成测试：验证 memoria.add 和 memoria.query 在引擎中的端到端行为。
     """
-    # 【修复】为 container 和 hook_manager 使用有意义的变量名
+    # 为 container 和 hook_manager 使用有意义的变量名
     engine, container, _ = memoria_test_setup
 
     # Arrange: 创建一个沙盒，并定义一个使用 memoria 运行时的图
@@ -48,7 +48,7 @@ async def test_memoria_add_and_query(
     final_sandbox = await engine.step(sandbox, {})
 
     # Assert: 检查最终快照的 moment 和 run_output
-    # 【修复】现在使用正确的 'container' 变量来解析服务
+    # 现在使用正确的 'container' 变量来解析服务
     snapshot_store = container.resolve("snapshot_store")
     final_snapshot = snapshot_store.get(final_sandbox.head_snapshot_id)
 
@@ -73,7 +73,7 @@ async def test_synthesis_task_trigger_and_application(
     """
     集成测试：验证自动综合任务的完整流程。
     """
-    # 【修复】为 container 使用有意义的变量名
+    # 为 container 使用有意义的变量名
     engine, container, _ = memoria_test_setup
 
     # Arrange

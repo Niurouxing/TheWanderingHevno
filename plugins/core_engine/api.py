@@ -3,7 +3,7 @@
 import io
 import logging
 import json
-import uuid  # <-- [新] 导入 uuid 模块
+import uuid
 from typing import Dict, Any, List, Optional
 from uuid import UUID
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from PIL import Image
 
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File
-from fastapi.responses import Response, FileResponse, JSONResponse  # <-- [新] 导入 JSONResponse
+from fastapi.responses import Response, FileResponse, JSONResponse
 
 # 导入核心依赖解析器和所有必要的接口与数据模型（契约）
 from backend.core.dependencies import Service
@@ -26,6 +26,8 @@ from plugins.core_persistence.contracts import (
     PackageManifest, 
     PackageType
 )
+# 导入新的持久化存储类以进行类型提示，增强代码可读性
+from plugins.core_persistence.stores import PersistentSandboxStore
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +37,6 @@ router = APIRouter(
 )
 
 # --- Request/Response Models ---
-
-# ... (现有的 CreateSandboxRequest, SandboxListItem, UpdateSandboxRequest 模型保持不变) ...
 
 class CreateSandboxRequest(BaseModel):
     name: str = Field(..., description="沙盒的人类可读名称。")
@@ -61,22 +61,21 @@ class SandboxListItem(BaseModel):
 class UpdateSandboxRequest(BaseModel):
     name: str = Field(..., min_length=1, description="沙盒的新名称。")
 
-# --- [新] 用于 JSON 导入/导出的数据模型 ---
 class SandboxArchiveJSON(BaseModel):
-    """一个自包含的沙盒归档，用于纯JSON格式的导入和导出。"""
     sandbox: Sandbox
     snapshots: List[StateSnapshot]
-# --- 结束新模型定义 ---
-
 
 # --- Sandbox Lifecycle API ---
-# ... (现有的 create_sandbox, execute_sandbox_step, revert_sandbox_to_snapshot 保持不变) ...
+
 @router.post("", response_model=Sandbox, status_code=201, summary="Create a new Sandbox")
 async def create_sandbox(
     request_body: CreateSandboxRequest, 
-    sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store")),
+    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
     snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store"))
 ):
+    """
+    创建一个新的沙盒，并将其立即持久化到本地文件系统。
+    """
     initial_lore = request_body.definition.get("initial_lore", {})
     initial_moment = request_body.definition.get("initial_moment", {})
     
@@ -92,21 +91,26 @@ async def create_sandbox(
         sandbox_id=sandbox.id,
         moment=initial_moment
     )
-    snapshot_store.save(genesis_snapshot)
+    await snapshot_store.save(genesis_snapshot)
     
     sandbox.head_snapshot_id = genesis_snapshot.id
-    sandbox_store[sandbox.id] = sandbox
     
-    logger.info(f"Created new sandbox '{sandbox.name}' ({sandbox.id}) using provided definition.")
+    await sandbox_store.save(sandbox)
+    
+    logger.info(f"Created new sandbox '{sandbox.name}' ({sandbox.id}) and saved to disk.")
     return sandbox
+
 
 @router.post("/{sandbox_id}/step", response_model=Sandbox, summary="Execute a step")
 async def execute_sandbox_step(
     sandbox_id: UUID, 
     user_input: Dict[str, Any] = Body(...),
-    sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store")),
+    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
     engine: ExecutionEngineInterface = Depends(Service("execution_engine"))
 ):
+    """
+    执行一步计算。持久化逻辑已封装在 engine.step 方法内部。
+    """
     sandbox = sandbox_store.get(sandbox_id)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found.")
@@ -119,70 +123,90 @@ async def execute_sandbox_step(
 
     return updated_sandbox
 
+
 @router.put("/{sandbox_id}/revert", status_code=200, summary="Revert to a snapshot")
 async def revert_sandbox_to_snapshot(
     sandbox_id: UUID, 
     snapshot_id: UUID = Body(..., embed=True),
-    sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store")),
+    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
     snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store"))
 ):
+    """
+    将沙盒的状态回滚到指定的历史快照。
+    """
     sandbox = sandbox_store.get(sandbox_id)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found.")
 
     target_snapshot = snapshot_store.get(snapshot_id)
+    # 如果缓存里没有，就从磁盘加载所有快照来确认它是否存在
     if not target_snapshot or target_snapshot.sandbox_id != sandbox.id:
-        raise HTTPException(status_code=404, detail="Target snapshot not found or does not belong to this sandbox.")
-    
+        all_snapshots = await snapshot_store.find_by_sandbox(sandbox_id)
+        if not any(s.id == snapshot_id for s in all_snapshots):
+            raise HTTPException(status_code=404, detail="Target snapshot not found or does not belong to this sandbox.")
+
     sandbox.head_snapshot_id = snapshot_id
     
-    logger.info(f"Reverted sandbox '{sandbox.name}' ({sandbox.id}) to snapshot {snapshot_id}.")
+    await sandbox_store.save(sandbox)
+    
+    logger.info(f"Reverted sandbox '{sandbox.name}' ({sandbox.id}) to snapshot {snapshot_id} and saved.")
     return {"message": f"Sandbox '{sandbox.name}' successfully reverted to snapshot {snapshot_id}"}
 
 
 # --- 其他端点 ---
-# ... (现有的 get_sandbox_history, update_sandbox_details, delete_sandbox, list_sandboxes 等保持不变) ...
+
 @router.get("/{sandbox_id}/history", response_model=List[StateSnapshot], summary="Get history")
 async def get_sandbox_history(
     sandbox_id: UUID,
-    sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store")),
+    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
     snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store"))
 ):
     if sandbox_id not in sandbox_store:
         raise HTTPException(status_code=404, detail="Sandbox not found.")
-    return snapshot_store.find_by_sandbox(sandbox_id)
+    return await snapshot_store.find_by_sandbox(sandbox_id)
+
 
 @router.patch("/{sandbox_id}", response_model=Sandbox, summary="Update Sandbox Details")
 async def update_sandbox_details(
     sandbox_id: UUID,
     request_body: UpdateSandboxRequest,
-    sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store"))
+    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store"))
 ):
     sandbox = sandbox_store.get(sandbox_id)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found.")
     sandbox.name = request_body.name
-    logger.info(f"Updated name for sandbox '{sandbox.id}' to '{sandbox.name}'.")
+    
+    await sandbox_store.save(sandbox)
+    
+    logger.info(f"Updated name for sandbox '{sandbox.id}' to '{sandbox.name}' and saved.")
     return sandbox
+
 
 @router.delete("/{sandbox_id}", status_code=204, summary="Delete a Sandbox")
 async def delete_sandbox(
     sandbox_id: UUID,
-    sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store")),
+    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
 ):
+    """
+    从文件系统和缓存中完全删除一个沙盒及其所有数据。
+    """
     if sandbox_id not in sandbox_store:
         raise HTTPException(status_code=404, detail="Sandbox not found.")
     
-    del sandbox_store[sandbox_id]
-    logger.info(f"Deleted sandbox '{sandbox_id}' and all associated data.")
+    await sandbox_store.delete(sandbox_id)
+    
+    logger.info(f"Deleted sandbox '{sandbox_id}' and all associated data from disk.")
     return Response(status_code=204)
+
 
 @router.get("", response_model=List[SandboxListItem], summary="List all Sandboxes")
 async def list_sandboxes(
-    sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store")),
+    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
     persistence_service: PersistenceServiceInterface = Depends(Service("persistence_service"))
 ):
-    all_sandboxes = list(sandbox_store.values())
+    # sandbox_store.values() 从缓存读取，是同步的
+    all_sandboxes = sandbox_store.values()
     response_items = []
     
     for sandbox in all_sandboxes:
@@ -205,6 +229,8 @@ async def list_sandboxes(
         
     return sorted(response_items, key=lambda s: s.created_at, reverse=True)
 
+# --- Icon, Export, Import 端点 ---
+
 @router.get("/{sandbox_id}/icon", response_class=FileResponse, summary="Get Sandbox Icon")
 async def get_sandbox_icon(
     sandbox_id: UUID,
@@ -219,11 +245,12 @@ async def get_sandbox_icon(
         raise HTTPException(status_code=404, detail="Default icon not found on server.")
     return FileResponse(default_icon_path)
 
+
 @router.post("/{sandbox_id}/icon", status_code=200, summary="Upload/Update Sandbox Icon")
 async def upload_sandbox_icon(
     sandbox_id: UUID,
     file: UploadFile = File(...),
-    sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store")),
+    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
     persistence_service: PersistenceServiceInterface = Depends(Service("persistence_service")),
 ):
     sandbox = sandbox_store.get(sandbox_id)
@@ -246,8 +273,11 @@ async def upload_sandbox_icon(
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Invalid PNG file: {e}")
 
-    persistence_service.save_sandbox_icon(str(sandbox.id), icon_bytes)
+    # 添加 await 调用异步方法
+    await persistence_service.save_sandbox_icon(str(sandbox.id), icon_bytes)
     sandbox.icon_updated_at = datetime.now(timezone.utc)
+    
+    await sandbox_store.save(sandbox)
     
     return {"message": "Icon updated successfully."}
 
@@ -259,29 +289,21 @@ async def upload_sandbox_icon(
 )
 async def export_sandbox_json(
     sandbox_id: UUID,
-    sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store")),
+    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
     snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
 ):
-    """
-    将单个沙盒及其所有历史快照导出为一个自包含的 JSON 文件。
-    """
     sandbox = sandbox_store.get(sandbox_id)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found")
 
-    snapshots = snapshot_store.find_by_sandbox(sandbox_id)
+    # 添加 await 调用异步方法
+    snapshots = await snapshot_store.find_by_sandbox(sandbox_id)
     if not snapshots:
         raise HTTPException(status_code=404, detail="No snapshots found for this sandbox to export.")
 
-    # 使用我们定义的新模型构建归档对象
     archive = SandboxArchiveJSON(sandbox=sandbox, snapshots=snapshots)
-
-    # 准备文件名和响应头
     filename = f"hevno_sandbox_{sandbox.name.replace(' ', '_')}_{sandbox_id}.json"
     headers = {"Content-Disposition": f"attachment; filename={filename}"}
-    
-    # 使用 JSONResponse 返回，可以设置自定义头
-    # model_dump(mode='json') 会将 UUID 和 datetime 等对象正确序列化为 JSON 兼容的字符串
     return JSONResponse(content=archive.model_dump(mode="json"), headers=headers)
 
 
@@ -293,13 +315,9 @@ async def export_sandbox_json(
 )
 async def import_sandbox_json(
     file: UploadFile = File(...),
-    sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store")),
+    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
     snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
 ) -> Sandbox:
-    """
-    从一个 JSON 文件导入一个完整的沙盒。
-    为避免冲突，将为导入的沙盒及其所有快照生成新的 UUID。
-    """
     if not file.content_type == "application/json":
         raise HTTPException(status_code=400, detail="Invalid file type. Please upload a .json file.")
 
@@ -307,50 +325,44 @@ async def import_sandbox_json(
         content = await file.read()
         data = json.loads(content)
         archive = SandboxArchiveJSON.model_validate(data)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=422, detail="Invalid JSON file.")
-    except ValidationError as e:
+    except (json.JSONDecodeError, ValidationError) as e:
         raise HTTPException(status_code=422, detail=f"Invalid sandbox archive format: {e}")
 
-    # --- 核心逻辑：重新映射所有ID以避免冲突 ---
-    # 1. 为沙盒和每个快照生成新的ID
     old_sandbox_id = archive.sandbox.id
     new_sandbox_id = uuid.uuid4()
     snapshot_id_map = {snap.id: uuid.uuid4() for snap in archive.snapshots}
     
-    # 2. 存储并应用新的快照
     for old_snapshot in archive.snapshots:
         new_snapshot = old_snapshot.model_copy(update={
             'id': snapshot_id_map[old_snapshot.id],
             'sandbox_id': new_sandbox_id,
             'parent_snapshot_id': snapshot_id_map.get(old_snapshot.parent_snapshot_id)
         })
-        snapshot_store.save(new_snapshot)
+        await snapshot_store.save(new_snapshot)
     
-    # 3. 创建并存储新的沙盒对象
     new_head_id = snapshot_id_map.get(archive.sandbox.head_snapshot_id)
     new_sandbox = archive.sandbox.model_copy(update={
         'id': new_sandbox_id,
         'head_snapshot_id': new_head_id,
         'name': f"{archive.sandbox.name} (Imported)",
         'created_at': datetime.now(timezone.utc),
-        'icon_updated_at': None # 导入的JSON不包含图标信息
+        'icon_updated_at': None
     })
 
     if new_sandbox.id in sandbox_store:
          raise HTTPException(status_code=409, detail=f"A sandbox with the newly generated ID '{new_sandbox.id}' already exists. This is highly unlikely, please try again.")
     
-    sandbox_store[new_sandbox.id] = new_sandbox
+    await sandbox_store.save(new_sandbox)
 
     logger.info(f"Successfully imported sandbox from JSON, new ID is '{new_sandbox.id}'. Original ID was '{old_sandbox_id}'.")
     return new_sandbox
 
 
-
+# PNG 导入/导出端点
 @router.get("/{sandbox_id}/export", response_class=Response, summary="Export a Sandbox as PNG")
 async def export_sandbox(
     sandbox_id: UUID,
-    sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store")),
+    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
     snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
     persistence_service: PersistenceServiceInterface = Depends(Service("persistence_service"))
 ):
@@ -358,7 +370,8 @@ async def export_sandbox(
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found")
 
-    snapshots = snapshot_store.find_by_sandbox(sandbox_id)
+    # 添加 await 调用异步方法
+    snapshots = await snapshot_store.find_by_sandbox(sandbox_id)
     if not snapshots:
         raise HTTPException(status_code=404, detail="No snapshots found for this sandbox to export.")
 
@@ -368,23 +381,31 @@ async def export_sandbox(
         metadata={"sandbox_name": sandbox.name}
     )
     
+    # 准备导出的沙盒数据，兼容旧版
     export_sandbox_data = sandbox.model_dump()
     export_sandbox_data['graph_collection'] = sandbox.lore.get('graphs', {})
 
-    data_files: Dict[str, BaseModel] = {"sandbox.json": Sandbox.model_construct(**export_sandbox_data)}
+    # 注意：这里传递的是字典，而不是Pydantic模型，因为model_dump已经处理过了
+    data_files: Dict[str, Any] = {"sandbox.json": export_sandbox_data}
     for snap in snapshots:
-        data_files[f"snapshots/{snap.id}.json"] = snap
+        data_files[f"snapshots/{snap.id}.json"] = snap.model_dump()
 
     base_image_bytes = None
     icon_path = persistence_service.get_sandbox_icon_path(str(sandbox.id))
-    if not icon_path:
-        icon_path = persistence_service.get_default_icon_path()
+    if icon_path and icon_path.is_file():
+        # 读取图标文件是I/O操作
+        async with aiofiles.open(icon_path, 'rb') as f:
+            base_image_bytes = await f.read()
     
-    if icon_path.is_file():
-        base_image_bytes = icon_path.read_bytes()
+    if not base_image_bytes:
+        default_icon_path = persistence_service.get_default_icon_path()
+        if default_icon_path.is_file():
+             async with aiofiles.open(default_icon_path, 'rb') as f:
+                base_image_bytes = await f.read()
 
     try:
-        png_bytes = persistence_service.export_package(manifest, data_files, base_image_bytes)
+        # 添加 await 调用异步方法
+        png_bytes = await persistence_service.export_package(manifest, data_files, base_image_bytes)
     except Exception as e:
         logger.error(f"Failed to create package for sandbox {sandbox_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to create package: {e}")
@@ -396,20 +417,18 @@ async def export_sandbox(
 @router.post(":import", response_model=Sandbox, summary="Import a Sandbox from PNG")
 async def import_sandbox(
     file: UploadFile = File(...),
-    sandbox_store: Dict[UUID, Sandbox] = Depends(Service("sandbox_store")),
+    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
     snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
     persistence_service: PersistenceServiceInterface = Depends(Service("persistence_service"))
 ) -> Sandbox:
-    """
-    通过一个专门的动作端点从 PNG 文件导入沙盒。
-    """
     if not file.filename or not file.filename.endswith(".png"):
         raise HTTPException(status_code=400, detail="Invalid file type. Please upload a .png file.")
 
     package_bytes = await file.read()
     
     try:
-        manifest, data_files, png_bytes = persistence_service.import_package(package_bytes)
+        # 添加 await 调用异步方法
+        manifest, data_files, png_bytes = await persistence_service.import_package(package_bytes)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid package: {e}")
 
@@ -425,33 +444,43 @@ async def import_sandbox(
         
         initial_lore = {"graphs": old_sandbox_data.get("graph_collection", {})}
         initial_moment = {}
-        
         definition = {"initial_lore": initial_lore, "initial_moment": initial_moment}
         
+        new_id = uuid.uuid4()
         new_sandbox = Sandbox(
-            id=old_sandbox_data.get('id', str(uuid.uuid4())),
+            id=new_id,
             name=old_sandbox_data.get('name', 'Imported Sandbox'),
-            head_snapshot_id=old_sandbox_data.get('head_snapshot_id'),
-            created_at=old_sandbox_data.get('created_at', datetime.now(timezone.utc).isoformat()),
             definition=definition,
-            lore=initial_lore
+            lore=initial_lore,
+            created_at=datetime.now(timezone.utc)
         )
         
         if new_sandbox.id in sandbox_store:
-            raise HTTPException(status_code=409, detail=f"Conflict: A sandbox with ID '{new_sandbox.id}' already exists.")
+            raise HTTPException(status_code=409, detail=f"Conflict: A sandbox with the newly generated ID '{new_sandbox.id}' already exists.")
 
         recovered_snapshots = []
+        old_to_new_snap_id = {}
+        for filename in data_files:
+            if filename.startswith("snapshots/"):
+                old_id_str = filename.split('/')[1].split('.')[0]
+                old_to_new_snap_id[UUID(old_id_str)] = uuid.uuid4()
+
         for filename, content_str in data_files.items():
             if filename.startswith("snapshots/"):
                 old_snapshot_data = json.loads(content_str)
+                old_id = UUID(old_snapshot_data.get('id'))
+                old_parent_id = old_snapshot_data.get('parent_snapshot_id')
+                old_parent_id_uuid = UUID(old_parent_id) if old_parent_id else None
+                new_parent_id = old_to_new_snap_id.get(old_parent_id_uuid) if old_parent_id_uuid else None
+                
                 new_snapshot = StateSnapshot(
-                    id=old_snapshot_data.get('id'),
+                    id=old_to_new_snap_id[old_id],
                     sandbox_id=new_sandbox.id,
-                    moment=old_snapshot_data.get('world_state', {}),
-                    parent_snapshot_id=old_snapshot_data.get('parent_snapshot_id'),
+                    moment=old_snapshot_data.get('moment', {}),
+                    parent_snapshot_id=new_parent_id,
                     triggering_input=old_snapshot_data.get('triggering_input', {}),
                     run_output=old_snapshot_data.get('run_output'),
-                    created_at=old_snapshot_data.get('created_at', datetime.now(timezone.utc).isoformat())
+                    created_at=datetime.fromisoformat(old_snapshot_data.get('created_at')) if old_snapshot_data.get('created_at') else datetime.now(timezone.utc)
                 )
                 recovered_snapshots.append(new_snapshot)
         
@@ -459,17 +488,22 @@ async def import_sandbox(
             raise ValueError("No snapshots found in the package.")
 
         for snapshot in recovered_snapshots:
-            snapshot_store.save(snapshot)
+            await snapshot_store.save(snapshot)
         
+        old_head_id = old_sandbox_data.get('head_snapshot_id')
+        if old_head_id:
+            new_sandbox.head_snapshot_id = old_to_new_snap_id.get(UUID(old_head_id))
+
         try:
-            persistence_service.save_sandbox_icon(str(new_sandbox.id), png_bytes)
+            # 添加 await 调用异步方法
+            await persistence_service.save_sandbox_icon(str(new_sandbox.id), png_bytes)
             new_sandbox.icon_updated_at = datetime.now(timezone.utc)
         except Exception as e:
             logger.warning(f"Failed to set icon for newly imported sandbox {new_sandbox.id}: {e}")
 
-        sandbox_store[new_sandbox.id] = new_sandbox
+        await sandbox_store.save(new_sandbox)
         
-        logger.info(f"Successfully imported sandbox '{new_sandbox.name}' ({new_sandbox.id}).")
+        logger.info(f"Successfully imported sandbox '{new_sandbox.name}' ({new_sandbox.id}) from PNG.")
         return new_sandbox
     except (ValidationError, ValueError, json.JSONDecodeError) as e:
         logger.warning(f"Failed to process package data for file {file.filename}: {e}", exc_info=True)

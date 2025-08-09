@@ -59,7 +59,7 @@ class TestBackgroundTaskIntegration:
     @pytest.fixture
     def test_components(self, test_engine_setup: Tuple[ExecutionEngineInterface, ContainerInterface, HookManager]):
         """
-        【已修复】辅助 fixture，依赖于正确的 `test_engine_setup` fixture。
+        辅助 fixture，依赖于正确的 `test_engine_setup` fixture。
         """
         return test_engine_setup
 

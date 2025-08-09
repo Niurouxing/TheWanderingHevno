@@ -4,13 +4,19 @@ import io
 import json
 import zipfile
 import logging
+import shutil
+import asyncio
+import base64
 from pathlib import Path
 from typing import Type, TypeVar, Tuple, Dict, Any, List, Optional
+from uuid import UUID
+
+import aiofiles
 from pydantic import BaseModel, ValidationError
-import base64
 from PIL import Image, PngImagePlugin
 
 from .contracts import PersistenceServiceInterface, PackageManifest
+from plugins.core_engine.contracts import Sandbox, StateSnapshot
 from .models import AssetType, FILE_EXTENSIONS
 
 T = TypeVar('T', bound=BaseModel)
@@ -18,164 +24,215 @@ logger = logging.getLogger(__name__)
 
 class PersistenceService(PersistenceServiceInterface):
     """
+    【已重构为异步】
     处理所有文件系统和包导入/导出操作的核心服务。
+    所有耗时的I/O操作现在都是非阻塞的。
     """
     def __init__(self, assets_base_dir: str):
         self.assets_base_dir = Path(assets_base_dir)
-        self.assets_base_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"PersistenceService initialized. Assets directory: {self.assets_base_dir.resolve()}")
+        self.sandboxes_root_dir = self.assets_base_dir / "sandboxes"
+        self.sandboxes_root_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"PersistenceService initialized. Sandboxes directory: {self.sandboxes_root_dir.resolve()}")
 
+    # --- 辅助方法 (同步，因为只处理路径) ---
+    def _get_sandbox_dir(self, sandbox_id: UUID) -> Path:
+        return self.sandboxes_root_dir / str(sandbox_id)
+
+    # --- 沙盒持久化方法 (异步) ---
+    async def save_sandbox(self, sandbox: Sandbox) -> None:
+        sandbox_dir = self._get_sandbox_dir(sandbox.id)
+        # mkdir is fast and can remain synchronous
+        sandbox_dir.mkdir(exist_ok=True)
+        file_path = sandbox_dir / "sandbox.json"
+        async with aiofiles.open(file_path, mode='w', encoding='utf-8') as f:
+            await f.write(sandbox.model_dump_json(indent=2))
+        logger.debug(f"Persisted sandbox '{sandbox.id}' to {file_path}")
+
+    async def load_sandbox(self, sandbox_id: UUID) -> Optional[Sandbox]:
+        file_path = self._get_sandbox_dir(sandbox_id) / "sandbox.json"
+        if not file_path.is_file():
+            return None
+        async with aiofiles.open(file_path, mode='r', encoding='utf-8') as f:
+            content = await f.read()
+        return Sandbox.model_validate_json(content)
+
+    async def delete_sandbox(self, sandbox_id: UUID) -> None:
+        sandbox_dir = self._get_sandbox_dir(sandbox_id)
+        if sandbox_dir.exists():
+            # shutil.rmtree is a blocking I/O operation
+            await asyncio.to_thread(shutil.rmtree, sandbox_dir)
+            logger.info(f"Deleted sandbox directory: {sandbox_dir}")
+
+    async def list_sandbox_ids(self) -> List[str]:
+        if not self.sandboxes_root_dir.is_dir():
+            return []
+        # Directory iteration can be a blocking I/O operation
+        def _sync_list_dirs():
+            return [p.name for p in self.sandboxes_root_dir.iterdir() if p.is_dir()]
+        return await asyncio.to_thread(_sync_list_dirs)
+
+    # --- 快照持久化方法 (异步) ---
+    async def save_snapshot(self, snapshot: StateSnapshot) -> None:
+        snapshot_dir = self._get_sandbox_dir(snapshot.sandbox_id) / "snapshots"
+        snapshot_dir.mkdir(exist_ok=True)
+        file_path = snapshot_dir / f"{snapshot.id}.json"
+        async with aiofiles.open(file_path, mode='w', encoding='utf-8') as f:
+            await f.write(snapshot.model_dump_json(indent=2))
+        logger.debug(f"Persisted snapshot '{snapshot.id}' for sandbox '{snapshot.sandbox_id}'")
+
+    async def load_snapshot(self, sandbox_id: UUID, snapshot_id: UUID) -> Optional[StateSnapshot]:
+        file_path = self._get_sandbox_dir(sandbox_id) / "snapshots" / f"{snapshot_id}.json"
+        if not file_path.is_file():
+            return None
+        async with aiofiles.open(file_path, mode='r', encoding='utf-8') as f:
+            content = await f.read()
+        return StateSnapshot.model_validate_json(content)
+
+    async def load_all_snapshots_for_sandbox(self, sandbox_id: UUID) -> List[StateSnapshot]:
+        snapshot_dir = self._get_sandbox_dir(sandbox_id) / "snapshots"
+        if not snapshot_dir.is_dir():
+            return []
+
+        # Reading directory content is I/O-bound
+        def _sync_read_files():
+            snapshots = []
+            for file_path in snapshot_dir.glob("*.json"):
+                try:
+                    snapshots.append(StateSnapshot.model_validate_json(file_path.read_text(encoding='utf-8')))
+                except (ValidationError, json.JSONDecodeError) as e:
+                    logger.error(f"Skipping corrupt snapshot file {file_path}: {e}")
+            return snapshots
+        
+        return await asyncio.to_thread(_sync_read_files)
+        
+    # --- 包/图标 处理方法 (主要是CPU密集型或I/O密集型，设为异步) ---
+
+    async def _embed_zip_in_png(self, zip_bytes: bytes, base_image_bytes: Optional[bytes] = None) -> bytes:
+        """(Worker Thread) 将ZIP数据作为zTXt块嵌入到PNG图片中。"""
+        def _sync_embed():
+            encoded_data = base64.b64encode(zip_bytes).decode('ascii')
+            if base_image_bytes:
+                image = Image.open(io.BytesIO(base_image_bytes))
+            else:
+                image = Image.new('RGBA', (1, 1), (0, 0, 0, 255))
+            
+            png_info_obj = PngImagePlugin.PngInfo()
+            png_info_obj.add_text("hevno:data", encoded_data, zip=True)
+
+            buffer = io.BytesIO()
+            image.save(buffer, "PNG", pnginfo=png_info_obj)
+            return buffer.getvalue()
+        
+        return await asyncio.to_thread(_sync_embed)
+
+    async def _extract_zip_from_png(self, png_bytes: bytes) -> Tuple[bytes, bytes]:
+        """(Worker Thread) 从PNG图片的zTXt块中提取ZIP数据。"""
+        def _sync_extract():
+            try:
+                image = Image.open(io.BytesIO(png_bytes))
+                image.load()
+                
+                # 【核心 Bug 修复】使用正确的键 "hevno:data"
+                encoded_data = image.text.get("hevno:data")
+                
+                if encoded_data is None:
+                    raise ValueError("Invalid Hevno package: 'hevno:data' chunk not found.")
+                
+                zip_data = base64.b64decode(encoded_data)
+                return zip_data, png_bytes
+            except Exception as e:
+                logger.error(f"[EXTRACT] Exception while processing PNG: {e}", exc_info=True)
+                raise ValueError(f"Failed to process PNG file: {e}") from e
+        
+        return await asyncio.to_thread(_sync_extract)
+
+    async def save_sandbox_icon(self, sandbox_id: str, icon_bytes: bytes) -> Path:
+        icon_path = self.assets_base_dir / "sandbox_icons" / f"{sandbox_id}.png"
+        icon_path.parent.mkdir(parents=True, exist_ok=True)
+        async with aiofiles.open(icon_path, 'wb') as f:
+            await f.write(icon_bytes)
+        logger.info(f"Saved icon for sandbox {sandbox_id} to {icon_path}")
+        return icon_path
+
+    async def export_package(self, manifest: PackageManifest, data_files: Dict[str, BaseModel], base_image_bytes: Optional[bytes] = None) -> bytes:
+        def _sync_zip():
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr('manifest.json', manifest.model_dump_json(indent=2))
+                for filename, model_instance in data_files.items():
+                    file_content = model_instance.model_dump_json(indent=2)
+                    zf.writestr(f'data/{filename}', file_content)
+            return zip_buffer.getvalue()
+
+        zip_bytes = await asyncio.to_thread(_sync_zip)
+        return await self._embed_zip_in_png(zip_bytes, base_image_bytes)
+
+    async def import_package(self, package_bytes: bytes) -> Tuple[PackageManifest, Dict[str, str], bytes]:
+        zip_bytes, png_bytes = await self._extract_zip_from_png(package_bytes)
+        
+        def _sync_unzip():
+            data_files: Dict[str, str] = {}
+            with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
+                try:
+                    manifest_content = zf.read('manifest.json').decode('utf-8')
+                    manifest = PackageManifest.model_validate_json(manifest_content)
+                except KeyError:
+                    raise ValueError("Package is missing 'manifest.json'.")
+                except (ValidationError, json.JSONDecodeError) as e:
+                    raise ValueError(f"Invalid 'manifest.json': {e}") from e
+
+                for item in zf.infolist():
+                    if item.filename.startswith('data/') and not item.is_dir():
+                        relative_path = item.filename.split('data/', 1)[1]
+                        data_files[relative_path] = zf.read(item).decode('utf-8')
+            return manifest, data_files
+
+        manifest, data_files = await asyncio.to_thread(_sync_unzip)
+        return manifest, data_files, png_bytes
+        
+    # --- 同步方法 (因为它们不执行耗时I/O) ---
+    def get_sandbox_icon_path(self, sandbox_id: str) -> Optional[Path]:
+        icon_path = self.assets_base_dir / "sandbox_icons" / f"{sandbox_id}.png"
+        return icon_path if icon_path.is_file() else None
+
+    def get_default_icon_path(self) -> Path:
+        return self.assets_base_dir / "default_sandbox_icon.png"
+
+    # --- 旧的 Asset 方法 (也转换为异步以保持一致性) ---
     def _get_asset_path(self, asset_type: AssetType, asset_name: str) -> Path:
-        """根据资产类型和名称构造标准化的文件路径。"""
         extension = FILE_EXTENSIONS[asset_type]
-        # 简单的安全措施，防止路径遍历
         safe_name = Path(asset_name).name 
         return self.assets_base_dir / asset_type.value / f"{safe_name}{extension}"
 
-    def save_asset(self, asset_model: T, asset_type: AssetType, asset_name: str) -> Path:
-        """将 Pydantic 模型保存为格式化的 JSON 文件。"""
+    async def save_asset(self, asset_model: T, asset_type: AssetType, asset_name: str) -> Path:
         file_path = self._get_asset_path(asset_type, asset_name)
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        
         json_content = asset_model.model_dump_json(indent=2)
-        file_path.write_text(json_content, encoding='utf-8')
+        async with aiofiles.open(file_path, mode='w', encoding='utf-8') as f:
+            await f.write(json_content)
         return file_path
 
-    def load_asset(self, asset_type: AssetType, asset_name: str, model_class: Type[T]) -> T:
-        """从文件加载并验证 Pydantic 模型。"""
+    async def load_asset(self, asset_type: AssetType, asset_name: str, model_class: Type[T]) -> T:
         file_path = self._get_asset_path(asset_type, asset_name)
         if not file_path.exists():
             raise FileNotFoundError(f"Asset '{asset_name}' of type '{asset_type.value}' not found.")
         
-        json_content = file_path.read_text(encoding='utf-8')
+        async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+            json_content = await f.read()
+
         try:
             return model_class.model_validate_json(json_content)
         except ValidationError as e:
             raise ValueError(f"Failed to validate asset '{asset_name}': {e}") from e
 
-    def list_assets(self, asset_type: AssetType) -> List[str]:
-        """列出指定类型的所有资产名称。"""
+    async def list_assets(self, asset_type: AssetType) -> List[str]:
         asset_dir = self.assets_base_dir / asset_type.value
         if not asset_dir.exists():
             return []
         
         extension = FILE_EXTENSIONS[asset_type]
         
-        asset_names = [
-            p.name.removesuffix(extension) 
-            for p in asset_dir.glob(f"*{extension}")
-        ]
-        return sorted(asset_names)
-    
-    def _embed_zip_in_png(self, zip_bytes: bytes, base_image_bytes: Optional[bytes] = None) -> bytes:
-        """将ZIP数据作为标准的zTXt块嵌入到PNG图片中。"""
-        logger.debug(f"[EMBED] Received zip_bytes with size: {len(zip_bytes)}")
-        
-        encoded_data = base64.b64encode(zip_bytes).decode('ascii')
-        logger.debug(f"[EMBED] Base64 encoded data size: {len(encoded_data)}")
+        def _sync_list():
+            return sorted([p.name.removesuffix(extension) for p in asset_dir.glob(f"*{extension}")])
 
-        if base_image_bytes:
-            image = Image.open(io.BytesIO(base_image_bytes))
-            logger.debug(f"[EMBED] Using provided base image with size: {len(base_image_bytes)}")
-        else:
-            image = Image.new('RGBA', (1, 1), (0, 0, 0, 255))
-            logger.debug("[EMBED] No base image provided, creating a new 1x1 PNG.")
-        
-        # --- 【核心修正】创建一个只包含我们自定义数据的 PngInfo 对象 ---
-        png_info_obj = PngImagePlugin.PngInfo()
-        png_info_obj.add_text("hevno:data", encoded_data, zip=True)
-        logger.debug("[EMBED] Created a new PngInfo object containing only our 'hevno:data' ztxt chunk.")
-
-        buffer = io.BytesIO()
-        # --- 【核心修正】让 Pillow 的 save 方法自动处理和保留原始元数据 ---
-        # save 方法会自动保留原始图像的必要块（如 PLTE, tRNS），
-        # 然后再附加我们通过 pnginfo 参数提供的新块。
-        image.save(buffer, "PNG", pnginfo=png_info_obj)
-        
-        output_bytes = buffer.getvalue()
-        logger.debug(f"[EMBED] Final PNG size: {len(output_bytes)}")
-        
-        # --- 添加验证步骤 ---
-        try:
-            with Image.open(io.BytesIO(output_bytes)) as verification_image:
-                verification_image.verify() # 检查文件结构的完整性
-            logger.debug("[EMBED] Self-verification successful: The generated PNG is valid.")
-        except Exception as e:
-            logger.error(f"[EMBED] Self-verification FAILED: The generated PNG is corrupted. Error: {e}")
-            # 如果我们生成了损坏的文件，最好抛出异常而不是返回它
-            raise IOError("Failed to generate a valid PNG file after embedding data.") from e
-
-        return output_bytes
-
-    def _extract_zip_from_png(self, png_bytes: bytes) -> Tuple[bytes, bytes]:
-        """从PNG图片的zTXt块中提取ZIP数据。"""
-        logger.debug(f"[EXTRACT] Received png_bytes with size: {len(png_bytes)}")
-        try:
-            image = Image.open(io.BytesIO(png_bytes))
-            image.load()
-            logger.debug(f"[EXTRACT] Image text chunks from loaded PNG: {image.text}")
-
-            # --- 【核心修正】从 image.text 字典中查找我们的数据 ---
-            encoded_data = image.text.get("hevno:data")
-            
-            if encoded_data is None:
-                logger.error("[EXTRACT] 'hevno:data' zTXt chunk NOT FOUND in image text chunks.")
-                raise ValueError("Invalid Hevno package: 'hevno:data' chunk not found.")
-            
-            # --- 【核心修正】解码 ---
-            zip_data = base64.b64decode(encoded_data)
-            logger.debug(f"[EXTRACT] Found and decoded 'hevno:data' chunk. Original zip size: {len(zip_data)}")
-            return zip_data, png_bytes
-        except Exception as e:
-            logger.error(f"[EXTRACT] Exception while processing PNG: {e}", exc_info=True)
-            raise ValueError(f"Failed to process PNG file: {e}") from e
-
-    def save_sandbox_icon(self, sandbox_id: str, icon_bytes: bytes) -> Path:
-        """保存沙盒图标文件。"""
-        icon_path = self.assets_base_dir / "sandbox_icons" / f"{sandbox_id}.png"
-        icon_path.parent.mkdir(parents=True, exist_ok=True)
-        icon_path.write_bytes(icon_bytes)
-        logger.info(f"Saved icon for sandbox {sandbox_id} to {icon_path}")
-        return icon_path
-
-    def get_sandbox_icon_path(self, sandbox_id: str) -> Optional[Path]:
-        """获取沙盒图标的文件路径，如果不存在则返回None。"""
-        icon_path = self.assets_base_dir / "sandbox_icons" / f"{sandbox_id}.png"
-        return icon_path if icon_path.is_file() else None
-
-    def get_default_icon_path(self) -> Path:
-        """获取默认图标的路径。"""
-        return self.assets_base_dir / "default_sandbox_icon.png"
-
-    def export_package(self, manifest: PackageManifest, data_files: Dict[str, BaseModel], base_image_bytes: Optional[bytes] = None) -> bytes:
-        """在内存中创建一个 .hevno.zip 包，嵌入PNG，并返回其字节流。"""
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr('manifest.json', manifest.model_dump_json(indent=2))
-            for filename, model_instance in data_files.items():
-                file_content = model_instance.model_dump_json(indent=2)
-                zf.writestr(f'data/{filename}', file_content)
-        
-        zip_bytes = zip_buffer.getvalue()
-        return self._embed_zip_in_png(zip_bytes, base_image_bytes)
-
-    def import_package(self, package_bytes: bytes) -> Tuple[PackageManifest, Dict[str, str], bytes]:
-        """从PNG中解压包，返回清单、数据文件和原始PNG图像字节。"""
-        zip_bytes, png_bytes = self._extract_zip_from_png(package_bytes)
-        
-        data_files: Dict[str, str] = {}
-        with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
-            try:
-                manifest_content = zf.read('manifest.json').decode('utf-8')
-                manifest = PackageManifest.model_validate_json(manifest_content)
-            except KeyError:
-                raise ValueError("Package is missing 'manifest.json'.")
-            except (ValidationError, json.JSONDecodeError) as e:
-                raise ValueError(f"Invalid 'manifest.json': {e}") from e
-
-            for item in zf.infolist():
-                if item.filename.startswith('data/') and not item.is_dir():
-                    relative_path = item.filename.split('data/', 1)[1]
-                    data_files[relative_path] = zf.read(item).decode('utf-8')
-        
-        return manifest, data_files, png_bytes
+        return await asyncio.to_thread(_sync_list)

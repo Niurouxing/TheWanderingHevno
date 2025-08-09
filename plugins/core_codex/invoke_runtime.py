@@ -13,7 +13,7 @@ from plugins.core_engine.contracts import (
     ExecutionContext,
     MacroEvaluationServiceInterface
 )
-# 【修复】导入 Codex 模型，以便进行智能合并
+# 导入 Codex 模型，以便进行智能合并
 from .models import CodexCollection, ActivatedEntry, TriggerMode, Codex
 
 logger = logging.getLogger("hevno.runtime.codex")

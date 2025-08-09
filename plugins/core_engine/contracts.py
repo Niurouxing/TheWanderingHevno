@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 # 从平台核心导入最基础的接口
 from backend.core.contracts import HookManager
 
-# --- 1. 核心持久化状态模型 (已重构) ---
+# --- 1. 核心持久化状态模型 ---
 
 class RuntimeInstruction(BaseModel):
     runtime: str
@@ -37,18 +37,15 @@ class GraphCollection(RootModel[Dict[str, GraphDefinition]]):
 
 class StateSnapshot(BaseModel):
     """
-    【已重构】代表一个特定时间点的“瞬时”状态。
+    代表一个特定时间点的“瞬时”状态。
     所有在此模型中的数据，都会在读档时被回滚。
     """
     id: UUID = Field(default_factory=uuid4)
     sandbox_id: UUID
-    # 【新】moment: 存储所有与快照绑定的、可回滚的状态 (如玩家HP, 任务进度, 记忆系统)。
     moment: Dict[str, Any] = Field(
         default_factory=dict,
         description="与快照绑定的即时状态，读档时必须回滚。"
     )
-    # 【已移除】移除了 world_state 和 graph_collection。
-
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     parent_snapshot_id: Optional[UUID] = None
     triggering_input: Dict[str, Any] = Field(default_factory=dict)
@@ -57,49 +54,41 @@ class StateSnapshot(BaseModel):
 
 class Sandbox(BaseModel):
     """
-    【已重构】代表一个完整的、可交互的世界实例。
+    代表一个完整的、可交互的世界实例。
     它现在包含了静态的“蓝图”和动态演化的“世界历史”。
     """
     id: UUID = Field(default_factory=uuid4)
     name: str
     head_snapshot_id: Optional[UUID] = None
-    
-    # 【新】definition: 沙盒的“设计蓝图”，在运行时只读。
     definition: Dict[str, Any] = Field(
         ...,
         description="沙盒的设计蓝图，约定包含 initial_lore 和 initial_moment。运行时只读。"
     )
-    # 【新】lore: 沙盒的“世界法典”，跨快照共享，读档不回滚。
     lore: Dict[str, Any] = Field(
         default_factory=dict,
         description="沙盒的世界法典，跨快照共享，读档不回滚。用于存储图定义、Codex等。"
     )
-    
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     icon_updated_at: Optional[datetime] = None
 
 
-# --- 2. 核心运行时上下文模型 (已重构) ---
+# --- 2. 核心运行时上下文模型 (保持不变) ---
 
 class SharedContext(BaseModel):
     """
-    【已重构】图在单次执行期间共享的、隔离的上下文。
+    图在单次执行期间共享的、隔离的上下文。
     它包含了三层作用域的运行时拷贝。
     """
-    # 【新】三层作用域的运行时状态，从持久化模型深拷贝而来。
     definition_state: Dict[str, Any] = Field(default_factory=dict)
     lore_state: Dict[str, Any] = Field(default_factory=dict)
     moment_state: Dict[str, Any] = Field(default_factory=dict)
-    
-    # 【已移除】移除了 world_state。
-
     session_info: Dict[str, Any]
     global_write_lock: asyncio.Lock
-    services: Any # 通常是一个 DotAccessibleDict 包装的容器
+    services: Any
     model_config = {"arbitrary_types_allowed": True}
 
 class ExecutionContext(BaseModel):
-    """【保持不变】执行上下文的顶层结构。"""
+    """执行上下文的顶层结构。"""
     node_states: Dict[str, Any] = Field(default_factory=dict)
     run_vars: Dict[str, Any] = Field(default_factory=dict)
     shared: SharedContext
@@ -108,8 +97,7 @@ class ExecutionContext(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
-# --- 3. 系统事件契约 (用于钩子) ---
-# ... (此部分无需修改) ...
+# --- 3. 系统事件契约 (用于钩子, 保持不变) ---
 class NodeContext(BaseModel):
     node: GenericNode
     execution_context: ExecutionContext
@@ -145,7 +133,7 @@ class ResolveNodeDependenciesContext(BaseModel):
     auto_inferred_deps: Set[str]
 
 
-# --- 4. 核心服务接口契约 (由 core_engine 实现) ---
+# --- 4. 核心服务接口契约 (关键修改部分) ---
 
 class SubGraphRunner(ABC):
     """定义执行子图能力的抽象接口。"""
@@ -172,37 +160,25 @@ class RuntimeInterface(ABC):
 
     @classmethod
     def get_dependency_config(cls) -> Dict[str, Any]:
-        """
-        一个类方法，允许运行时声明其依赖解析行为。
-        解析器将使用这些元数据来指导其扫描过程。
-
-        返回的字典可以包含：
-        - 'ignore_fields': 一个字段名列表。解析器将完全跳过对这些字段的值进行依赖推断。
-        - 'scan_only_fields': 一个字段名列表。解析器将只扫描这些字段，忽略其他所有字段。
-
-        默认实现返回一个空字典，表示采用标准的全量扫描策略。
-        """
+        """允许运行时声明其依赖解析行为。"""
         return {}
 
-# 】编辑器工具服务接口
 class EditorUtilsServiceInterface(ABC):
     """
     定义了用于安全地执行“创作式”修改的核心工具的接口。
-    这个服务由 core_engine 提供，可被其他插件注入以确保状态修改逻辑的一致性。
     """
     @abstractmethod
-    def perform_sandbox_update(self, sandbox: Sandbox, update_function: Callable[[Sandbox], None]) -> Sandbox:
-        """直接在 Sandbox 对象上执行一个修改函数 (用于 lore/definition)。"""
+    async def perform_sandbox_update(self, sandbox: Sandbox, update_function: Callable[[Sandbox], None]) -> Sandbox:
+        """异步地直接在 Sandbox 对象上执行一个修改函数 (用于 lore/definition) 并持久化。"""
         raise NotImplementedError
 
     @abstractmethod
-    def perform_live_moment_update(
+    async def perform_live_moment_update(
         self,
         sandbox: Sandbox,
-        snapshot_store: SnapshotStoreInterface,
         update_function: Callable[[Dict[str, Any]], Dict[str, Any]]
     ) -> Sandbox:
-        """安全地修改当前 'moment' 状态，并创建一个新的历史快照。"""
+        """异步地安全修改当前 'moment' 状态，并创建一个新的历史快照并持久化。"""
         raise NotImplementedError
 
 class MacroEvaluationServiceInterface(ABC):
@@ -225,16 +201,32 @@ class MacroEvaluationServiceInterface(ABC):
         raise NotImplementedError
 
 class ExecutionEngineInterface(ABC):
+    """定义执行引擎的核心接口。"""
     @abstractmethod
-    async def step(self, initial_snapshot: 'StateSnapshot', triggering_input: Dict[str, Any] = None) -> 'StateSnapshot':
+    async def step(self, sandbox: 'Sandbox', triggering_input: Dict[str, Any] = None) -> 'Sandbox':
+        """
+        在沙盒的最新状态上执行一步计算，并返回更新后的、已持久化的沙盒对象。
+        """
         raise NotImplementedError
 
 class SnapshotStoreInterface(ABC):
+    """定义快照存储的核心接口。"""
     @abstractmethod
-    def save(self, snapshot: 'StateSnapshot') -> None: raise NotImplementedError
+    async def save(self, snapshot: 'StateSnapshot') -> None:
+        """异步保存一个快照。"""
+        raise NotImplementedError
+    
     @abstractmethod
-    def get(self, snapshot_id: UUID) -> Optional['StateSnapshot']: raise NotImplementedError
+    def get(self, snapshot_id: UUID) -> Optional['StateSnapshot']:
+        """同步从缓存获取一个快照。"""
+        raise NotImplementedError
+    
     @abstractmethod
-    def find_by_sandbox(self, sandbox_id: UUID) -> List['StateSnapshot']: raise NotImplementedError
+    async def find_by_sandbox(self, sandbox_id: UUID) -> List['StateSnapshot']:
+        """异步查找并加载属于特定沙盒的所有快照。"""
+        raise NotImplementedError
+    
     @abstractmethod
-    def clear(self) -> None: raise NotImplementedError
+    def clear(self) -> None:
+        """清除存储（在持久化存储中可能为空操作）。"""
+        raise NotImplementedError

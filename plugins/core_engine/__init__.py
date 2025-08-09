@@ -41,8 +41,10 @@ def _create_execution_engine(container: Container) -> ExecutionEngine:
         hook_manager=container.resolve("hook_manager")
     )
 
-def _create_editor_utils_service() -> EditorUtilsService:
-    return EditorUtilsService()
+def _create_editor_utils_service(container: Container) -> EditorUtilsService:
+    sandbox_store = container.resolve("sandbox_store")
+    snapshot_store = container.resolve("snapshot_store")
+    return EditorUtilsService(sandbox_store=sandbox_store, snapshot_store=snapshot_store)
 
 # --- 钩子实现 ---
 async def populate_runtime_registry(container: Container):
@@ -67,8 +69,6 @@ async def provide_api_router(routers: List[APIRouter]) -> List[APIRouter]:
 def register_plugin(container: Container, hook_manager: HookManager):
     logger.info("--> 正在注册 [core_engine] 插件...")
 
-    container.register("snapshot_store", lambda: SnapshotStore(), singleton=True)
-    container.register("sandbox_store", lambda: {}, singleton=True)
     container.register("runtime_registry", _create_runtime_registry, singleton=True)
     container.register("execution_engine", _create_execution_engine, singleton=True)
     container.register("macro_evaluation_service", lambda: MacroEvaluationService(), singleton=True)
