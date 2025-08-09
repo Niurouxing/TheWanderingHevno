@@ -85,8 +85,10 @@ class PersistenceService(PersistenceServiceInterface):
 
     async def load_all_snapshots_for_sandbox(self, sandbox_id: UUID) -> List[Dict[str, Any]]:
         snapshot_dir = self._get_sandbox_dir(sandbox_id) / "snapshots"
-        if not snapshot_dir.is_dir(): return []
-        async def _sync_read_files():
+        if not snapshot_dir.is_dir():
+            return []
+
+        def _sync_read_files() -> List[Dict[str, Any]]:
             snapshots_data = []
             for file_path in snapshot_dir.glob("*.json"):
                 try:
@@ -95,9 +97,9 @@ class PersistenceService(PersistenceServiceInterface):
                 except (json.JSONDecodeError) as e:
                     logger.error(f"Skipping corrupt snapshot file {file_path}: {e}")
             return snapshots_data
+            
         return await asyncio.to_thread(_sync_read_files)
         
-    # --- [新增] ---
     async def delete_all_for_sandbox(self, sandbox_id: UUID) -> None:
         """异步删除属于特定沙盒的所有快照文件。"""
         snapshot_dir = self._get_sandbox_dir(sandbox_id) / "snapshots"
