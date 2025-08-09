@@ -16,291 +16,284 @@ const SCOPE_TABS = ['definition', 'lore', 'moment'];
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
 const isArray = (value) => Array.isArray(value);
 
-// 新组件: Codex 编辑器
-function CodexEditor({ sandboxId, scope, codexName, codexData, onBack, onSave }) {
+// --- 重构后的 CodexEditor 组件 ---
+function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) {
   const [entries, setEntries] = useState(codexData.entries || []);
+  const [editingEntries, setEditingEntries] = useState({}); // 草稿区, key是原始ID
   const [expanded, setExpanded] = useState({});
-  const [editingEntries, setEditingEntries] = useState({}); // 使用对象来跟踪每个条目的编辑状态
-  const [errorMessage, setErrorMessage] = useState(''); // For user-visible error messages
+  const [newEntryForm, setNewEntryForm] = useState(null); // 独立的新条目表单状态
+  const [errorMessage, setErrorMessage] = useState('');
 
-  const toggleExpand = (id) => {
-    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
-    // 点击时直接进入编辑模式
-    if (!expanded[id]) {
-      setEditingEntries((prev) => ({ ...prev, [id]: { ...entries.find(e => e.id === id) } }));
-    }
-  };
+  const NEW_ENTRY_KEY = 'new_entry_form';
 
-  const handleSaveEntry = async (id) => {
-    setErrorMessage(''); // Clear previous error
-    const index = entries.findIndex(e => e.id === id);
-    if (index === -1) return;
+  const toggleExpand = (originalId) => {
+    const isExpanded = !!expanded[originalId];
+    setExpanded(prev => ({ ...prev, [originalId]: !isExpanded }));
 
-    const originalEntries = [...entries]; // Backup for rollback
-    const updatedEntries = [...entries];
-    updatedEntries[index] = editingEntries[id];
-    setEntries(updatedEntries);
-    setEditingEntries((prev) => { const { [id]: _, ...rest } = prev; return rest; });
-
-    // 调用 API 保存
-    try {
-      const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editingEntries[id]),
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to save entry: ${response.statusText}`);
+    // 首次展开时，创建草稿
+    if (!isExpanded && !editingEntries[originalId]) {
+      const entryToEdit = entries.find(e => e.id === originalId);
+      if (entryToEdit) {
+        setEditingEntries(prev => ({ ...prev, [originalId]: { ...entryToEdit } }));
       }
-      if (onSave) onSave();
-    } catch (e) {
-      console.error('Failed to save entry:', e);
-      setErrorMessage('Failed to save entry. Please try again.');
-      // Rollback UI on failure
-      setEntries(originalEntries);
-      setEditingEntries((prev) => ({ ...prev, [id]: { ...originalEntries[index] } })); // Re-enter edit mode with original data
     }
   };
 
-  const handleDeleteEntry = async (index, id) => {
-    setErrorMessage(''); // Clear previous error
-    const originalEntries = [...entries]; // Backup for rollback
-    const updatedEntries = entries.filter((_, i) => i !== index);
-    setEntries(updatedEntries);
+  const handleSave = async (formKey) => {
+    setErrorMessage('');
+    const isNew = formKey === NEW_ENTRY_KEY;
+    const draftData = isNew ? newEntryForm : editingEntries[formKey];
 
-    // 调用 API 删除
-    try {
-      const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries/${id}`, {
-        method: 'DELETE',
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to delete entry: ${response.statusText}`);
+    if (!draftData.id || draftData.id.trim() === '') {
+      setErrorMessage("ID is required.");
+      return;
+    }
+    
+    // CASE 1: 创建新条目
+    if (isNew) {
+      try {
+        const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draftData)
+        });
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({ detail: "Failed to create entry." }));
+          throw new Error(err.detail);
+        }
+        const savedEntry = await response.json();
+        setEntries(prev => [...prev, savedEntry]);
+        setNewEntryForm(null); // 清理表单
+      } catch (e) {
+        setErrorMessage(e.message);
       }
-      if (onSave) onSave();
-    } catch (e) {
-      console.error('Failed to delete entry:', e);
-      setErrorMessage('Failed to delete entry. Please try again.');
-      setEntries(originalEntries); // Rollback UI on failure
+      return;
     }
-  };
 
-  const handleAddEntry = async () => {
-    setErrorMessage(''); // Clear previous error
-    const newEntry = {
-      id: `entry_${Date.now()}`,
-      content: '',
-      priority: 100,
-      trigger_mode: 'always_on',
-      keywords: [],
-      is_enabled: true,
-    };
-    const originalEntries = [...entries]; // Backup for rollback
-    const updatedEntries = [...entries, newEntry];
-    setEntries(updatedEntries);
-    setExpanded((prev) => ({ ...prev, [newEntry.id]: true }));
-    setEditingEntries((prev) => ({ ...prev, [newEntry.id]: { ...newEntry } }));
+    const originalId = formKey;
+    const idHasChanged = originalId !== draftData.id;
 
-    // 调用 API 添加
-    try {
-      const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newEntry),
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to add entry: ${response.statusText}`);
+    // CASE 2: 重命名 (ID 变更)
+    if (idHasChanged) {
+      try {
+        const createResponse = await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draftData)
+        });
+        if (!createResponse.ok) {
+          const err = await createResponse.json().catch(() => ({ detail: "Failed to create new entry for rename." }));
+          throw new Error(err.detail);
+        }
+        const createdEntry = await createResponse.json();
+
+        await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries/${originalId}`, { method: 'DELETE' });
+        
+        setEntries(prev => [...prev.filter(e => e.id !== originalId), createdEntry]);
+        setEditingEntries(prev => { const { [originalId]: _, ...rest } = prev; return rest; });
+        setExpanded(prev => { const { [originalId]: _, ...rest } = prev; return rest; });
+      } catch (e) {
+        setErrorMessage(e.message);
       }
-      if (onSave) onSave();
-    } catch (e) {
-      console.error('Failed to add entry:', e);
-      setErrorMessage('Failed to add entry. Please try again.');
-      // Rollback UI on failure
-      setEntries(originalEntries);
-      setExpanded((prev) => ({ ...prev, [newEntry.id]: false }));
-      setEditingEntries((prev) => { const { [newEntry.id]: _, ...rest } = prev; return rest; });
+    } 
+    // CASE 3: 普通更新 (ID 未变更)
+    else {
+      try {
+        const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries/${originalId}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draftData)
+        });
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({ detail: "Failed to update entry." }));
+          throw new Error(err.detail);
+        }
+        setEntries(prev => prev.map(e => e.id === originalId ? draftData : e));
+        setEditingEntries(prev => { const { [originalId]: _, ...rest } = prev; return rest; });
+        setExpanded(prev => ({ ...prev, [originalId]: false }));
+      } catch (e) {
+        setErrorMessage(e.message);
+      }
     }
   };
 
-  const handleChange = (id, field, value) => {
-    setEditingEntries((prev) => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
+  const handleDelete = async (id) => {
+    setErrorMessage('');
+    if (id === NEW_ENTRY_KEY) {
+      setNewEntryForm(null);
+    } else {
+      try {
+        await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries/${id}`, { method: 'DELETE' });
+        setEntries(prev => prev.filter(e => e.id !== id));
+      } catch (e) {
+        setErrorMessage("Failed to delete entry.");
+      }
+    }
   };
 
+  const handleAddEntryClick = () => {
+    if (newEntryForm) {
+      alert("Please save or discard the current new entry first.");
+      return;
+    }
+    setNewEntryForm({
+      id: '', content: '', priority: 100, trigger_mode: 'always_on', keywords: [], is_enabled: true,
+    });
+  };
+  
+  const handleChange = (formKey, field, value) => {
+    if (formKey === NEW_ENTRY_KEY) {
+      setNewEntryForm(prev => ({ ...prev, [field]: value }));
+    } else {
+      setEditingEntries(prev => ({ ...prev, [formKey]: { ...prev[formKey], [field]: value } }));
+    }
+  };
+  
   const handleToggleEnabled = async (id, checked) => {
-    setErrorMessage(''); // Clear previous error
-    const index = entries.findIndex(e => e.id === id);
-    if (index === -1) return;
+    const originalEntry = entries.find(e => e.id === id);
+    if (!originalEntry) return;
 
-    const originalEntries = [...entries]; // Backup for rollback
-    const updatedEntries = [...entries];
-    updatedEntries[index].is_enabled = checked;
-    setEntries(updatedEntries);
+    const updatedEntry = { ...originalEntry, is_enabled: checked };
+    setEntries(prev => prev.map(e => e.id === id ? updatedEntry : e));
 
-    // 如果在编辑模式，同步到 editingEntries
-    if (editingEntries[id]) {
-      setEditingEntries((prev) => ({ ...prev, [id]: { ...prev[id], is_enabled: checked } }));
-    }
-
-    // 调用 API 更新 enabled
     try {
-      const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ is_enabled: checked }),
+      await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries/${id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_enabled: checked })
       });
-      if (!response.ok) {
-        throw new Error(`Failed to toggle enabled: ${response.statusText}`);
-      }
     } catch (e) {
-      console.error('Failed to toggle enabled:', e);
-      setErrorMessage('Failed to toggle entry status. Please try again.');
-      // Rollback UI on failure
-      updatedEntries[index].is_enabled = !checked;
-      setEntries(updatedEntries);
-      if (editingEntries[id]) {
-        setEditingEntries((prev) => ({ ...prev, [id]: { ...prev[id], is_enabled: !checked } }));
-      }
+      setErrorMessage("Status update failed; reverting.");
+      setEntries(prev => prev.map(e => e.id === id ? originalEntry : e));
     }
+  };
+
+  const renderEntryForm = (formKey) => {
+    const isNew = formKey === NEW_ENTRY_KEY;
+    const data = isNew ? newEntryForm : editingEntries[formKey];
+    if (!data) return null;
+
+    return (
+      <Box sx={{ pl: 4, pb: 2 }}>
+        <TextField
+          label="ID"
+          value={data.id}
+          onChange={(e) => handleChange(formKey, 'id', e.target.value)}
+          fullWidth
+          sx={{ mt: 2, mb: 2 }}
+          autoFocus={isNew}
+          placeholder={isNew ? "Enter a unique ID (required)" : ""}
+        />
+        <TextField
+          label="Content"
+          value={data.content}
+          onChange={(e) => handleChange(formKey, 'content', e.target.value)}
+          multiline rows={4} fullWidth sx={{ mb: 2 }}
+        />
+        <TextField
+          label="Priority"
+          type="number"
+          value={data.priority}
+          onChange={(e) => handleChange(formKey, 'priority', parseInt(e.target.value, 10) || 100)}
+          fullWidth sx={{ mb: 2 }}
+        />
+        <Select
+          value={data.trigger_mode}
+          onChange={(e) => handleChange(formKey, 'trigger_mode', e.target.value)}
+          fullWidth sx={{ mb: 2 }}
+        >
+          <MenuItem value="always_on">Always On</MenuItem>
+          <MenuItem value="on_keyword">On Keyword</MenuItem>
+        </Select>
+        {data.trigger_mode === 'on_keyword' && (
+          <TextField
+            label="Keywords"
+            value={(data.keywords || []).join(', ')}
+            onChange={(e) => handleChange(formKey, 'keywords', e.target.value.split(',').map(k => k.trim()))}
+            fullWidth sx={{ mb: 2 }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  {(data.keywords || []).filter(k => k).map((kw, i) => <Chip key={i} label={kw} sx={{ mr: 1 }} />)}
+                </InputAdornment>
+              ),
+            }}
+          />
+        )}
+        <Button variant="contained" startIcon={<SaveIcon />} onClick={() => handleSave(formKey)} sx={{ mt: 2 }}>
+          Save
+        </Button>
+      </Box>
+    );
   };
 
   return (
     <Box sx={{ p: 2 }}>
       <Typography variant="h5" gutterBottom>Editing Codex: {codexName}</Typography>
       <Button variant="outlined" onClick={onBack} sx={{ mb: 2 }}>Back to Overview</Button>
-      <Button variant="contained" startIcon={<AddIcon />} onClick={handleAddEntry} sx={{ mb: 2, ml: 2 }}>Add Entry</Button>
+      <Button variant="contained" startIcon={<AddIcon />} onClick={handleAddEntryClick} sx={{ mb: 2, ml: 2 }}>Add Entry</Button>
       {errorMessage && <Alert severity="error" sx={{ mb: 2 }}>{errorMessage}</Alert>}
       <List>
-        {entries.map((entry, index) => {
-          const editData = editingEntries[entry.id] || entry;
-
-          return (
-            <React.Fragment key={entry.id}>
-              <ListItem button onClick={() => toggleExpand(entry.id)}>
-                <ListItemIcon>
-                  {expanded[entry.id] ? <ExpandMoreIcon /> : <ChevronRightIcon />}
-                </ListItemIcon>
-                <ListItemText
-                  primary={entry.id || 'Untitled Entry'}
-                  secondary={`Priority: ${entry.priority}`}
-                />
-                <Switch
-                  checked={entry.is_enabled}
-                  onChange={(e) => handleToggleEnabled(entry.id, e.target.checked)}
-                  onClick={(e) => e.stopPropagation()}
-                />
-                <IconButton onClick={(e) => { e.stopPropagation(); handleDeleteEntry(index, entry.id); }}>
-                  <DeleteIcon />
-                </IconButton>
-              </ListItem>
-              <Collapse in={expanded[entry.id]} timeout="auto" unmountOnExit>
-                <Box sx={{ pl: 4, pb: 2 }}>
-                  <TextField
-                    label="ID"
-                    value={editData.id}
-                    onChange={(e) => handleChange(entry.id, 'id', e.target.value)}
-                    fullWidth
-                    sx={{ mb: 2 }}
-                  />
-                  <TextField
-                    label="Content"
-                    value={editData.content}
-                    onChange={(e) => handleChange(entry.id, 'content', e.target.value)}
-                    multiline
-                    rows={4}
-                    fullWidth
-                    sx={{ mb: 2 }}
-                  />
-                  <TextField
-                    label="Priority"
-                    type="number"
-                    value={editData.priority}
-                    onChange={(e) => handleChange(entry.id, 'priority', parseInt(e.target.value))}
-                    fullWidth
-                    sx={{ mb: 2 }}
-                  />
-                  <Select
-                    value={editData.trigger_mode}
-                    onChange={(e) => handleChange(entry.id, 'trigger_mode', e.target.value)}
-                    fullWidth
-                    sx={{ mb: 2 }}
-                  >
-                    <MenuItem value="always_on">Always On</MenuItem>
-                    <MenuItem value="on_keyword">On Keyword</MenuItem>
-                  </Select>
-                  {editData.trigger_mode === 'on_keyword' && (
-                    <TextField
-                      label="Keywords"
-                      value={(editData.keywords || []).join(', ')}
-                      onChange={(e) => handleChange(entry.id, 'keywords', e.target.value.split(', ').map(k => k.trim()))}
-                      fullWidth
-                      sx={{ mb: 2 }}
-                      InputProps={{
-                        startAdornment: (
-                          <InputAdornment position="start">
-                            {(editData.keywords || []).map((kw, i) => <Chip key={i} label={kw} sx={{ mr: 1 }} />)}
-                          </InputAdornment>
-                        ),
-                      }}
-                    />
-                  )}
-                  <Button variant="contained" startIcon={<SaveIcon />} onClick={() => handleSaveEntry(entry.id)} sx={{ mt: 2 }}>
-                    Save
-                  </Button>
-                </Box>
-              </Collapse>
-            </React.Fragment>
-          );
-        })}
+        {/* 已保存条目列表 */}
+        {entries.map((entry) => (
+          <React.Fragment key={entry.id}>
+            <ListItem button onClick={() => toggleExpand(entry.id)}>
+              <ListItemIcon>
+                {expanded[entry.id] ? <ExpandMoreIcon /> : <ChevronRightIcon />}
+              </ListItemIcon>
+              <ListItemText primary={entry.id} secondary={`Priority: ${entry.priority}`} />
+              <Switch
+                checked={entry.is_enabled}
+                onChange={(e) => handleToggleEnabled(entry.id, e.target.checked)}
+                onClick={(e) => e.stopPropagation()}
+              />
+              <IconButton onClick={(e) => { e.stopPropagation(); handleDelete(entry.id); }}>
+                <DeleteIcon />
+              </IconButton>
+            </ListItem>
+            <Collapse in={!!expanded[entry.id]} timeout="auto" unmountOnExit>
+              {renderEntryForm(entry.id)}
+            </Collapse>
+          </React.Fragment>
+        ))}
+        {/* 新条目表单 */}
+        {newEntryForm && (
+          <React.Fragment key={NEW_ENTRY_KEY}>
+            <ListItem sx={{ bgcolor: 'action.hover' }}>
+              <ListItemIcon><ExpandMoreIcon /></ListItemIcon>
+              <ListItemText primary="New Entry (Unsaved)" />
+              <IconButton onClick={() => handleDelete(NEW_ENTRY_KEY)}>
+                <DeleteIcon />
+              </IconButton>
+            </ListItem>
+            <Collapse in={true} timeout="auto">
+              {renderEntryForm(NEW_ENTRY_KEY)}
+            </Collapse>
+          </React.Fragment>
+        )}
       </List>
     </Box>
   );
 }
 
+// ... 以下部分无需修改 ...
+
 // 递归渲染数据的组件，用于显示树状结构
-function DataTree({ data, path = '', onEdit, activeScope }) {  // 添加 activeScope 参数
+function DataTree({ data, path = '', onEdit, activeScope }) {
   const [expanded, setExpanded] = useState({});
-
-  const toggleExpand = (key) => {
-    setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
-
+  const toggleExpand = (key) => { setExpanded((prev) => ({ ...prev, [key]: !prev[key] })); };
   if (!data) return null;
-
   return (
     <List disablePadding sx={{ pl: path ? 2 : 0 }}>
       {Object.entries(data).map(([key, value]) => {
         const currentPath = path ? `${path}.${key}` : key;
         const isExpandable = isObject(value) || isArray(value);
         const isCodex = key === 'codices' || (isObject(value) && value.entries && Array.isArray(value.entries));
-
         return (
           <React.Fragment key={currentPath}>
             <ListItem 
               button 
               onClick={isExpandable ? () => toggleExpand(currentPath) : undefined}
-              secondaryAction={
-                isCodex ? (
-                  <IconButton edge="end" onClick={() => onEdit(currentPath, value, key, activeScope)}>
-                    <EditIcon />
-                  </IconButton>
-                ) : null
-              }
+              secondaryAction={isCodex ? (<IconButton edge="end" onClick={() => onEdit(currentPath, value, key, activeScope)}><EditIcon /></IconButton>) : null}
             >
-              <ListItemIcon>
-                {isExpandable ? <FolderIcon /> : <DescriptionIcon />}
-              </ListItemIcon>
+              <ListItemIcon>{isExpandable ? <FolderIcon /> : <DescriptionIcon />}</ListItemIcon>
               <ListItemText 
                 primary={key} 
-                secondary={
-                  !isExpandable 
-                    ? (typeof value === 'string' ? value.slice(0, 50) + (value.length > 50 ? '...' : '') : JSON.stringify(value))
-                    : `${isArray(value) ? 'Array' : 'Object'} (${Object.keys(value).length} items)`
-                } 
+                secondary={!isExpandable ? (typeof value === 'string' ? value.slice(0, 50) + (value.length > 50 ? '...' : '') : JSON.stringify(value)) : `${isArray(value) ? 'Array' : 'Object'} (${Object.keys(value).length} items)`} 
               />
-              {isExpandable && (
-                <IconButton size="small">
-                  {expanded[currentPath] ? <ExpandMoreIcon /> : <ChevronRightIcon />}
-                </IconButton>
-              )}
+              {isExpandable && (<IconButton size="small" onClick={() => toggleExpand(currentPath)}>{expanded[currentPath] ? <ExpandMoreIcon /> : <ChevronRightIcon />}</IconButton>)}
             </ListItem>
             {isExpandable && (
               <Collapse in={expanded[currentPath]} timeout="auto" unmountOnExit>
@@ -323,6 +316,7 @@ export function SandboxEditorPage({ services }) {
   const [editingCodex, setEditingCodex] = useState(null);
 
   const loadSandboxData = useCallback(async () => {
+    if (!currentSandboxId) return;
     setLoading(true);
     setError('');
     try {
@@ -331,15 +325,10 @@ export function SandboxEditorPage({ services }) {
         fetch(`/api/sandboxes/${currentSandboxId}/lore`),
         fetch(`/api/sandboxes/${currentSandboxId}/moment`)
       ]);
-
-      if (!definitionRes.ok || !loreRes.ok || !momentRes.ok) {
-        throw new Error('Failed to fetch sandbox scopes');
-      }
-
+      if (!definitionRes.ok || !loreRes.ok || !momentRes.ok) throw new Error('Failed to fetch sandbox scopes');
       const definition = await definitionRes.json();
       const lore = await loreRes.json();
       const moment = await momentRes.json();
-
       setSandboxData({ definition, lore, moment });
     } catch (e) {
       setError(e.message);
@@ -357,29 +346,26 @@ export function SandboxEditorPage({ services }) {
 
   const handleScopeChange = (event, newValue) => {
     setActiveScope(newValue);
+    setEditingCodex(null);
   };
 
   const handleEdit = (path, value, codexName, activeScopeIndex) => {
     if (value.entries && Array.isArray(value.entries)) {
       let effectiveScope = SCOPE_TABS[activeScopeIndex];
-      if (activeScopeIndex === 0) { // 'definition' tab
+      if (activeScopeIndex === 0) {
         const parts = path.split('.');
-        if (parts[0] === 'initial_lore') {
-          effectiveScope = 'initial_lore';
-        } else if (parts[0] === 'initial_moment') {
-          effectiveScope = 'initial_moment';
-        }
+        if (parts[0] === 'initial_lore') effectiveScope = 'initial_lore';
+        else if (parts[0] === 'initial_moment') effectiveScope = 'initial_moment';
       }
       setEditingCodex({ name: codexName || path.split('.').pop(), data: value, scope: effectiveScope });
     } else {
-      console.log(`Editing path: ${path}`, value);
-      alert(`Edit functionality for "${path}" is not yet implemented. Value: ${JSON.stringify(value, null, 2)}`);
+      alert(`Edit functionality for "${path}" is not yet implemented.`);
     }
   };
 
   const handleBackFromCodex = () => {
     setEditingCodex(null);
-    loadSandboxData(); // 刷新数据
+    loadSandboxData();
   };
 
   if (!currentSandboxId) {
@@ -389,20 +375,14 @@ export function SandboxEditorPage({ services }) {
       </Box>
     );
   }
-
-  if (loading) {
-    return <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}><CircularProgress /></Box>;
-  }
-
-  if (error) {
-    return (
-      <Box sx={{ p: 4, textAlign: 'center' }}>
-        <Typography variant="h6" color="error">Failed to load sandbox</Typography>
-        <Typography color="text.secondary">{error}</Typography>
-        <Button variant="outlined" sx={{ mt: 2 }} onClick={loadSandboxData}>Try Again</Button>
-      </Box>
-    );
-  }
+  if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}><CircularProgress /></Box>;
+  if (error) return (
+    <Box sx={{ p: 4, textAlign: 'center' }}>
+      <Typography variant="h6" color="error">Failed to load sandbox</Typography>
+      <Typography color="text.secondary">{error}</Typography>
+      <Button variant="outlined" sx={{ mt: 2 }} onClick={loadSandboxData}>Try Again</Button>
+    </Box>
+  );
 
   const currentScopeData = sandboxData[SCOPE_TABS[activeScope]];
 
@@ -414,7 +394,6 @@ export function SandboxEditorPage({ services }) {
         codexName={editingCodex.name}
         codexData={editingCodex.data}
         onBack={handleBackFromCodex}
-        onSave={loadSandboxData}
       />
     );
   }
@@ -422,13 +401,11 @@ export function SandboxEditorPage({ services }) {
   return (
     <Box sx={{ p: 3, height: '100%', overflowY: 'auto' }}>
       <Typography variant="h4" gutterBottom>Editing Sandbox: {currentSandboxId}</Typography>
-      
       <Tabs value={activeScope} onChange={handleScopeChange} aria-label="sandbox scopes">
         {SCOPE_TABS.map((scope, index) => (
           <Tab label={scope.charAt(0).toUpperCase() + scope.slice(1)} key={index} />
         ))}
       </Tabs>
-      
       <Box sx={{ mt: 2 }}>
         {currentScopeData ? (
           <DataTree data={currentScopeData} onEdit={(path, value, codexName) => handleEdit(path, value, codexName, activeScope)} activeScope={activeScope} />
