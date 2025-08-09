@@ -210,7 +210,53 @@ class SnapshotStoreInterface(ABC):
         """异步查找并加载属于特定沙盒的所有快照。"""
         raise NotImplementedError
     
+    # 【修复】添加缺失的方法以匹配实现
+    @abstractmethod
+    async def delete_all_for_sandbox(self, sandbox_id: UUID) -> None:
+        """异步删除属于特定沙盒的所有快照。"""
+        raise NotImplementedError
+
     @abstractmethod
     def clear(self) -> None:
         """清除存储（在持久化存储中可能为空操作）。"""
         raise NotImplementedError
+
+# --- [新增] ---
+class SandboxStoreInterface(ABC):
+    """定义沙盒存储的核心接口。"""
+    @abstractmethod
+    async def initialize(self) -> None:
+        """异步初始化存储，例如从磁盘预加载。"""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def save(self, sandbox: 'Sandbox') -> None:
+        """异步保存一个沙盒。"""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get(self, key: UUID) -> Optional['Sandbox']:
+        """同步从缓存中获取一个沙盒。"""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def delete(self, key: UUID) -> None:
+        """异步删除一个沙盒及其所有相关数据。"""
+        raise NotImplementedError
+
+    @abstractmethod
+    def values(self) -> List['Sandbox']:
+        """同步获取所有缓存的沙盒。"""
+        raise NotImplementedError
+
+    @abstractmethod
+    def __contains__(self, key: UUID) -> bool:
+        """检查一个沙盒是否存在于缓存中。"""
+        raise NotImplementedError
+
+    def __getitem__(self, key: UUID) -> 'Sandbox':
+        """允许通过字典语法访问。"""
+        sandbox = self.get(key)
+        if sandbox is None:
+            raise KeyError(key)
+        return sandbox

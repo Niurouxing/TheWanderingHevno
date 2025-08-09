@@ -8,14 +8,14 @@ from collections import defaultdict
 import traceback
 
 from backend.core.contracts import Container, HookManager
-from plugins.core_persistence.contracts import PersistenceServiceInterface # <---【新】导入持久化接口
 from .contracts import (
-    GraphDefinition, GenericNode, ExecutionContext, Sandbox, # <---【新】导入 Sandbox
-    # ... 其他 contract imports
+    GraphDefinition, GenericNode, ExecutionContext, Sandbox,
     EngineStepStartContext, EngineStepEndContext,
     NodeExecutionStartContext, NodeExecutionSuccessContext, NodeExecutionErrorContext,
     BeforeConfigEvaluationContext, AfterMacroEvaluationContext,
-    SnapshotStoreInterface
+    SnapshotStoreInterface,
+    SandboxStoreInterface, # <-- 【修复】从自己的契约导入
+    RuntimeInterface, SubGraphRunner
 )
 from .dependency_parser import build_dependency_graph_async
 from .registry import RuntimeRegistry
@@ -181,7 +181,8 @@ class ExecutionEngine(SubGraphRunner):
         sandbox.head_snapshot_id = new_snapshot.id
         
         # c. 保存更新后的 Sandbox 对象
-        sandbox_store: PersistentSandboxStore = self.container.resolve("sandbox_store")
+        # 【修复】使用通用接口进行类型提示
+        sandbox_store: SandboxStoreInterface = self.container.resolve("sandbox_store")
         await sandbox_store.save(sandbox)
         
         await self.hook_manager.trigger(

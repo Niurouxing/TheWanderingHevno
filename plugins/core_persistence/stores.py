@@ -4,12 +4,15 @@ import logging
 from typing import Dict, List, Optional
 from uuid import UUID
 
-from plugins.core_engine.contracts import Sandbox, StateSnapshot, SnapshotStoreInterface
+# 【修复】从 core_engine 导入接口定义
+from plugins.core_engine.contracts import Sandbox, StateSnapshot, SnapshotStoreInterface, SandboxStoreInterface
 from .contracts import PersistenceServiceInterface
+from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
-class PersistentSandboxStore:
+# 【修复】继承自 SandboxStoreInterface
+class PersistentSandboxStore(SandboxStoreInterface):
     """
     管理沙盒的持久化和缓存。
     - 使用异步初始化模式在启动时预加载缓存。
@@ -41,9 +44,9 @@ class PersistentSandboxStore:
             try:
                 sid = UUID(sid_str)
                 # 使用 await 调用异步的 load_sandbox
-                sandbox = await self._persistence.load_sandbox(sid)
-                if sandbox:
-                    self._cache[sid] = sandbox
+                data = await self._persistence.load_sandbox(sid)
+                if data:
+                    self._cache[sid] = Sandbox.model_validate(data)
                     count += 1
             except (ValueError, FileNotFoundError) as e:
                 logger.warning(f"Skipping invalid sandbox directory '{sid_str}': {e}")
@@ -54,7 +57,8 @@ class PersistentSandboxStore:
         lock = self._get_lock(sandbox.id)
         async with lock:
             # 使用 await 调用异步的 save_sandbox
-            await self._persistence.save_sandbox(sandbox)
+            data = sandbox.model_dump(mode='python')
+            await self._persistence.save_sandbox(sandbox.id, data)
             self._cache[sandbox.id] = sandbox
             
     def get(self, key: UUID) -> Optional[Sandbox]:
@@ -69,7 +73,9 @@ class PersistentSandboxStore:
         """异步从磁盘和缓存中删除沙盒。"""
         lock = self._get_lock(key)
         async with lock:
-            # 使用 await 调用异步的 delete_sandbox
+            # 删除沙盒时，也需要删除其所有快照
+            snapshot_store = self._persistence # 假设 persistence_service 有 snapshot 删除方法
+            await snapshot_store.delete_all_for_sandbox(key)
             await self._persistence.delete_sandbox(key)
             self._cache.pop(key, None)
             self._locks.pop(key, None)
@@ -110,7 +116,8 @@ class PersistentSnapshotStore(SnapshotStoreInterface):
         lock = self._get_lock(snapshot.id)
         async with lock:
             # 使用 await 调用异步的 save_snapshot
-            await self._persistence.save_snapshot(snapshot)
+            data = snapshot.model_dump(mode='python')
+            await self._persistence.save_snapshot(snapshot.sandbox_id, snapshot.id, data)
             self._cache[snapshot.id] = snapshot
 
     def get(self, snapshot_id: UUID) -> Optional[StateSnapshot]:
@@ -124,16 +131,28 @@ class PersistentSnapshotStore(SnapshotStoreInterface):
     async def find_by_sandbox(self, sandbox_id: UUID) -> List[StateSnapshot]:
         """异步加载属于特定沙盒的所有快照，并更新缓存。"""
         # 使用 await 调用异步的 load_all_snapshots_for_sandbox
-        disk_snapshots = await self._persistence.load_all_snapshots_for_sandbox(sandbox_id)
-        for s in disk_snapshots:
-            # 用从磁盘加载的最新数据更新缓存
-            self._cache[s.id] = s
+        snapshots_data = await self._persistence.load_all_snapshots_for_sandbox(sandbox_id)
+        for data in snapshots_data:
+            try:
+                s = StateSnapshot.model_validate(data)
+                self._cache[s.id] = s
+            except ValidationError as e:
+                logger.warning(f"Skipping snapshot with invalid data for sandbox {sandbox_id}: {e}")
         
         # 即使磁盘上没有，也要确保返回缓存中可能存在的（例如，刚创建还未写入的）
         relevant_snapshots = [s for s in self._cache.values() if s.sandbox_id == sandbox_id]
         # 去重，以防万一
         unique_snapshots = {s.id: s for s in relevant_snapshots}.values()
         return sorted(list(unique_snapshots), key=lambda s: s.created_at)
+
+    async def delete_all_for_sandbox(self, sandbox_id: UUID) -> None:
+        """实现接口中新加的方法"""
+        await self._persistence.delete_all_for_sandbox(sandbox_id)
+        # 从缓存中也移除
+        ids_to_remove = [sid for sid, s in self._cache.items() if s.sandbox_id == sandbox_id]
+        for sid in ids_to_remove:
+            self._cache.pop(sid, None)
+            self._locks.pop(sid, None)
 
     def clear(self) -> None:
         """此操作在持久化存储中无意义，记录警告并忽略。"""

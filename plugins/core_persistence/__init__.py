@@ -3,6 +3,7 @@ import os
 import logging
 
 from backend.core.contracts import Container, HookManager
+from plugins.core_engine.contracts import SandboxStoreInterface, SnapshotStoreInterface
 from .service import PersistenceService
 from .stores import PersistentSandboxStore, PersistentSnapshotStore
 
@@ -34,7 +35,7 @@ async def provide_router(routers: list) -> list:
 async def initialize_stores(container: Container):
     """钩子实现: 在所有服务注册后，异步初始化持久化存储。"""
     logger.info("Initializing persistent stores...")
-    sandbox_store: PersistentSandboxStore = container.resolve("sandbox_store")
+    sandbox_store: SandboxStoreInterface = container.resolve("sandbox_store")
     await sandbox_store.initialize()
 
 

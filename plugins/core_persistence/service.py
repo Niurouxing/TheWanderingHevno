@@ -6,6 +6,7 @@ import logging
 import shutil
 import asyncio
 import base64
+import zipfile
 from pathlib import Path
 from typing import Type, TypeVar, Tuple, Dict, Any, List, Optional
 from uuid import UUID
@@ -18,7 +19,7 @@ from PIL import Image, PngImagePlugin
 from backend.core.serialization import custom_json_encoder_default, custom_json_decoder_object_hook
 
 from .contracts import PersistenceServiceInterface, PackageManifest
-from plugins.core_engine.contracts import Sandbox, StateSnapshot
+from plugins.core_engine.contracts import Sandbox, StateSnapshot # 仍然需要它们来做类型检查和序列化
 from .models import AssetType, FILE_EXTENSIONS
 
 T = TypeVar('T', bound=BaseModel)
@@ -27,33 +28,32 @@ logger = logging.getLogger(__name__)
 class PersistenceService(PersistenceServiceInterface):
     def __init__(self, assets_base_dir: str):
         self.assets_base_dir = Path(assets_base_dir)
-        self.sandboxes_root_dir = self.assets_base_dir / "sandboxes"
-        self.sandboxes_root_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"PersistenceService initialized. Sandboxes directory: {self.sandboxes_root_dir.resolve()}")
+        self._sandboxes_root_dir = self.assets_base_dir / "sandboxes"
+        self._sandboxes_root_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"PersistenceService initialized. Sandboxes directory: {self._sandboxes_root_dir.resolve()}")
+
+    @property
+    def sandboxes_root_dir(self) -> Path:
+        return self._sandboxes_root_dir
 
     def _get_sandbox_dir(self, sandbox_id: UUID) -> Path:
-        return self.sandboxes_root_dir / str(sandbox_id)
+        return self._sandboxes_root_dir / str(sandbox_id)
 
-    async def save_sandbox(self, sandbox: Sandbox) -> None:
-        sandbox_dir = self._get_sandbox_dir(sandbox.id)
+    async def save_sandbox(self, sandbox_id: UUID, data: Dict[str, Any]) -> None:
+        sandbox_dir = self._get_sandbox_dir(sandbox_id)
         sandbox_dir.mkdir(parents=True, exist_ok=True)
         file_path = sandbox_dir / "sandbox.json"
-        
-        sandbox_dict = sandbox.model_dump(mode='python')
-        json_string = json.dumps(sandbox_dict, default=custom_json_encoder_default, indent=2)
-        
+        json_string = json.dumps(data, default=custom_json_encoder_default, indent=2)
         async with aiofiles.open(file_path, mode='w', encoding='utf-8') as f:
             await f.write(json_string)
-        logger.debug(f"Persisted sandbox '{sandbox.id}' to {file_path}")
+        logger.debug(f"Persisted sandbox '{sandbox_id}' to {file_path}")
 
-    async def load_sandbox(self, sandbox_id: UUID) -> Optional[Sandbox]:
+    async def load_sandbox(self, sandbox_id: UUID) -> Optional[Dict[str, Any]]:
         file_path = self._get_sandbox_dir(sandbox_id) / "sandbox.json"
-        if not file_path.is_file():
-            return None
+        if not file_path.is_file(): return None
         async with aiofiles.open(file_path, mode='r', encoding='utf-8') as f:
             content = await f.read()
-        data = json.loads(content, object_hook=custom_json_decoder_object_hook)
-        return Sandbox.model_validate(data)
+        return json.loads(content, object_hook=custom_json_decoder_object_hook)
 
     async def delete_sandbox(self, sandbox_id: UUID) -> None:
         sandbox_dir = self._get_sandbox_dir(sandbox_id)
@@ -62,49 +62,48 @@ class PersistenceService(PersistenceServiceInterface):
             logger.info(f"Deleted sandbox directory: {sandbox_dir}")
 
     async def list_sandbox_ids(self) -> List[str]:
-        if not self.sandboxes_root_dir.is_dir():
+        if not self._sandboxes_root_dir.is_dir():
             return []
         def _sync_list_dirs():
-            return [p.name for p in self.sandboxes_root_dir.iterdir() if p.is_dir()]
+            return [p.name for p in self._sandboxes_root_dir.iterdir() if p.is_dir()]
         return await asyncio.to_thread(_sync_list_dirs)
 
-    async def save_snapshot(self, snapshot: StateSnapshot) -> None:
-        snapshot_dir = self._get_sandbox_dir(snapshot.sandbox_id) / "snapshots"
+    async def save_snapshot(self, sandbox_id: UUID, snapshot_id: UUID, data: Dict[str, Any]) -> None:
+        snapshot_dir = self._get_sandbox_dir(sandbox_id) / "snapshots"
         snapshot_dir.mkdir(parents=True, exist_ok=True)
-        file_path = snapshot_dir / f"{snapshot.id}.json"
-        
-        snapshot_dict = snapshot.model_dump(mode='python')
-        json_string = json.dumps(snapshot_dict, default=custom_json_encoder_default, indent=2)
-
+        file_path = snapshot_dir / f"{snapshot_id}.json"
+        json_string = json.dumps(data, default=custom_json_encoder_default, indent=2)
         async with aiofiles.open(file_path, mode='w', encoding='utf-8') as f:
             await f.write(json_string)
-        logger.debug(f"Persisted snapshot '{snapshot.id}' for sandbox '{snapshot.sandbox_id}'")
+        logger.debug(f"Persisted snapshot '{snapshot_id}' for sandbox '{sandbox_id}'")
 
-    async def load_snapshot(self, sandbox_id: UUID, snapshot_id: UUID) -> Optional[StateSnapshot]:
+    async def load_snapshot(self, sandbox_id: UUID, snapshot_id: UUID) -> Optional[Dict[str, Any]]:
         file_path = self._get_sandbox_dir(sandbox_id) / "snapshots" / f"{snapshot_id}.json"
-        if not file_path.is_file():
-            return None
-        async with aiofiles.open(file_path, mode='r', encoding='utf-8') as f:
-            content = await f.read()
-        data = json.loads(content, object_hook=custom_json_decoder_object_hook)
-        return StateSnapshot.model_validate(data)
+        if not file_path.is_file(): return None
+        async with aiofiles.open(file_path, mode='r', encoding='utf-8') as f: content = await f.read()
+        return json.loads(content, object_hook=custom_json_decoder_object_hook)
 
-    async def load_all_snapshots_for_sandbox(self, sandbox_id: UUID) -> List[StateSnapshot]:
+    async def load_all_snapshots_for_sandbox(self, sandbox_id: UUID) -> List[Dict[str, Any]]:
         snapshot_dir = self._get_sandbox_dir(sandbox_id) / "snapshots"
-        if not snapshot_dir.is_dir():
-            return []
-
-        def _sync_read_files():
-            snapshots = []
+        if not snapshot_dir.is_dir(): return []
+        async def _sync_read_files():
+            snapshots_data = []
             for file_path in snapshot_dir.glob("*.json"):
                 try:
                     content = file_path.read_text(encoding='utf-8')
-                    data = json.loads(content, object_hook=custom_json_decoder_object_hook)
-                    snapshots.append(StateSnapshot.model_validate(data))
-                except (ValidationError, json.JSONDecodeError) as e:
+                    snapshots_data.append(json.loads(content, object_hook=custom_json_decoder_object_hook))
+                except (json.JSONDecodeError) as e:
                     logger.error(f"Skipping corrupt snapshot file {file_path}: {e}")
-            return snapshots
+            return snapshots_data
         return await asyncio.to_thread(_sync_read_files)
+        
+    # --- [新增] ---
+    async def delete_all_for_sandbox(self, sandbox_id: UUID) -> None:
+        """异步删除属于特定沙盒的所有快照文件。"""
+        snapshot_dir = self._get_sandbox_dir(sandbox_id) / "snapshots"
+        if snapshot_dir.is_dir():
+            await asyncio.to_thread(shutil.rmtree, snapshot_dir)
+            logger.debug(f"Deleted snapshot directory: {snapshot_dir}")
         
     async def list_assets(self, asset_type: AssetType) -> List[str]:
         """Lists all assets of a given type by scanning the assets directory."""

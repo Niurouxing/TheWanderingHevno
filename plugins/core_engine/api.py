@@ -27,7 +27,7 @@ from plugins.core_persistence.contracts import (
     PackageType
 )
 # 导入新的持久化存储类以进行类型提示，增强代码可读性
-from plugins.core_persistence.stores import PersistentSandboxStore
+from plugins.core_engine.contracts import SandboxStoreInterface
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ class SandboxArchiveJSON(BaseModel):
 @router.get("/{sandbox_id}", response_model=Sandbox, summary="Get a single Sandbox by ID")
 async def get_sandbox_by_id(
     sandbox_id: UUID,
-    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store"))
+    sandbox_store: SandboxStoreInterface = Depends(Service("sandbox_store"))
 ):
     """
     通过其 ID 检索单个沙盒的完整对象。
@@ -79,11 +79,11 @@ async def get_sandbox_by_id(
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found.")
     return sandbox
-    
+
 @router.post("", response_model=Sandbox, status_code=201, summary="Create a new Sandbox")
 async def create_sandbox(
     request_body: CreateSandboxRequest, 
-    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
+    sandbox_store: SandboxStoreInterface = Depends(Service("sandbox_store")),
     snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store"))
 ):
     """
@@ -118,7 +118,7 @@ async def create_sandbox(
 async def execute_sandbox_step(
     sandbox_id: UUID, 
     user_input: Dict[str, Any] = Body(...),
-    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
+    sandbox_store: SandboxStoreInterface = Depends(Service("sandbox_store")),
     engine: ExecutionEngineInterface = Depends(Service("execution_engine"))
 ):
     """
@@ -141,7 +141,7 @@ async def execute_sandbox_step(
 async def revert_sandbox_to_snapshot(
     sandbox_id: UUID, 
     snapshot_id: UUID = Body(..., embed=True),
-    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
+    sandbox_store: SandboxStoreInterface = Depends(Service("sandbox_store")),
     snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store"))
 ):
     """
@@ -171,7 +171,7 @@ async def revert_sandbox_to_snapshot(
 @router.get("/{sandbox_id}/history", response_model=List[StateSnapshot], summary="Get history")
 async def get_sandbox_history(
     sandbox_id: UUID,
-    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
+    sandbox_store: SandboxStoreInterface = Depends(Service("sandbox_store")),
     snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store"))
 ):
     if sandbox_id not in sandbox_store:
@@ -183,7 +183,7 @@ async def get_sandbox_history(
 async def update_sandbox_details(
     sandbox_id: UUID,
     request_body: UpdateSandboxRequest,
-    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store"))
+    sandbox_store: SandboxStoreInterface = Depends(Service("sandbox_store"))
 ):
     sandbox = sandbox_store.get(sandbox_id)
     if not sandbox:
@@ -199,7 +199,7 @@ async def update_sandbox_details(
 @router.delete("/{sandbox_id}", status_code=204, summary="Delete a Sandbox")
 async def delete_sandbox(
     sandbox_id: UUID,
-    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
+    sandbox_store: SandboxStoreInterface = Depends(Service("sandbox_store")),
 ):
     """
     从文件系统和缓存中完全删除一个沙盒及其所有数据。
@@ -215,7 +215,7 @@ async def delete_sandbox(
 
 @router.get("", response_model=List[SandboxListItem], summary="List all Sandboxes")
 async def list_sandboxes(
-    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
+    sandbox_store: SandboxStoreInterface = Depends(Service("sandbox_store")),
     persistence_service: PersistenceServiceInterface = Depends(Service("persistence_service"))
 ):
     # sandbox_store.values() 从缓存读取，是同步的
@@ -263,7 +263,7 @@ async def get_sandbox_icon(
 async def upload_sandbox_icon(
     sandbox_id: UUID,
     file: UploadFile = File(...),
-    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
+    sandbox_store: SandboxStoreInterface = Depends(Service("sandbox_store")),
     persistence_service: PersistenceServiceInterface = Depends(Service("persistence_service")),
 ):
     sandbox = sandbox_store.get(sandbox_id)
@@ -302,7 +302,7 @@ async def upload_sandbox_icon(
 )
 async def export_sandbox_json(
     sandbox_id: UUID,
-    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
+    sandbox_store: SandboxStoreInterface = Depends(Service("sandbox_store")),
     snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
 ):
     sandbox = sandbox_store.get(sandbox_id)
@@ -328,7 +328,7 @@ async def export_sandbox_json(
 )
 async def import_sandbox_json(
     file: UploadFile = File(...),
-    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
+    sandbox_store: SandboxStoreInterface = Depends(Service("sandbox_store")),
     snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
 ) -> Sandbox:
     if not file.content_type == "application/json":
@@ -375,7 +375,7 @@ async def import_sandbox_json(
 @router.get("/{sandbox_id}/export", response_class=Response, summary="Export a Sandbox as PNG")
 async def export_sandbox(
     sandbox_id: UUID,
-    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
+    sandbox_store: SandboxStoreInterface = Depends(Service("sandbox_store")),
     snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
     persistence_service: PersistenceServiceInterface = Depends(Service("persistence_service"))
 ):
@@ -430,7 +430,7 @@ async def export_sandbox(
 @router.post(":import", response_model=Sandbox, summary="Import a Sandbox from PNG")
 async def import_sandbox(
     file: UploadFile = File(...),
-    sandbox_store: PersistentSandboxStore = Depends(Service("sandbox_store")),
+    sandbox_store: SandboxStoreInterface = Depends(Service("sandbox_store")),
     snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
     persistence_service: PersistenceServiceInterface = Depends(Service("persistence_service"))
 ) -> Sandbox:

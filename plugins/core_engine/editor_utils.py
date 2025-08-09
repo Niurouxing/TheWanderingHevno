@@ -5,7 +5,7 @@ from uuid import UUID
 from typing import Callable, Dict, Any
 
 from .contracts import Sandbox, EditorUtilsServiceInterface, SnapshotStoreInterface, StateSnapshot
-from plugins.core_persistence.stores import PersistentSandboxStore, PersistentSnapshotStore
+from .contracts import SandboxStoreInterface, SnapshotStoreInterface
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +15,7 @@ class EditorUtilsService(EditorUtilsServiceInterface):
     这个服务现在完全是异步的，以匹配底层持久化层的 I/O 操作。
     """
 
-    def __init__(self, sandbox_store: PersistentSandboxStore, snapshot_store: PersistentSnapshotStore):
+    def __init__(self, sandbox_store: SandboxStoreInterface, snapshot_store: SnapshotStoreInterface):
         """
         通过依赖注入获取持久化存储的实例。
         """

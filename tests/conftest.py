@@ -22,6 +22,7 @@ from plugins.core_engine.contracts import (
     GraphCollection
 )
 from plugins.core_persistence.stores import PersistentSandboxStore, PersistentSnapshotStore
+from plugins.core_engine.contracts import SandboxStoreInterface, SnapshotStoreInterface
 
 # --- 1. 基础应用与客户端 Fixtures ---
 
@@ -86,8 +87,8 @@ def test_engine_setup(test_client: TestClient) -> Tuple[ExecutionEngineInterface
     # 获取核心服务
     engine: ExecutionEngineInterface = container.resolve("execution_engine")
     hook_manager: HookManager = container.resolve("hook_manager")
-    sandbox_store: PersistentSandboxStore = container.resolve("sandbox_store")
-    snapshot_store: PersistentSnapshotStore = container.resolve("snapshot_store")
+    sandbox_store: SandboxStoreInterface = container.resolve("sandbox_store")
+    snapshot_store: SnapshotStoreInterface = container.resolve("snapshot_store")
 
     # --- 关键：测试隔离 ---
     # 在每次测试函数执行前，清空内存缓存。
@@ -116,8 +117,8 @@ def sandbox_factory(
     sandbox = sandbox_factory(graph_collection=my_graph, initial_moment={"hp": 100})
     """
     _, container, _ = test_engine_setup
-    sandbox_store: PersistentSandboxStore = container.resolve("sandbox_store")
-    snapshot_store: PersistentSnapshotStore = container.resolve("snapshot_store")
+    sandbox_store: SandboxStoreInterface = container.resolve("sandbox_store")
+    snapshot_store: SnapshotStoreInterface = container.resolve("snapshot_store")
 
     # 使用 async def 定义内部工厂，因为它需要调用异步的 .save() 方法
     async def _sandbox_factory(
