@@ -6,6 +6,7 @@ from typing import Tuple
 # --- 核心导入 ---
 from plugins.core_engine.contracts import GraphCollection, ExecutionEngineInterface, Sandbox
 from backend.core.contracts import Container, HookManager
+from .robot_fixture import Robot
 
 # 标记此文件中的所有测试都是异步的
 pytestmark = pytest.mark.asyncio
@@ -153,3 +154,48 @@ class TestAdvancedMacrosAndRuntimes:
         # Assert (Output)
         regex_output = final_snapshot.run_output["matcher"]["output"]
         assert regex_output == {"action": "ATTACK", "target": "GOBLIN"}
+
+    async def test_can_store_and_use_custom_class_instances(
+        self,
+        test_engine_setup: Tuple[ExecutionEngineInterface, Container, HookManager],
+        sandbox_factory: callable,
+        custom_object_storage_collection: GraphCollection
+    ):
+        """
+        【关键测试】验证自定义类的实例可以被创建、存储在 moment 中、
+        在后续节点中被加载、其方法被调用，并且状态更改被持久化。
+        """
+        engine, container, _ = test_engine_setup
+        
+        # 1. Arrange
+        sandbox = await sandbox_factory(
+            graph_collection=custom_object_storage_collection,
+            initial_moment={}
+        )
+
+        # 2. Act
+        updated_sandbox = await engine.step(sandbox, {})
+        snapshot_store = container.resolve("snapshot_store")
+        final_snapshot = snapshot_store.get(updated_sandbox.head_snapshot_id)
+
+        # 3. Assert
+        # 3.1 验证节点的输出
+        # 'use_robot' 节点的输出应该是调用 take_damage 后的 hp
+        assert final_snapshot.run_output["use_robot"]["output"] == 75
+
+        # 3.2 验证最终 moment 状态中的对象是否被正确更新
+        # final_snapshot.moment 是一个纯字典，我们需要检查其中的 Robot 对象
+        final_robots = final_snapshot.moment.get("robots")
+        assert final_robots is not None and len(final_robots) == 2
+        
+        # 检查 R2-D2 的状态
+        r2_final_state = final_robots[0]
+        assert isinstance(r2_final_state, Robot) # 确认它被成功 unpickle
+        assert r2_final_state.name == 'R2-D2'
+        assert r2_final_state.hp == 75
+        assert "Took 25 damage" in r2_final_state.log[0]
+        
+        # 检查 C-3PO 的状态 (未受影响)
+        c3po_final_state = final_robots[1]
+        assert isinstance(c3po_final_state, Robot)
+        assert c3po_final_state.hp == 100

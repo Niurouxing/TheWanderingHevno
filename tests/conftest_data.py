@@ -78,24 +78,32 @@ def graph_evolution_collection() -> GraphCollection:
 
 @pytest.fixture(scope="session")
 def advanced_macro_collection() -> GraphCollection:
-    # 【修复】将函数体作为字符串存入 lore，而不是将函数对象存入 moment。
-    # 这样可以保证所有状态都是可序列化的。
-    hypot_function_string = "import math\\ndef calculate_hypotenuse(a, b): return math.sqrt(a**2 + b**2)"
+    """
+    【最终修复版 v3】
+    测试在一个宏内定义和使用函数，并进行状态修改。
+    这个 fixture 不再尝试跨节点共享或在 moment 中存储函数对象，
+    因为动态定义的函数是不可 pickle 的。
+    """
+    # 修复：将函数定义和调用合并到一个宏中。
+    # 这个宏的隐式返回值将是 calc(3, 4) 的结果，即 5.0。
+    use_skill_code = """
+def calc(a, b):
+    import math
+    return math.sqrt(a*a + b*b)
 
+calc(3, 4)
+"""
+    
+    # 这个节点用于测试状态修改，与函数调用解耦
+    propose_change_code = """
+"{{ moment.game_difficulty = 'hard' }}"
+"""
     return GraphCollection.model_validate({"main": {"nodes": [
-        {"id": "teach_skill", "run": [{"runtime": "system.execute", "config": {
-            "code": f"lore.math_utils_code = '{hypot_function_string}'"}}]},
-        
-        {"id": "use_skill", "depends_on": ["teach_skill"], "run": [{"runtime": "system.execute", "config": {
-            "code": """
-# 在执行上下文中动态定义函数
-exec(lore.math_utils_code, globals())
-# 调用刚刚定义的函数
-return calculate_hypotenuse(3, 4)
-"""}}]},
-        
-        {"id": "llm_propose_change", "run": [{"runtime": "system.io.input", "config": {"value": "moment.game_difficulty = 'hard'"}}]},
-        {"id": "execute_change", "run": [{"runtime": "system.execute", "config": {"code": "{{ nodes.llm_propose_change.output }}"}}]}
+        # 这个节点现在只负责执行包含函数定义和调用的复杂逻辑
+        {"id": "use_skill", "run": [{"runtime": "system.execute", "config": {"code": use_skill_code}}]},
+        # 这两个节点负责测试状态修改
+        {"id": "llm_propose_change", "run": [{"runtime": "system.io.input", "config": {"value": propose_change_code}}]},
+        {"id": "apply_change", "depends_on": ["llm_propose_change"], "run": [{"runtime": "system.execute", "config": {"code": "{{ nodes.llm_propose_change.output }}"}}]}
     ]}})
 
 @pytest.fixture(scope="session")

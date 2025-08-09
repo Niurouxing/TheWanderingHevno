@@ -18,6 +18,7 @@ from tests.conftest import (
     test_client,
     test_engine_setup
 )
+from .robot_fixture import Robot
 
 @pytest.fixture(autouse=True)
 def force_llm_debug_mode(monkeypatch):
@@ -55,3 +56,29 @@ def codex_sandbox_factory(sandbox_factory: callable) -> callable:
             initial_moment=initial_moment
         )
     return _create_codex_sandbox
+
+@pytest.fixture(scope="session")
+def custom_object_storage_collection() -> GraphCollection:
+    """
+    测试存储和使用自定义类实例 (Robot)。
+    """
+    # 这个宏创建 Robot 实例并将其存入 moment
+    create_robot_code = """
+# 必须先导入类，因为宏的执行环境是独立的
+from plugins.core_engine.tests.robot_fixture import Robot
+moment.robots = [Robot('R2-D2'), Robot('C-3PO')]
+"""
+    
+    # 这个宏加载 Robot 实例并调用其方法
+    use_robot_code = """
+# 加载 R2-D2 实例
+r2 = moment.robots[0]
+# 调用它的方法
+r2.take_damage(25)
+# 返回一个可序列化的值
+r2.hp
+"""
+    return GraphCollection.model_validate({"main": {"nodes": [
+        {"id": "create_robots", "run": [{"runtime": "system.execute", "config": {"code": create_robot_code}}]},
+        {"id": "use_robot", "depends_on": ["create_robots"], "run": [{"runtime": "system.execute", "config": {"code": use_robot_code}}]},
+    ]}})

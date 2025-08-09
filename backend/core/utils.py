@@ -1,7 +1,25 @@
 # backend/core/utils.py
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 from pathlib import Path
+
+def unwrap_dot_accessible_dicts(data: Any) -> Any:
+    """
+    递归地将 DotAccessibleDict 实例转换回普通的 Python 字典。
+    这对于将包含这些对象的数据结构序列化为 JSON 至关重要。
+    """
+    if isinstance(data, DotAccessibleDict):
+        # 基础情况：解包 DotAccessibleDict 并对其内容进行递归调用
+        return unwrap_dot_accessible_dicts(data._data)
+    elif isinstance(data, dict):
+        # 递归情况：遍历字典的值
+        return {key: unwrap_dot_accessible_dicts(value) for key, value in data.items()}
+    elif isinstance(data, list):
+        # 递归情况：遍历列表的项
+        return [unwrap_dot_accessible_dicts(item) for item in data]
+    else:
+        # 基本类型：直接返回
+        return data
 
 class DotAccessibleDict:
     """
@@ -9,12 +27,16 @@ class DotAccessibleDict:
     所有读取和写入操作都会直接作用于原始的底层字典。
     """
     def __init__(self, data: Dict[str, Any]):
-        self._data = data
+        # 使用 object.__setattr__ 来避免触发我们自己的 __setattr__
+        object.__setattr__(self, '_data', data)
 
     @classmethod
     def _wrap(cls, value: Any) -> Any:
         if isinstance(value, dict):
-            return cls(value)
+            # 避免重复包装
+            if not isinstance(value, cls):
+                return cls(value)
+            return value
         if isinstance(value, list):
             return [cls._wrap(item) for item in value]
         return value
@@ -30,6 +52,7 @@ class DotAccessibleDict:
             value = self._data[name]
             return self._wrap(value)
         except KeyError:
+            # 允许调用底层字典的方法，如 .keys(), .items()
             underlying_attr = getattr(self._data, name, None)
             if callable(underlying_attr):
                 return underlying_attr
@@ -37,7 +60,7 @@ class DotAccessibleDict:
 
     def __setattr__(self, name: str, value: Any):
         if name == '_data':
-            super().__setattr__(name, value)
+            object.__setattr__(self, name, value)
         else:
             self._data[name] = value
 

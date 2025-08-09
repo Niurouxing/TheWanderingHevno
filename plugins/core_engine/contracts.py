@@ -34,51 +34,36 @@ class GraphCollection(RootModel[Dict[str, GraphDefinition]]):
         if "main" not in v:
             raise ValueError("A 'main' graph must be defined as the entry point.")
         return v
-
+        
 class StateSnapshot(BaseModel):
-    """
-    代表一个特定时间点的“瞬时”状态。
-    所有在此模型中的数据，都会在读档时被回滚。
-    """
     id: UUID = Field(default_factory=uuid4)
     sandbox_id: UUID
-    moment: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="与快照绑定的即时状态，读档时必须回滚。"
-    )
+    moment: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     parent_snapshot_id: Optional[UUID] = None
     triggering_input: Dict[str, Any] = Field(default_factory=dict)
     run_output: Optional[Dict[str, Any]] = None
-    model_config = ConfigDict(frozen=True)
+    
+    model_config = ConfigDict(
+        frozen=True,
+        arbitrary_types_allowed=True 
+    )
 
 class Sandbox(BaseModel):
-    """
-    代表一个完整的、可交互的世界实例。
-    它现在包含了静态的“蓝图”和动态演化的“世界历史”。
-    """
     id: UUID = Field(default_factory=uuid4)
     name: str
     head_snapshot_id: Optional[UUID] = None
-    definition: Dict[str, Any] = Field(
-        ...,
-        description="沙盒的设计蓝图，约定包含 initial_lore 和 initial_moment。运行时只读。"
-    )
-    lore: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="沙盒的世界法典，跨快照共享，读档不回滚。用于存储图定义、Codex等。"
-    )
+    definition: Dict[str, Any] = Field(...)
+    lore: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     icon_updated_at: Optional[datetime] = None
+    
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True
+    )
 
-
-# --- 2. 核心运行时上下文模型 (保持不变) ---
-
+# --- 2. 核心运行时上下文模型 (确保有 arbitrary_types_allowed=True) ---
 class SharedContext(BaseModel):
-    """
-    图在单次执行期间共享的、隔离的上下文。
-    它包含了三层作用域的运行时拷贝。
-    """
     definition_state: Dict[str, Any] = Field(default_factory=dict)
     lore_state: Dict[str, Any] = Field(default_factory=dict)
     moment_state: Dict[str, Any] = Field(default_factory=dict)
@@ -88,7 +73,6 @@ class SharedContext(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 class ExecutionContext(BaseModel):
-    """执行上下文的顶层结构。"""
     node_states: Dict[str, Any] = Field(default_factory=dict)
     run_vars: Dict[str, Any] = Field(default_factory=dict)
     shared: SharedContext
@@ -97,7 +81,7 @@ class ExecutionContext(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
-# --- 3. 系统事件契约 (用于钩子, 保持不变) ---
+# --- 3. 系统事件契约 (用于钩子) ---
 class NodeContext(BaseModel):
     node: GenericNode
     execution_context: ExecutionContext

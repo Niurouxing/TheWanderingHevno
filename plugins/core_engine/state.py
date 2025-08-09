@@ -19,7 +19,7 @@ from .contracts import (
     BeforeSnapshotCreateContext,
     GraphCollection
 )
-from backend.core.utils import DotAccessibleDict 
+from backend.core.utils import DotAccessibleDict, unwrap_dot_accessible_dicts
 from .utils import ServiceResolverProxy 
 
 # --- Section 1: 状态存储类 (保持不变) ---
@@ -102,22 +102,22 @@ async def create_next_snapshot(
     """
     从执行完毕的上下文中，创建新的 StateSnapshot 并分离出更新后的 Lore。
     """
-    # 【新】从执行后的上下文中获取最终的 moment 和 lore
     final_moment_state = context.shared.moment_state
     final_lore_state = context.shared.lore_state
-
-    # 【已移除】处理演化图的逻辑现在由 GraphResolver 负责，这里不再需要。
+    
+    # 【核心修复】调用从 backend.core.utils 导入的官方函数
+    unwrapped_moment = unwrap_dot_accessible_dicts(final_moment_state)
+    unwrapped_lore = unwrap_dot_accessible_dicts(final_lore_state)
+    unwrapped_node_states = unwrap_dot_accessible_dicts(final_node_states)
     
     snapshot_data = {
         "sandbox_id": context.initial_snapshot.sandbox_id,
-        # 【新】新快照只包含 moment
-        "moment": final_moment_state, 
+        "moment": unwrapped_moment, 
         "parent_snapshot_id": context.initial_snapshot.id,
-        "run_output": final_node_states,
+        "run_output": unwrapped_node_states,
         "triggering_input": triggering_input,
     }
 
-    # 钩子系统保持不变，允许插件在快照创建前修改数据
     filtered_snapshot_data = await context.hook_manager.filter(
         "before_snapshot_create",
         snapshot_data,
@@ -129,8 +129,8 @@ async def create_next_snapshot(
     
     new_snapshot = StateSnapshot.model_validate(filtered_snapshot_data)
     
-    # 【新】返回新快照和更新后的 lore_state
-    return (new_snapshot, final_lore_state)
+    return (new_snapshot, unwrapped_lore)
+
 
 
 # --- Section 3: FastAPI 依赖注入函数  ---
