@@ -34,7 +34,7 @@ function DataTree({ data, path = '', onEdit }) {
         return (
           <React.Fragment key={currentPath}>
             <ListItem 
-              button 
+              button={isExpandable}
               onClick={isExpandable ? () => toggleExpand(currentPath) : undefined}
               secondaryAction={
                 isEditableType ? (

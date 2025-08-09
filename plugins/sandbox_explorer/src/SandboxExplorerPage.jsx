@@ -1,20 +1,14 @@
 // plugins/sandbox_explorer/src/SandboxExplorerPage.jsx
 import React, { useState, useEffect, useCallback } from 'react';
-import { Box, Grid, Typography, CircularProgress } from '@mui/material';
+import { Box, Grid, Typography, CircularProgress, Button } from '@mui/material'; // --- MODIFIED: 导入 Button ---
 
-// 导入所有需要的组件
 import { SandboxCard } from './components/SandboxCard';
 import { CreateSandboxDialog } from './components/CreateSandboxDialog';
 import { AddSandboxCard } from './components/AddSandboxCard';
-import { useLayout } from '../../core_layout/src/context/LayoutContext'; 
+import { useLayout } from '../../core_layout/src/context/LayoutContext';
 
 // --- API 调用函数 ---
-// 将这些函数放在组件外部，因为它们不依赖于组件状态
 
-/**
- * 从后端获取所有沙盒的列表。
- * @returns {Promise<Array>} 沙盒对象数组
- */
 const fetchSandboxes = async () => {
   const response = await fetch('/api/sandboxes');
   if (!response.ok) {
@@ -24,12 +18,8 @@ const fetchSandboxes = async () => {
   return response.json();
 };
 
-/**
- * 通过上传PNG文件导入一个新的沙盒。
- * @param {File} file - 要上传的PNG文件
- * @returns {Promise<Object>} 新创建的沙盒对象
- */
-const importSandbox = async (file) => {
+// --- MODIFIED: 重命名为 importSandboxFromPng ---
+const importSandboxFromPng = async (file) => {
   const formData = new FormData();
   formData.append('file', file);
   const response = await fetch('/api/sandboxes:import', {
@@ -43,10 +33,38 @@ const importSandbox = async (file) => {
   return response.json();
 };
 
-/**
- * 删除一个指定的沙盒。
- * @param {string} sandboxId - 要删除的沙盒ID
- */
+// --- NEW: 添加用于 JSON 导入的 API 函数 ---
+const importSandboxFromJson = async (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  // 使用新的后端端点
+  const response = await fetch('/api/sandboxes/import/json', {
+    method: 'POST',
+    body: formData,
+  });
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({ detail: "Unknown import error" }));
+    throw new Error(errData.detail || `Server error: ${response.status}`);
+  }
+  return response.json();
+}
+
+// --- NEW: 辅助函数，用于触发浏览器下载 ---
+const triggerDownload = async (url, filename) => {
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Failed to download file: ${response.statusText}`);
+    }
+    const blob = await response.blob();
+    const link = document.createElement('a');
+    link.href = window.URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(link.href);
+}
+
 const deleteSandbox = async (sandboxId) => {
   const response = await fetch(`/api/sandboxes/${sandboxId}`, {
     method: 'DELETE'
@@ -61,19 +79,15 @@ const deleteSandbox = async (sandboxId) => {
 // --- 主页面组件 ---
 
 export function SandboxExplorerPage({ services }) {
-  // --- 状态管理 ---
   const [sandboxes, setSandboxes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [isCreateDialogOpen, setCreateDialogOpen] = useState(false);
-  const { setActivePageId, setCurrentSandboxId } = useLayout(); // 新增: 从 LayoutContext 获取 setter
+  const { setActivePageId, setCurrentSandboxId } = useLayout();
   
-  // 从宿主传入的服务中获取 hookManager
   const hookManager = services.get('hookManager');
 
-  // --- 数据加载逻辑 ---
   const loadData = useCallback(async () => {
-    // 只有在完全没有数据时才显示全屏加载动画
     if (sandboxes.length === 0) {
       setLoading(true);
     }
@@ -87,17 +101,26 @@ export function SandboxExplorerPage({ services }) {
     } finally {
       setLoading(false);
     }
-  }, [sandboxes.length]); // 依赖 sandboxes.length 确保只在首次加载时设置全屏loading
+  }, [sandboxes.length]);
 
-  // 在组件首次挂载时加载数据
   useEffect(() => {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // 空依赖数组确保此 effect 只运行一次
+  }, []);
 
-  // --- 事件处理函数 ---
+  // --- MODIFIED: 更新 handleCreate 以处理不同文件类型 ---
   const handleCreate = async (file) => {
-    await importSandbox(file);
+    // 根据文件类型调用不同的导入函数
+    if (file.type === 'application/json' || file.name.endsWith('.json')) {
+      console.log('Importing from JSON...');
+      await importSandboxFromJson(file);
+    } else if (file.type === 'image/png') {
+      console.log('Importing from PNG...');
+      await importSandboxFromPng(file);
+    } else {
+      // 这是一个备用检查，理论上在对话框组件中已被阻止
+      throw new Error('Unsupported file type.');
+    }
     await loadData(); // 成功后刷新列表
   };
 
@@ -112,20 +135,30 @@ export function SandboxExplorerPage({ services }) {
       }
     }
   };
+  
+  const handleExport = async (sandboxId, sandboxName, format) => {
+    const filename = `${sandboxName.replace(/\s+/g, '_')}_${sandboxId.substring(0,8)}.${format}`;
+    const url = format === 'json' 
+      ? `/api/sandboxes/${sandboxId}/export/json` 
+      : `/api/sandboxes/${sandboxId}/export`;
+    try {
+      await triggerDownload(url, filename);
+    } catch (e) {
+      alert(`Error exporting sandbox: ${e.message}`);
+      console.error(e);
+    }
+  };
 
   const handleSelect = (sandboxId) => {
-    // 触发钩子，为未来的编辑器/运行器页面做准备
     hookManager.trigger('sandbox.selected', { sandboxId });
     alert(`Sandbox ${sandboxId} selected! (Hook triggered)`);
   };
 
   const handleEdit = (sandboxId) => {
-    // 新逻辑: 设置当前沙盒 ID 并切换到编辑器页面
     setCurrentSandboxId(sandboxId);
     setActivePageId('sandbox_editor.main_view');
   };
 
-  // --- 渲染逻辑 ---
   if (loading) {
     return <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}><CircularProgress /></Box>;
   }
@@ -154,9 +187,11 @@ export function SandboxExplorerPage({ services }) {
             <SandboxCard 
                 sandbox={sandbox}
                 onSelect={handleSelect}
-                onEdit={() => handleEdit(sandbox.id)} // 修改: 使用 handleEdit
+                onEdit={() => handleEdit(sandbox.id)}
                 onRun={() => alert(`Running ${sandbox.name}`)}
                 onDelete={handleDelete}
+                onExportPng={() => handleExport(sandbox.id, sandbox.name, 'png')}
+                onExportJson={() => handleExport(sandbox.id, sandbox.name, 'json')}
             />
           </Grid>
         ))}
@@ -171,5 +206,4 @@ export function SandboxExplorerPage({ services }) {
   );
 }
 
-// 默认导出以支持 React.lazy
 export default SandboxExplorerPage;

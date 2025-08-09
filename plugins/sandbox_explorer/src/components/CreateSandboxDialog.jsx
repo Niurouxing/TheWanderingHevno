@@ -1,6 +1,6 @@
 // plugins/sandbox_explorer/src/components/CreateSandboxDialog.jsx
 import React, { useState } from 'react';
-import { Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField, CircularProgress, Box, Typography } from '@mui/material';
+import { Button, Dialog, DialogActions, DialogContent, DialogTitle, CircularProgress, Box, Typography } from '@mui/material';
 import { styled } from '@mui/material/styles';
 
 const VisuallyHiddenInput = styled('input')({
@@ -23,17 +23,21 @@ export function CreateSandboxDialog({ open, onClose, onCreate }) {
 
   const handleFileChange = (event) => {
     const selectedFile = event.target.files?.[0];
-    if (selectedFile && selectedFile.type === 'image/png') {
+    // --- MODIFIED: 接受 .png 和 .json 文件 ---
+    if (selectedFile && (selectedFile.type === 'image/png' || selectedFile.type === 'application/json' || selectedFile.name.endsWith('.json'))) {
       setFile(selectedFile);
       setError('');
     } else {
-      setError('Please select a valid PNG file.');
+      setFile(null); // 清除无效选择
+      // --- MODIFIED: 更新错误信息 ---
+      setError('Please select a valid PNG or JSON file.');
     }
   };
 
   const handleCreate = async () => {
     if (!file) {
-      setError('A PNG file is required.');
+      // --- MODIFIED: 更新错误信息 ---
+      setError('A PNG or JSON file is required.');
       return;
     }
     setLoading(true);
@@ -52,6 +56,10 @@ export function CreateSandboxDialog({ open, onClose, onCreate }) {
       if(loading) return;
       setFile(null);
       setError('');
+      const input = document.querySelector('input[type="file"]');
+      if (input) {
+          input.value = '';
+      }
       onClose();
   }
 
@@ -66,8 +74,10 @@ export function CreateSandboxDialog({ open, onClose, onCreate }) {
                 variant="contained"
                 tabIndex={-1}
             >
-                Select PNG File
-                <VisuallyHiddenInput type="file" accept="image/png" onChange={handleFileChange} />
+                {/* --- MODIFIED: 更新按钮文本 --- */}
+                Select PNG or JSON File
+                {/* --- MODIFIED: 接受 .png 和 .json 文件 --- */}
+                <VisuallyHiddenInput type="file" accept="image/png,application/json,.json" onChange={handleFileChange} />
             </Button>
             {file && <Typography sx={{mt: 1}}>Selected: {file.name}</Typography>}
             {error && <Typography color="error" sx={{mt: 1}}>{error}</Typography>}
