@@ -139,7 +139,9 @@ if __name__ == "__main__":
     paths = [
         "./frontend",
         "./plugins/core_layout",
-        "./plugins/core_goliath",
+        "./plugins/page_demo",
+        "./plugins/sandbox_editor",
+        "./plugins/sandbox_explorer",
         "./plugins/core_remote_hooks",
         "./plugins/core_websocket",
         "./package.json",
