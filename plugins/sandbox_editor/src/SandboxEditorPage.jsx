@@ -9,12 +9,80 @@ import EditIcon from '@mui/icons-material/Edit';
 import SaveIcon from '@mui/icons-material/Save';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack'; 
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator'; 
 import { useLayout } from '../../core_layout/src/context/LayoutContext';
 
 const SCOPE_TABS = ['definition', 'lore', 'moment'];
 
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
 const isArray = (value) => Array.isArray(value);
+
+// --- 【新增】 导入 dnd-kit ---
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+
+
+function SortableEntryItem({ id, entry, expanded, onToggleExpand, onToggleEnabled, onDelete, children }) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 1 : 0,
+    position: 'relative',
+    backgroundColor: isDragging ? 'rgba(255, 255, 255, 0.1)' : 'transparent'
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <ListItem
+        button
+        onClick={() => onToggleExpand(entry.id)}
+        sx={{ borderBottom: '1px solid rgba(255, 255, 255, 0.12)' }}
+      >
+        <ListItemIcon {...attributes} {...listeners} sx={{ cursor: 'grab' }}>
+          <DragIndicatorIcon />
+        </ListItemIcon>
+        <ListItemIcon>
+          {expanded ? <ExpandMoreIcon /> : <ChevronRightIcon />}
+        </ListItemIcon>
+        <ListItemText primary={entry.id} secondary={`Priority: ${entry.priority}`} />
+        <Switch
+          checked={entry.is_enabled}
+          onChange={(e) => onToggleEnabled(entry.id, e.target.checked)}
+          onClick={(e) => e.stopPropagation()}
+        />
+        <IconButton onClick={(e) => { e.stopPropagation(); onDelete(entry.id); }}>
+          <DeleteIcon />
+        </IconButton>
+      </ListItem>
+      {children}
+    </div>
+  );
+}
+
 
 // --- 重构后的 CodexEditor 组件 ---
 function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) {
@@ -23,18 +91,54 @@ function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) {
   const [expanded, setExpanded] = useState({});
   const [newEntryForm, setNewEntryForm] = useState(null); // 独立的新条目表单状态
   const [errorMessage, setErrorMessage] = useState('');
+  
+  // --- 【新增】 dnd-kit 传感器 ---
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
   const NEW_ENTRY_KEY = 'new_entry_form';
 
   const toggleExpand = (originalId) => {
     const isExpanded = !!expanded[originalId];
     setExpanded(prev => ({ ...prev, [originalId]: !isExpanded }));
-
-    // 首次展开时，创建草稿
     if (!isExpanded && !editingEntries[originalId]) {
       const entryToEdit = entries.find(e => e.id === originalId);
       if (entryToEdit) {
         setEditingEntries(prev => ({ ...prev, [originalId]: { ...entryToEdit } }));
+      }
+    }
+  };
+
+  // --- 【新增】 拖拽结束处理函数 ---
+  const handleDragEnd = async (event) => {
+    const { active, over } = event;
+    if (active.id !== over.id) {
+      const oldIndex = entries.findIndex(e => e.id === active.id);
+      const newIndex = entries.findIndex(e => e.id === over.id);
+      const newOrderedEntries = arrayMove(entries, oldIndex, newIndex);
+      
+      // 1. 立即更新UI，提供流畅体验
+      setEntries(newOrderedEntries);
+      
+      // 2. 将新的ID顺序发送到后端
+      const entryIds = newOrderedEntries.map(e => e.id);
+      try {
+        const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries:reorder`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entry_ids: entryIds }),
+        });
+        if (!response.ok) {
+           throw new Error("Failed to save new order.");
+        }
+      } catch (e) {
+        setErrorMessage(e.message);
+        // 如果失败，可以选择回滚UI状态
+        setEntries(entries); 
       }
     }
   };
@@ -49,7 +153,6 @@ function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) {
       return;
     }
     
-    // CASE 1: 创建新条目
     if (isNew) {
       try {
         const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries`, {
@@ -61,7 +164,7 @@ function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) {
         }
         const savedEntry = await response.json();
         setEntries(prev => [...prev, savedEntry]);
-        setNewEntryForm(null); // 清理表单
+        setNewEntryForm(null);
       } catch (e) {
         setErrorMessage(e.message);
       }
@@ -71,7 +174,6 @@ function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) {
     const originalId = formKey;
     const idHasChanged = originalId !== draftData.id;
 
-    // CASE 2: 重命名 (ID 变更)
     if (idHasChanged) {
       try {
         const createResponse = await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries`, {
@@ -91,9 +193,7 @@ function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) {
       } catch (e) {
         setErrorMessage(e.message);
       }
-    } 
-    // CASE 3: 普通更新 (ID 未变更)
-    else {
+    } else {
       try {
         const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/codices/${codexName}/entries/${originalId}`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draftData)
@@ -164,9 +264,8 @@ function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) {
     const isNew = formKey === NEW_ENTRY_KEY;
     const data = isNew ? newEntryForm : editingEntries[formKey];
     if (!data) return null;
-
     return (
-      <Box sx={{ pl: 4, pb: 2 }}>
+        <Box sx={{ pl: 4, pb: 2 }}>
         <TextField
           label="ID"
           value={data.id}
@@ -225,50 +324,46 @@ function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) {
       <Button variant="outlined" onClick={onBack} sx={{ mb: 2 }}>Back to Overview</Button>
       <Button variant="contained" startIcon={<AddIcon />} onClick={handleAddEntryClick} sx={{ mb: 2, ml: 2 }}>Add Entry</Button>
       {errorMessage && <Alert severity="error" sx={{ mb: 2 }}>{errorMessage}</Alert>}
-      <List>
-        {/* 已保存条目列表 */}
-        {entries.map((entry) => (
-          <React.Fragment key={entry.id}>
-            <ListItem button onClick={() => toggleExpand(entry.id)}>
-              <ListItemIcon>
-                {expanded[entry.id] ? <ExpandMoreIcon /> : <ChevronRightIcon />}
-              </ListItemIcon>
-              <ListItemText primary={entry.id} secondary={`Priority: ${entry.priority}`} />
-              <Switch
-                checked={entry.is_enabled}
-                onChange={(e) => handleToggleEnabled(entry.id, e.target.checked)}
-                onClick={(e) => e.stopPropagation()}
-              />
-              <IconButton onClick={(e) => { e.stopPropagation(); handleDelete(entry.id); }}>
-                <DeleteIcon />
-              </IconButton>
-            </ListItem>
-            <Collapse in={!!expanded[entry.id]} timeout="auto" unmountOnExit>
-              {renderEntryForm(entry.id)}
-            </Collapse>
-          </React.Fragment>
-        ))}
-        {/* 新条目表单 */}
-        {newEntryForm && (
-          <React.Fragment key={NEW_ENTRY_KEY}>
-            <ListItem sx={{ bgcolor: 'action.hover' }}>
-              <ListItemIcon><ExpandMoreIcon /></ListItemIcon>
-              <ListItemText primary="New Entry (Unsaved)" />
-              <IconButton onClick={() => handleDelete(NEW_ENTRY_KEY)}>
-                <DeleteIcon />
-              </IconButton>
-            </ListItem>
-            <Collapse in={true} timeout="auto">
-              {renderEntryForm(NEW_ENTRY_KEY)}
-            </Collapse>
-          </React.Fragment>
-        )}
-      </List>
+
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={entries.map(e => e.id)} strategy={verticalListSortingStrategy}>
+          <List>
+            {entries.map((entry) => (
+              <SortableEntryItem
+                key={entry.id}
+                id={entry.id}
+                entry={entry}
+                expanded={!!expanded[entry.id]}
+                onToggleExpand={toggleExpand}
+                onToggleEnabled={handleToggleEnabled}
+                onDelete={handleDelete}
+              >
+                <Collapse in={!!expanded[entry.id]} timeout="auto" unmountOnExit>
+                  {renderEntryForm(entry.id)}
+                </Collapse>
+              </SortableEntryItem>
+            ))}
+          </List>
+        </SortableContext>
+      </DndContext>
+
+      {newEntryForm && (
+        <React.Fragment key={NEW_ENTRY_KEY}>
+          <ListItem sx={{ bgcolor: 'action.hover', borderBottom: '1px solid rgba(255, 255, 255, 0.12)' }}>
+            <ListItemIcon><ExpandMoreIcon /></ListItemIcon>
+            <ListItemText primary="New Entry (Unsaved)" />
+            <IconButton onClick={() => handleDelete(NEW_ENTRY_KEY)}>
+              <DeleteIcon />
+            </IconButton>
+          </ListItem>
+          <Collapse in={true} timeout="auto">
+            {renderEntryForm(NEW_ENTRY_KEY)}
+          </Collapse>
+        </React.Fragment>
+      )}
     </Box>
   );
 }
-
-// ... 以下部分无需修改 ...
 
 // 递归渲染数据的组件，用于显示树状结构
 function DataTree({ data, path = '', onEdit, activeScope }) {
@@ -308,7 +403,8 @@ function DataTree({ data, path = '', onEdit, activeScope }) {
 }
 
 export function SandboxEditorPage({ services }) {
-  const { currentSandboxId } = useLayout();
+  // --- [修改 1/4] 从 LayoutContext 中获取 setActivePageId 和 setCurrentSandboxId ---
+  const { currentSandboxId, setActivePageId, setCurrentSandboxId } = useLayout();
   const [sandboxData, setSandboxData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -347,6 +443,12 @@ export function SandboxEditorPage({ services }) {
   const handleScopeChange = (event, newValue) => {
     setActiveScope(newValue);
     setEditingCodex(null);
+  };
+  
+  // --- [新增 2/4] 添加返回按钮的点击处理函数 ---
+  const handleGoBackToExplorer = () => {
+    setCurrentSandboxId(null); // 清理上下文
+    setActivePageId('sandbox_explorer.main_view'); // 切换页面
   };
 
   const handleEdit = (path, value, codexName, activeScopeIndex) => {
@@ -399,14 +501,29 @@ export function SandboxEditorPage({ services }) {
   }
 
   return (
-    <Box sx={{ p: 3, height: '100%', overflowY: 'auto' }}>
-      <Typography variant="h4" gutterBottom>Editing Sandbox: {currentSandboxId}</Typography>
-      <Tabs value={activeScope} onChange={handleScopeChange} aria-label="sandbox scopes">
+    <Box sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/* --- [修改 3/4] 重新组织标题区域，添加返回按钮 --- */}
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, flexShrink: 0 }}>
+        <Button
+          variant="outlined"
+          startIcon={<ArrowBackIcon />}
+          onClick={handleGoBackToExplorer}
+          sx={{ mr: 2 }}
+        >
+          Back to Explorer
+        </Button>
+        <Typography variant="h4" component="h1" noWrap sx={{ flexGrow: 1 }}>
+          Editing: {sandboxData?.name || 'Sandbox'}
+        </Typography>
+      </Box>
+
+      {/* --- [修改 4/4] 调整布局，使内容区可滚动 --- */}
+      <Tabs value={activeScope} onChange={handleScopeChange} aria-label="sandbox scopes" sx={{ flexShrink: 0, borderBottom: 1, borderColor: 'divider' }}>
         {SCOPE_TABS.map((scope, index) => (
           <Tab label={scope.charAt(0).toUpperCase() + scope.slice(1)} key={index} />
         ))}
       </Tabs>
-      <Box sx={{ mt: 2 }}>
+      <Box sx={{ mt: 2, flexGrow: 1, overflowY: 'auto' }}>
         {currentScopeData ? (
           <DataTree data={currentScopeData} onEdit={(path, value, codexName) => handleEdit(path, value, codexName, activeScope)} activeScope={activeScope} />
         ) : (

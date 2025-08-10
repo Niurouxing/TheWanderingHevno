@@ -33,19 +33,35 @@ class PersistentSandboxStore(SandboxStoreInterface):
         return self._locks[sandbox_id]
         
     async def initialize(self):
-        logger.info("Pre-loading all sandboxes from disk into cache...")
+        logger.info("Pre-loading all sandboxes and their snapshots from disk into cache...")
         count = 0
+        
+        # 1. 在初始化开始时，确保我们能访问到 snapshot_store
+        if not self._container:
+             logger.error("Container not set on PersistentSandboxStore. Cannot pre-load snapshots.")
+             return
+        
+        # 解析一次并缓存，避免在循环中重复解析
+        snapshot_store: SnapshotStoreInterface = self._container.resolve("snapshot_store")
+        
         sandbox_ids = await self._persistence.list_sandbox_ids()
         for sid_str in sandbox_ids:
             try:
                 sid = UUID(sid_str)
                 data = await self._persistence.load_sandbox(sid)
                 if data:
-                    self._cache[sid] = Sandbox.model_validate(data)
+                    sandbox = Sandbox.model_validate(data)
+                    self._cache[sid] = sandbox
                     count += 1
+                    
+                    # 2. 对于每一个加载的沙盒，立即让 snapshot_store 去加载它所有的快照
+                    #    find_by_sandbox 会自动将加载的快照放入 snapshot_store 的缓存中
+                    logger.debug(f"Pre-loading snapshots for sandbox {sid}...")
+                    await snapshot_store.find_by_sandbox(sid)
+
             except (ValueError, FileNotFoundError, ValidationError) as e:
                 logger.warning(f"Skipping invalid sandbox directory '{sid_str}': {e}")
-        logger.info(f"Successfully pre-loaded {count} sandboxes into cache.")
+        logger.info(f"Successfully pre-loaded {count} sandboxes and their associated snapshots into cache.")
 
     async def save(self, sandbox: Sandbox):
         lock = self._get_lock(sandbox.id)
