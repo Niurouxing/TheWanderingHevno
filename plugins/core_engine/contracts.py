@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Set, Callable
 from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, RootModel, ConfigDict, field_validator
 from abc import ABC, abstractmethod
+from typing_extensions import Literal
 
 # 从平台核心导入最基础的接口
 from backend.core.contracts import HookManager
@@ -147,23 +148,53 @@ class RuntimeInterface(ABC):
         """允许运行时声明其依赖解析行为。"""
         return {}
 
+
+
+MutationType = Literal["UPSERT", "DELETE", "LIST_APPEND"]
+MutationMode = Literal["DIRECT", "SNAPSHOT"]
+
+class Mutation(BaseModel):
+    """定义一个独立的、原子性的修改操作。"""
+    type: MutationType
+    path: str = Field(..., description="从沙盒根开始的完整资源路径，例如 'lore/graphs/main'。")
+    value: Any = Field(None, description="对于 UPSERT 和 LIST_APPEND 操作是必需的。")
+    mutation_mode: MutationMode = Field(
+        default="DIRECT",
+        description="仅当路径以'moment/'开头时有效。'DIRECT'直接修改，'SNAPSHOT'创建新历史。"
+    )
+
+class MutateResourceRequest(BaseModel):
+    mutations: List[Mutation]
+
+class MutateResourceResponse(BaseModel):
+    sandbox_id: UUID
+    head_snapshot_id: Optional[UUID]
+
+class ResourceQueryRequest(BaseModel):
+    paths: List[str]
+
+class ResourceQueryResponse(BaseModel):
+    results: Dict[str, Any]
+
 class EditorUtilsServiceInterface(ABC):
     """
-    定义了用于安全地执行“创作式”修改的核心工具的接口。
+    定义了用于安全地、原子性地执行数据修改的核心工具接口。
     """
     @abstractmethod
-    async def perform_sandbox_update(self, sandbox: Sandbox, update_function: Callable[[Sandbox], None]) -> Sandbox:
-        """异步地直接在 Sandbox 对象上执行一个修改函数 (用于 lore/definition) 并持久化。"""
+    async def execute_mutations(self, sandbox: Sandbox, mutations: List[Mutation]) -> Sandbox:
+        """
+        原子性地执行一批修改操作，并根据操作类型智能地选择
+        直接修改沙盒、直接修改快照或创建新快照。
+        """
+        raise NotImplementedError
+    
+    @abstractmethod
+    async def execute_queries(self, sandbox: Sandbox, paths: List[str]) -> Dict[str, Any]:
+        """
+        根据提供的路径列表，批量从沙盒中获取数据。
+        """
         raise NotImplementedError
 
-    @abstractmethod
-    async def perform_live_moment_update(
-        self,
-        sandbox: Sandbox,
-        update_function: Callable[[Dict[str, Any]], Dict[str, Any]]
-    ) -> Sandbox:
-        """异步地安全修改当前 'moment' 状态，并创建一个新的历史快照并持久化。"""
-        raise NotImplementedError
 
 class MacroEvaluationServiceInterface(ABC):
     """为宏求值逻辑定义服务接口。"""

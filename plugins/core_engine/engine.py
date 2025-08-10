@@ -1,4 +1,4 @@
-# plugins/core_engine/engine.py (已重构)
+# plugins/core_engine/engine.py
 
 import asyncio
 import logging
@@ -14,7 +14,7 @@ from .contracts import (
     NodeExecutionStartContext, NodeExecutionSuccessContext, NodeExecutionErrorContext,
     BeforeConfigEvaluationContext, AfterMacroEvaluationContext,
     SnapshotStoreInterface,
-    SandboxStoreInterface, # <-- 【修复】从自己的契约导入
+    SandboxStoreInterface,
     RuntimeInterface, SubGraphRunner
 )
 from .dependency_parser import build_dependency_graph_async
@@ -25,7 +25,7 @@ from .state import (
     create_sub_execution_context, 
     create_next_snapshot
 )
-from .graph_resolver import GraphResolver # <---【新】导入 GraphResolver
+from .graph_resolver import GraphResolver
 from .contracts import RuntimeInterface, SubGraphRunner
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,6 @@ class NodeState(Enum):
     FAILED = auto()
     SKIPPED = auto()
 
-# ... (GraphRun class 保持不变) ...
 class GraphRun:
     def __init__(self, context: ExecutionContext, graph_def: GraphDefinition, dependencies: Dict[str, Set[str]]):
         self.context = context
@@ -125,7 +124,7 @@ class ExecutionEngine(SubGraphRunner):
         triggering_input: Dict[str, Any] = None
     ) -> Sandbox: 
         """
-        【已重构】在沙盒的最新状态上执行一步计算。
+        在沙盒的最新状态上执行一步计算。
         """
         if triggering_input is None: triggering_input = {}
         
@@ -171,17 +170,17 @@ class ExecutionEngine(SubGraphRunner):
             triggering_input=triggering_input
         )
         
-        # 6. 【新】原子性地更新和保存状态
+        # 6. 原子性地更新和保存状态
         # a. 保存新快照
         snapshot_store: SnapshotStoreInterface = self.container.resolve("snapshot_store")
-        await snapshot_store.save(new_snapshot) # <-- 添加 await
+        await snapshot_store.save(new_snapshot) 
 
         # b. 更新 Sandbox 对象的 Lore 和头指针
         sandbox.lore = updated_lore
         sandbox.head_snapshot_id = new_snapshot.id
         
         # c. 保存更新后的 Sandbox 对象
-        # 【修复】使用通用接口进行类型提示
+        # 使用通用接口进行类型提示
         sandbox_store: SandboxStoreInterface = self.container.resolve("sandbox_store")
         await sandbox_store.save(sandbox)
         
