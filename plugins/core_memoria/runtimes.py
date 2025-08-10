@@ -25,13 +25,14 @@ class MemoriaAddRuntime(RuntimeInterface):
             raise ValueError("MemoriaAddRuntime requires 'stream' and 'content' in its config.")
         
         level = config.get("level", "event")
-        tags = config.get("tags", [])
+        tags = config.gfet("tags", [])
         
-        # --- 【核心修改】 ---
-        # 从 moment_state 中获取或创建 memoria 数据，而不是从 world_state
+        # 从 moment_state 中获取或创建 memoria 数据
         memoria_data = context.shared.moment_state.setdefault("memoria", {"__global_sequence__": 0})
-        # -------------------
         
+        if "__hevno_type__" not in memoria_data:
+            memoria_data["__hevno_type__"] = "hevno/memoria"
+
         memoria = Memoria.model_validate(memoria_data)
         
         stream = memoria.get_stream(stream_name)
@@ -50,11 +51,8 @@ class MemoriaAddRuntime(RuntimeInterface):
         
         memoria.set_stream(stream_name, stream)
         
-        # --- 【核心修改】 ---
-        # 将更新后的 memoria 数据写回到 moment_state
         context.shared.moment_state["memoria"] = memoria.model_dump()
-        # -------------------
-        
+
         synth_config = stream.config.auto_synthesis
         if synth_config.enabled and stream.synthesis_trigger_counter >= synth_config.trigger_count:
             logger.info(f"流 '{stream_name}' 满足综合条件，正在提交后台任务。")

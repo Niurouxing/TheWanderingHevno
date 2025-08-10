@@ -60,14 +60,24 @@ async def upsert_codex(
 ):
     def update_logic(target_dict: Dict[str, Any]):
         codices = target_dict.setdefault("codices", {})
-        codices[codex_name] = codex_def.model_dump(exclude_unset=True)
+        
+        # --- 核心修改 ---
+        # 1. 将 Pydantic 模型转换为字典
+        codex_data_to_save = codex_def.model_dump(exclude_unset=True)
+        # 2. 注入类型标记
+        codex_data_to_save["__hevno_type__"] = "hevno/codex"
+        # 3. 保存带有标记的字典
+        codices[codex_name] = codex_data_to_save
+        
         return target_dict
 
     if scope == "moment":
         await editor_utils.perform_live_moment_update(sandbox, update_logic)
     else:
         target_scope_dict = _get_target_scope_dict(sandbox, scope)
-        await editor_utils.perform_sandbox_update(sandbox, lambda s: update_logic(target_scope_dict))
+        def sandbox_update_wrapper(s: Sandbox):
+            update_logic(target_scope_dict)
+        await editor_utils.perform_sandbox_update(sandbox, sandbox_update_wrapper)
     
     return codex_def
 

@@ -150,13 +150,27 @@ async def upsert_graph(
 ):
     def update_logic(s_scope: Dict[str, Any]):
         graphs = s_scope.setdefault("graphs", {})
-        graphs[graph_name] = graph_def.model_dump(exclude_unset=True)
+        
+        # --- 核心修改 ---
+        # 1. 将传入的 Pydantic 模型转换为字典
+        graph_data_to_save = graph_def.model_dump(exclude_unset=True)
+        # 2. 在这个字典中注入类型标记
+        graph_data_to_save["__hevno_type__"] = "hevno/graph"
+        # 3. 将带有标记的字典存入
+        graphs[graph_name] = graph_data_to_save
+        
         return s_scope
     
     if scope == "moment":
         await editor_utils.perform_live_moment_update(sandbox, update_logic)
     else:
-        await editor_utils.perform_sandbox_update(sandbox, lambda s: update_logic(getattr(s, scope)))
+        # 这个包装器逻辑是正确的，因为它确保了对沙盒对象的修改能够被正确应用
+        def sandbox_update_wrapper(s: Sandbox):
+            # 获取正确的子作用域字典 (lore 或 definition)
+            target_scope = getattr(s, scope)
+            update_logic(target_scope)
+        await editor_utils.perform_sandbox_update(sandbox, sandbox_update_wrapper)
+        
     return graph_def
 
 @editor_router.delete("/{scope}/graphs/{graph_name}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response, summary="Delete a graph")
