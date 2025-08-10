@@ -50,7 +50,7 @@ export function SandboxCard({ sandbox, onEdit, onRun, onDelete, onSelect, onExpo
             {sandbox.name}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Created: {new Date(sandbox.created_at).toLocaleDateString()}
+            创建于: {new Date(sandbox.created_at).toLocaleDateString()}
           </Typography>
         </CardContent>
       </CardActionArea>
@@ -69,15 +69,15 @@ export function SandboxCard({ sandbox, onEdit, onRun, onDelete, onSelect, onExpo
         <Menu anchorEl={anchorEl} open={open} onClose={handleMenuClose}>
           <MenuItem onClick={() => handleAction(onExportPng)}>
             <ListItemIcon><ImageIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Export as PNG</ListItemText>
+            <ListItemText>导出为PNG</ListItemText>
           </MenuItem>
           <MenuItem onClick={() => handleAction(onExportJson)}>
             <ListItemIcon><DataObjectIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Export as JSON</ListItemText>
+            <ListItemText>导出为JSON</ListItemText>
           </MenuItem>
           <MenuItem onClick={() => handleAction(() => onDelete(sandbox.id))} sx={{color: 'error.main'}}>
             <ListItemIcon><DeleteIcon fontSize="small" color="error" /></ListItemIcon>
-            <ListItemText>Delete</ListItemText>
+            <ListItemText>删除</ListItemText>
           </MenuItem>
         </Menu>
       </Box>

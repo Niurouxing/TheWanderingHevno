@@ -65,7 +65,7 @@ export function CreateSandboxDialog({ open, onClose, onCreate }) {
 
   return (
     <Dialog open={open} onClose={handleClose}>
-      <DialogTitle>Import New Sandbox</DialogTitle>
+      <DialogTitle>导入新沙盒</DialogTitle>
       <DialogContent>
         <Box sx={{ my: 2, textAlign: 'center' }}>
             <Button
@@ -74,19 +74,17 @@ export function CreateSandboxDialog({ open, onClose, onCreate }) {
                 variant="contained"
                 tabIndex={-1}
             >
-                {/* --- MODIFIED: 更新按钮文本 --- */}
-                Select PNG or JSON File
-                {/* --- MODIFIED: 接受 .png 和 .json 文件 --- */}
+                选择 PNG 或 JSON 文件
                 <VisuallyHiddenInput type="file" accept="image/png,application/json,.json" onChange={handleFileChange} />
             </Button>
-            {file && <Typography sx={{mt: 1}}>Selected: {file.name}</Typography>}
+            {file && <Typography sx={{mt: 1}}>已选择: {file.name}</Typography>}
             {error && <Typography color="error" sx={{mt: 1}}>{error}</Typography>}
         </Box>
       </DialogContent>
       <DialogActions>
-        <Button onClick={handleClose} disabled={loading}>Cancel</Button>
+        <Button onClick={handleClose} disabled={loading}>取消</Button>
         <Button onClick={handleCreate} variant="contained" disabled={!file || loading}>
-          {loading ? <CircularProgress size={24} /> : 'Import'}
+          {loading ? <CircularProgress size={24} /> : '导入沙盒'}
         </Button>
       </DialogActions>
     </Dialog>

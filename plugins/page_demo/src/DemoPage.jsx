@@ -17,17 +17,18 @@ export function DemoPage({ services }) {
     <Card sx={{ m: 2 }}>
       <CardContent>
         <Typography variant="h4" gutterBottom>
-          Hello from Demo Page!
+          这是一个演示页面
         </Typography>
         <Typography>
-          This entire component was dynamically loaded from the `page_demo` plugin.
+          这个组件是从 `page_demo` 插件动态加载的。
+          如果你到达了这个页面，那说明Niurx忘记删了这个页面了
         </Typography>
         <Button 
           variant="contained" 
           sx={{ mt: 2 }} 
           onClick={handleTriggerHook}
         >
-          Trigger a Hook
+          触发一个 Hook
         </Button>
       </CardContent>
     </Card>

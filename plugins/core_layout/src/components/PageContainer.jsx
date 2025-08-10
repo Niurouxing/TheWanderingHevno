@@ -62,8 +62,8 @@ export function PageContainer() {
   if (!ActiveLazyComponent) {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
-        <Typography variant="h5">Welcome to Hevno Engine</Typography>
-        <Typography color="text.secondary">Select a page from the floating menu to begin.</Typography>
+        <Typography variant="h5">Hevno</Typography>
+        <Typography color="text.secondary">戳一下那个按钮试试</Typography>
       </Box>
     );
   }

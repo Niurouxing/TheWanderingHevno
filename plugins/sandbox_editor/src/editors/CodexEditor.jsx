@@ -212,13 +212,13 @@ export function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) 
           placeholder={isNew ? "Enter a unique ID (required)" : ""}
         />
         <TextField
-          label="Content"
+          label="内容"
           value={data.content}
           onChange={(e) => handleChange(formKey, 'content', e.target.value)}
           multiline rows={4} fullWidth sx={{ mb: 2 }}
         />
         <TextField
-          label="Priority"
+          label="顺序"
           type="number"
           value={data.priority}
           onChange={(e) => handleChange(formKey, 'priority', parseInt(e.target.value, 10) || 100)}
@@ -229,12 +229,16 @@ export function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) 
           onChange={(e) => handleChange(formKey, 'trigger_mode', e.target.value)}
           fullWidth sx={{ mb: 2 }}
         >
-          <MenuItem value="always_on">Always On</MenuItem>
-          <MenuItem value="on_keyword">On Keyword</MenuItem>
+          <MenuItem value="always_on">
+            <span style={{ color: '#1976d2' }}>常亮</span>
+          </MenuItem>
+          <MenuItem value="on_keyword">
+            <span style={{ color: '#05c412ff' }}>按关键字触发</span>
+          </MenuItem>
         </Select>
         {data.trigger_mode === 'on_keyword' && (
           <TextField
-            label="Keywords"
+            label="关键词"
             value={(data.keywords || []).join(', ')}
             onChange={(e) => handleChange(formKey, 'keywords', e.target.value.split(',').map(k => k.trim()))}
             fullWidth sx={{ mb: 2 }}
@@ -248,7 +252,7 @@ export function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) 
           />
         )}
         <Button variant="contained" startIcon={<SaveIcon />} onClick={() => handleSave(formKey)} sx={{ mt: 2 }}>
-          Save
+          保存
         </Button>
       </Box>
     );
@@ -257,9 +261,9 @@ export function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) 
   return (
     <Box sx={{ p: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ flexShrink: 0 }}>
-        <Typography variant="h5" gutterBottom>Editing Codex: {codexName}</Typography>
-        <Button variant="outlined" onClick={onBack} sx={{ mb: 2 }}>Back to Overview</Button>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={handleAddEntryClick} sx={{ mb: 2, ml: 2 }}>Add Entry</Button>
+        <Typography variant="h5" gutterBottom>正在编辑Codex: {codexName}</Typography>
+        <Button variant="outlined" onClick={onBack} sx={{ mb: 2 }}>返回概览</Button>
+        <Button variant="contained" startIcon={<AddIcon />} onClick={handleAddEntryClick} sx={{ mb: 2, ml: 2 }}>添加条目</Button>
         {errorMessage && <Alert severity="error" sx={{ mb: 2 }}>{errorMessage}</Alert>}
       </Box>
 

@@ -16,7 +16,7 @@
                     "componentExportName": "SandboxExplorerPage",
                     "menu": {
                         "path": "/sandboxes",
-                        "title": "My Sandboxes",
+                        "title": "沙盒列表",
                         "icon": "DashboardCustomizeRounded"
                     }
                 }

@@ -91,16 +91,16 @@ export function SandboxEditorPage({ services }) {
   if (!currentSandboxId) {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
-        <Typography variant="h6" color="error">No sandbox selected for editing.</Typography>
+        <Typography variant="h6" color="error">未选择要编辑的沙盒</Typography>
       </Box>
     );
   }
   if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}><CircularProgress /></Box>;
   if (error) return (
     <Box sx={{ p: 4, textAlign: 'center' }}>
-      <Typography variant="h6" color="error">Failed to load sandbox</Typography>
+      <Typography variant="h6" color="error">加载沙盒失败</Typography>
       <Typography color="text.secondary">{error}</Typography>
-      <Button variant="outlined" sx={{ mt: 2 }} onClick={loadSandboxData}>Try Again</Button>
+      <Button variant="outlined" sx={{ mt: 2 }} onClick={loadSandboxData}>重试</Button>
     </Box>
   );
 
@@ -138,10 +138,10 @@ export function SandboxEditorPage({ services }) {
           onClick={handleGoBackToExplorer}
           sx={{ mr: 2 }}
         >
-          Back to Explorer
+            返回沙盒列表
         </Button>
         <Typography variant="h4" component="h1" noWrap sx={{ flexGrow: 1 }}>
-          Editing: {sandboxData?.name || 'Sandbox'}
+          正在编辑: {sandboxData?.name || 'Sandbox'}
         </Typography>
       </Box>
 
@@ -155,7 +155,7 @@ export function SandboxEditorPage({ services }) {
         {currentScopeData ? (
           <DataTree data={currentScopeData} onEdit={(path, value, codexName) => handleEdit(path, value, codexName, activeScope)} activeScope={activeScope} />
         ) : (
-          <Typography color="text.secondary">No data available for this scope.</Typography>
+          <Typography color="text.secondary">该范围内没有可用数据</Typography>
         )}
       </Box>
     </Box>

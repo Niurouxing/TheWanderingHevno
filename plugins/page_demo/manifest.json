@@ -16,7 +16,7 @@
                     "componentExportName": "DemoPage",
                     "menu": {
                         "path": "/demo",
-                        "title": "Demo Page",
+                        "title": "Demo页面",
                         "icon": "Science"
                     }
                 }

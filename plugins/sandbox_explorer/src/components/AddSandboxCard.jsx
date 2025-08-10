@@ -9,6 +9,7 @@ export function AddSandboxCard({ onClick }) {
     <Card 
       sx={{ 
         height: '100%', 
+        width: '250px',
         display: 'flex',
         // 使用虚线边框来与实体卡片区分
         border: (theme) => `2px dashed ${theme.palette.divider}`,
@@ -33,7 +34,7 @@ export function AddSandboxCard({ onClick }) {
       >
         <AddCircleOutlineRoundedIcon sx={{ fontSize: 48, color: 'text.secondary' }} />
         <Typography variant="h6" color="text.secondary" sx={{ mt: 1 }}>
-          Import New Sandbox
+          导入新沙盒
         </Typography>
       </CardActionArea>
     </Card>

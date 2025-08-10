@@ -166,16 +166,16 @@ export function SandboxExplorerPage({ services }) {
   if (error) {
     return (
         <Box sx={{p: 4, textAlign: 'center'}}>
-            <Typography variant="h6" color="error">Failed to load sandboxes</Typography>
+            <Typography variant="h6" color="error">导入沙盒失败</Typography>
             <Typography color="text.secondary">{error}</Typography>
-            <Button variant="outlined" sx={{mt: 2}} onClick={loadData}>Try Again</Button>
+            <Button variant="outlined" sx={{mt: 2}} onClick={loadData}>重试</Button>
         </Box>
     );
   }
 
   return (
     <Box sx={{ p: 3, height: '100%', overflowY: 'auto' }}>
-      <Typography variant="h4" gutterBottom>My Sandboxes</Typography>
+      <Typography variant="h4" gutterBottom>沙盒</Typography>
       
       <Grid container spacing={3}>
         <Grid item xs={12} sm={6} md={4} lg={3}>

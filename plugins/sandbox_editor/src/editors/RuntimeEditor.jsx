@@ -108,7 +108,7 @@ export function RuntimeEditor({ runList, onRunListChange }) {
     const isNew = editingRun === NEW_RUNTIME_SYMBOL;
     return (
       <Paper sx={{ p: 2, m: 1, border: `1px solid`, borderColor: 'primary.main' }}>
-         <Typography variant="h6" sx={{mb: 2}}>{isNew ? "Add New Runtime" : "Edit Runtime"}</Typography>
+         <Typography variant="h6" sx={{mb: 2}}>{isNew ? "添加指令" : "编辑指令"}</Typography>
         <Select
           value={draftData.runtime}
           onChange={(e) => handleDraftChange('runtime', e.target.value)}
@@ -117,9 +117,8 @@ export function RuntimeEditor({ runList, onRunListChange }) {
           displayEmpty
           sx={{ mb: 2 }}
         >
-          <MenuItem value="" disabled><em>Select Runtime Type</em></MenuItem>
-          
-          {/* --- [MODIFIED] Added all runtimes from docs, with groups --- */}
+          <MenuItem value="" disabled><em>选择指令类型</em></MenuItem>
+
           <ListSubheader>LLM</ListSubheader>
           <MenuItem value="llm.default">llm.default</MenuItem>
 
@@ -156,10 +155,10 @@ export function RuntimeEditor({ runList, onRunListChange }) {
         )}
         <Box sx={{mt: 2, display: 'flex', gap: 1}}>
             <Button variant="contained" startIcon={<SaveIcon />} onClick={handleSave}>
-                {isNew ? "Add" : "Save"}
+                {isNew ? "添加" : "保存"}
             </Button>
             <Button variant="outlined" onClick={handleDiscard}>
-                Cancel
+                取消
             </Button>
         </Box>
       </Paper>
@@ -169,9 +168,9 @@ export function RuntimeEditor({ runList, onRunListChange }) {
   return (
     <Paper variant="outlined" sx={{ mt: 2, p:1 }}>
       <Box sx={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-        <Typography variant="subtitle1" gutterBottom component="div">Runtime Instructions</Typography>
+        <Typography variant="subtitle1" gutterBottom component="div">指令列表</Typography>
         <Button variant="outlined" startIcon={<AddIcon />} onClick={handleAddClick} size="small" sx={{ mb: 1 }} disabled={editingRun !== null}>
-          Add Runtime
+            添加指令
         </Button>
       </Box>
 
