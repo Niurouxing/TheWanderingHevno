@@ -1,8 +1,8 @@
 // plugins/sandbox_editor/src/editors/RuntimeConfigForm.jsx
 import React from 'react';
 import { Box, TextField, Select, MenuItem, FormControlLabel, Switch, Typography, FormControl, InputLabel } from '@mui/material';
+import { CodexInvokeEditor } from './CodexInvokeEditor.jsx';
 
-// --- [MODIFIED] Added specs for all new runtimes from the docs ---
 const RUNTIME_CONFIG_SPECS = {
     // LLM
     'llm.default': [
@@ -31,7 +31,6 @@ const RUNTIME_CONFIG_SPECS = {
     ],
     // Codex
     'codex.invoke': [
-            { key: 'from', type: 'text', label: '来源 (JSON 列表 {"codex": "...", "source": "..."})', required: true, multiline: true },
             { key: 'recursion_enabled', type: 'switch', label: '启用递归', default: false },
             { key: 'debug', type: 'switch', label: '启用调试输出', default: false },
     ],
@@ -88,14 +87,26 @@ export function RuntimeConfigForm({ runtimeType, config, onConfigChange }) {
         onConfigChange({ ...config, [key]: value });
     }
   };
+  
+  const hasGenericFields = spec.length > 0;
+  const isCodexInvoke = runtimeType === 'codex.invoke';
 
-  if (spec.length === 0) {
+  if (!hasGenericFields && !isCodexInvoke) {
     return <Typography color="text.secondary" sx={{mt:2}}>该指令不需要额外配置</Typography>
   }
 
   return (
     <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
       <Typography variant="subtitle2">配置</Typography>
+      
+      {/* --- [NEW] 为 'codex.invoke' 渲染自定义编辑器 --- */}
+      {isCodexInvoke && (
+        <CodexInvokeEditor
+            value={config.from}
+            onChange={(newValue) => handleChange('from', newValue)}
+        />
+      )}
+      
       {spec.map(field => {
         let value = config[field.key];
         // Handle array-to-string conversion for text fields
