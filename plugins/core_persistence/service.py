@@ -16,7 +16,7 @@ from pydantic import BaseModel, ValidationError
 from PIL import Image, PngImagePlugin
 
 # 导入位于后端内核的自定义序列化工具
-from backend.core.serialization import custom_json_encoder_default, custom_json_decoder_object_hook
+from backend.core.serialization import custom_json_decoder_object_hook
 
 from .contracts import PersistenceServiceInterface, PackageManifest
 from plugins.core_engine.contracts import Sandbox, StateSnapshot # 仍然需要它们来做类型检查和序列化
@@ -43,7 +43,10 @@ class PersistenceService(PersistenceServiceInterface):
         sandbox_dir = self._get_sandbox_dir(sandbox_id)
         sandbox_dir.mkdir(parents=True, exist_ok=True)
         file_path = sandbox_dir / "sandbox.json"
-        json_string = json.dumps(data, default=custom_json_encoder_default, indent=2)
+        
+        # 不再需要 `default` 参数，因为传入的 `data` 已经是完全 JSON 兼容的了
+        json_string = json.dumps(data, indent=2)
+
         async with aiofiles.open(file_path, mode='w', encoding='utf-8') as f:
             await f.write(json_string)
         logger.debug(f"Persisted sandbox '{sandbox_id}' to {file_path}")
@@ -72,7 +75,9 @@ class PersistenceService(PersistenceServiceInterface):
         snapshot_dir = self._get_sandbox_dir(sandbox_id) / "snapshots"
         snapshot_dir.mkdir(parents=True, exist_ok=True)
         file_path = snapshot_dir / f"{snapshot_id}.json"
-        json_string = json.dumps(data, default=custom_json_encoder_default, indent=2)
+        
+        json_string = json.dumps(data, indent=2)
+        
         async with aiofiles.open(file_path, mode='w', encoding='utf-8') as f:
             await f.write(json_string)
         logger.debug(f"Persisted snapshot '{snapshot_id}' for sandbox '{sandbox_id}'")

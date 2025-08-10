@@ -6,6 +6,7 @@ from uuid import UUID
 
 # 【修复】从 core_engine 导入接口定义
 from plugins.core_engine.contracts import Sandbox, StateSnapshot, SnapshotStoreInterface, SandboxStoreInterface
+from backend.core.serialization import pickle_fallback_encoder
 from .contracts import PersistenceServiceInterface
 from pydantic import ValidationError
 
@@ -49,7 +50,9 @@ class PersistentSandboxStore(SandboxStoreInterface):
     async def save(self, sandbox: Sandbox):
         lock = self._get_lock(sandbox.id)
         async with lock:
-            data = sandbox.model_dump(mode='python')
+            # 使用 mode='json' 并提供 fallback 函数
+            data = sandbox.model_dump(mode='json', fallback=pickle_fallback_encoder)
+
             await self._persistence.save_sandbox(sandbox.id, data)
             self._cache[sandbox.id] = sandbox
             
@@ -84,7 +87,6 @@ class PersistentSandboxStore(SandboxStoreInterface):
 
 class PersistentSnapshotStore(SnapshotStoreInterface):
     """
-    【已重构为异步】
     管理快照的持久化和缓存。
     - 快照按需从磁盘加载。
     - 所有对持久化层的调用现在都是非阻塞的。
@@ -103,8 +105,9 @@ class PersistentSnapshotStore(SnapshotStoreInterface):
         """异步保存快照到磁盘并更新缓存。"""
         lock = self._get_lock(snapshot.id)
         async with lock:
-            # 使用 await 调用异步的 save_snapshot
-            data = snapshot.model_dump(mode='python')
+            # 同样，使用 mode='json' 并提供 fallback 函数
+            data = snapshot.model_dump(mode='json', fallback=pickle_fallback_encoder)
+          
             await self._persistence.save_snapshot(snapshot.sandbox_id, snapshot.id, data)
             self._cache[snapshot.id] = snapshot
 
