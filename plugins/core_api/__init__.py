@@ -5,43 +5,42 @@ from fastapi import APIRouter
 
 from backend.core.contracts import Container, HookManager
 
-# 【修复】移除所有顶层的路由导入，避免过早执行路由模块的代码
-# from .base_router import router as base_router
-# from .system_router import api_plugins_router, frontend_assets_router
 
 logger = logging.getLogger(__name__)
 
 
 async def provide_own_routers(routers: List[APIRouter]) -> List[APIRouter]:
-    """钩子实现：将本插件的所有路由添加到收集中。"""
+    """
+    Hook implementation: Adds this plugin's routers to the application's collection.
+    By importing inside the function, we ensure the router modules are executed
+    only when the application is ready to collect them.
+    """
+    logger.info("--> [core_api] 'collect_api_routers' hook triggered. Importing routers...")
     
-    # 将导入语句移至函数内部。
-    # 这确保了 base_router.py 和 system_router.py 只有在钩子被调用时才会被执行，
-    # 此时整个应用已经准备就绪。
-    logger.info("--> [core_api] 'collect_api_routers' hook triggered. Importing routers now...")
-    from .base_router import router as base_router
-    from .system_router import api_plugins_router, frontend_assets_router
+    # 【重点】只从一个文件中导入，不再需要 base_router
+    from .system_router import system_api_router, frontend_assets_router
     
-    # 记录将要添加的路由对象
-    logger.debug(f"[core_api] Appending base_router (prefix='{base_router.prefix}', {len(base_router.routes)} routes)")
-    logger.debug(f"[core_api] Appending api_plugins_router (prefix='{api_plugins_router.prefix}', {len(api_plugins_router.routes)} routes)")
+    logger.debug(f"[core_api] Appending system_api_router (prefix='{system_api_router.prefix}', {len(system_api_router.routes)} routes)")
     logger.debug(f"[core_api] Appending frontend_assets_router (prefix='{frontend_assets_router.prefix}', {len(frontend_assets_router.routes)} routes)")
     
-    routers.append(base_router)
-    routers.append(api_plugins_router)
+    routers.append(system_api_router)
     routers.append(frontend_assets_router)
     
-    logger.info("--> [core_api] Routers have been appended to the collection.")
+    logger.info("--> [core_api] Routers have been provided.")
     return routers
 
-# --- 主注册函数 ---
+# --- Main Registration Function ---
 def register_plugin(container: Container, hook_manager: HookManager):
+    """
+    Registers the core_api plugin. Its sole backend purpose is to provide
+    platform-level API endpoints for introspection and asset serving.
+    """
     logger.info("--> 正在注册 [core_api] 插件...")
     
     hook_manager.add_implementation(
         "collect_api_routers", 
         provide_own_routers, 
-        priority=100,  # 保持高优先级
+        priority=100,  # High priority to ensure system routes are available
         plugin_name="core_api"
     )
-    logger.info("插件 [core_api] 注册成功，'collect_api_routers' hook已实现。")
+    logger.info("插件 [core_api] 注册成功。'collect_api_routers' hook has been implemented.")
