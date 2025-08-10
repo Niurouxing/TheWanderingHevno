@@ -1,8 +1,9 @@
-# plugins/core_memoria/__init__.py (部分修改)
+# plugins/core_memoria/__init__.py
 
 import logging
 from typing import Dict, List, Any
 from uuid import UUID
+from fastapi import APIRouter
 
 from backend.core.contracts import Container, HookManager
 from plugins.core_engine.contracts import ExecutionContext
@@ -38,8 +39,8 @@ async def provide_memoria_runtimes(runtimes: dict) -> dict:
 
 async def apply_pending_synthesis(context: ExecutionContext, container: Container) -> ExecutionContext:
     """
-    【已重构】钩子实现：在图执行前应用待处理的综合事件。
-    现在操作 context.shared.moment_state。
+    钩子实现：在图执行前应用待处理的综合事件。
+    操作 context.shared.moment_state。
     """
     event_queue: Dict[UUID, List[Dict[str, Any]]] = container.resolve("memoria_event_queue")
     sandbox_id = context.initial_snapshot.sandbox_id
@@ -50,11 +51,8 @@ async def apply_pending_synthesis(context: ExecutionContext, container: Containe
 
     logger.info(f"Memoria: 发现 {len(pending_events)} 个待处理的综合事件，正在应用到 moment_state...")
     
-    # --- 【核心修改】 ---
-    # 从 moment_state 中获取和更新 memoria 数据
     moment_state = context.shared.moment_state
     memoria_data = moment_state.setdefault("memoria", {"__global_sequence__": 0})
-    # -------------------
     
     memoria = Memoria.model_validate(memoria_data)
     
@@ -80,14 +78,19 @@ async def apply_pending_synthesis(context: ExecutionContext, container: Containe
                 memoria.set_stream(stream_name, stream)
                 logger.debug(f"已将新总结应用到流 '{stream_name}'。")
     
-    # --- 【核心修改】 ---
-    # 将更新后的 memoria 模型写回到 moment_state
     moment_state["memoria"] = memoria.model_dump()
-    # -------------------
 
     return context
 
-# --- 主注册函数 (保持不变) ---
+# --- [新增] API路由提供钩子 ---
+async def provide_api_router(routers: List[APIRouter]) -> List[APIRouter]:
+    """钩子实现：将本插件的API路由添加到应用中。"""
+    from .api import memoria_router
+    routers.append(memoria_router)
+    logger.debug("Provided memoria editor API router to the application.")
+    return routers
+
+# --- [修改] 主注册函数 ---
 def register_plugin(container: Container, hook_manager: HookManager):
     logger.info("--> 正在注册 [core_memoria] 插件...")
 
@@ -106,6 +109,13 @@ def register_plugin(container: Container, hook_manager: HookManager):
         priority=50,
         plugin_name="core_memoria"
     )
-    logger.debug("钩子实现 'collect_runtimes' 和 'before_graph_execution' 已注册。")
+
+    # 添加新的钩子实现以注册API路由
+    hook_manager.add_implementation(
+        "collect_api_routers",
+        provide_api_router,
+        plugin_name="core_memoria"
+    )
+    logger.debug("钩子实现 'collect_runtimes', 'before_graph_execution', and 'collect_api_routers' 已注册。")
 
     logger.info("插件 [core_memoria] 注册成功。")

@@ -20,7 +20,7 @@ import { isObject, isArray } from '../utils/constants';
 const HEVNO_TYPE_EDITORS = {
   'hevno/codex': { icon: <AutoStoriesIcon />, tooltip: 'Edit Codex' },
   'hevno/graph': { icon: <AccountTreeIcon />, tooltip: 'Edit Graph' },
-  'hevno/memoria': { icon: <HistoryIcon />, tooltip: 'View Memoria' },
+  'hevno/memoria': { icon: <HistoryIcon />, tooltip: 'Edit Memoria' }, 
 };
 
 export function DataTree({ data, path = '', onEdit, activeScope }) {

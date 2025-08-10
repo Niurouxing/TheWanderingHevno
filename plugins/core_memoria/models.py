@@ -13,14 +13,14 @@ logger = logging.getLogger(__name__)
 
 class MemoryEntry(BaseModel):
     """一个单独的、结构化的记忆条目。"""
-    id: UUID = Field(default_factory=uuid4)
+    # 这允许模型处理用户定义的字符串 ID（如 'initial-event'）和系统生成的 UUID。
+    id: str = Field(default_factory=lambda: str(uuid4()))
     sequence_id: int = Field(..., description="在所有流中唯一的、单调递增的因果序列号。")
     level: str = Field(default="event", description="记忆的层级，如 'event', 'summary', 'milestone'。")
     tags: List[str] = Field(default_factory=list, description="用于快速过滤和检索的标签。")
     content: str = Field(..., description="记忆条目的文本内容。")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = Field(default_factory=dict)
-
 
 class AutoSynthesisConfig(BaseModel):
     """自动综合（大总结）的行为配置。"""
