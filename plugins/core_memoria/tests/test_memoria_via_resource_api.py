@@ -5,6 +5,8 @@ import datetime
 
 from plugins.core_engine.contracts import Sandbox, Mutation
 
+from plugins.core_engine.tests.conftest import mutate_resource_api, query_resource_api
+
 pytestmark = pytest.mark.e2e
 
 @pytest.fixture

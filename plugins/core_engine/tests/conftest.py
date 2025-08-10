@@ -8,11 +8,6 @@ from httpx import AsyncClient
 # 导入这个文件需要的 Pydantic 模型
 from plugins.core_engine.contracts import GraphCollection
 
-# pytest_plugins 是加载共享 fixtures 的正确方式
-pytest_plugins = [
-    "tests.conftest",
-    "tests.conftest_data"
-]
 
 # ---- 这里只定义本模块（core_engine）测试专属的、可复用的fixtures ----
 

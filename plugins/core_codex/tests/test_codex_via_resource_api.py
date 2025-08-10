@@ -5,6 +5,7 @@ from uuid import UUID
 
 from plugins.core_engine.contracts import Sandbox, Mutation
 
+from plugins.core_engine.tests.conftest import mutate_resource_api, query_resource_api
 
 # 标记为 e2e 测试
 pytestmark = pytest.mark.e2e

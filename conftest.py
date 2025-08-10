@@ -8,7 +8,9 @@ from fastapi import FastAPI
 from httpx import AsyncClient
 from httpx import ASGITransport 
 from fastapi.testclient import TestClient
-from asgi_lifespan import LifespanManager # <--- 关键导入
+from asgi_lifespan import LifespanManager 
+
+from tests.conftest_data import *
 
 # 平台核心
 # 【修改】从 backend.main 导入 app，而不是自己调用 create_app()
