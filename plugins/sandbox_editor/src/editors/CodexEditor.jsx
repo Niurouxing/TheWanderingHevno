@@ -1,3 +1,4 @@
+// plugins/sandbox_editor/src/editors/CodexEditor.jsx
 import React, { useState } from 'react';
 import { Box, Typography, List, ListItem, ListItemIcon, ListItemText, Collapse, IconButton, Button, Switch, TextField, MenuItem, Select, Chip, InputAdornment, Alert } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -254,48 +255,52 @@ export function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) 
   };
 
   return (
-    <Box sx={{ p: 2 }}>
-      <Typography variant="h5" gutterBottom>Editing Codex: {codexName}</Typography>
-      <Button variant="outlined" onClick={onBack} sx={{ mb: 2 }}>Back to Overview</Button>
-      <Button variant="contained" startIcon={<AddIcon />} onClick={handleAddEntryClick} sx={{ mb: 2, ml: 2 }}>Add Entry</Button>
-      {errorMessage && <Alert severity="error" sx={{ mb: 2 }}>{errorMessage}</Alert>}
+    <Box sx={{ p: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <Box sx={{ flexShrink: 0 }}>
+        <Typography variant="h5" gutterBottom>Editing Codex: {codexName}</Typography>
+        <Button variant="outlined" onClick={onBack} sx={{ mb: 2 }}>Back to Overview</Button>
+        <Button variant="contained" startIcon={<AddIcon />} onClick={handleAddEntryClick} sx={{ mb: 2, ml: 2 }}>Add Entry</Button>
+        {errorMessage && <Alert severity="error" sx={{ mb: 2 }}>{errorMessage}</Alert>}
+      </Box>
 
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <SortableContext items={entries.map(e => e.id)} strategy={verticalListSortingStrategy}>
-          <List>
-            {entries.map((entry) => (
-              <SortableEntryItem
-                key={entry.id}
-                id={entry.id}
-                entry={entry}
-                expanded={!!expanded[entry.id]}
-                onToggleExpand={toggleExpand}
-                onToggleEnabled={handleToggleEnabled}
-                onDelete={handleDelete}
-              >
-                <Collapse in={!!expanded[entry.id]} timeout="auto" unmountOnExit>
-                  {renderEntryForm(entry.id)}
-                </Collapse>
-              </SortableEntryItem>
-            ))}
-          </List>
-        </SortableContext>
-      </DndContext>
+      <Box sx={{ flexGrow: 1, overflowY: 'auto' }}>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={entries.map(e => e.id)} strategy={verticalListSortingStrategy}>
+            <List>
+              {entries.map((entry) => (
+                <SortableEntryItem
+                  key={entry.id}
+                  id={entry.id}
+                  entry={entry}
+                  expanded={!!expanded[entry.id]}
+                  onToggleExpand={toggleExpand}
+                  onToggleEnabled={handleToggleEnabled}
+                  onDelete={handleDelete}
+                >
+                  <Collapse in={!!expanded[entry.id]} timeout="auto" unmountOnExit>
+                    {renderEntryForm(entry.id)}
+                  </Collapse>
+                </SortableEntryItem>
+              ))}
+            </List>
+          </SortableContext>
+        </DndContext>
 
-      {newEntryForm && (
-        <React.Fragment key={NEW_ENTRY_KEY}>
-          <ListItem sx={{ bgcolor: 'action.hover', borderBottom: '1px solid rgba(255, 255, 255, 0.12)' }}>
-            <ListItemIcon><ExpandMoreIcon /></ListItemIcon>
-            <ListItemText primary="New Entry (Unsaved)" />
-            <IconButton onClick={() => handleDelete(NEW_ENTRY_KEY)}>
-              <DeleteIcon />
-            </IconButton>
-          </ListItem>
-          <Collapse in={true} timeout="auto">
-            {renderEntryForm(NEW_ENTRY_KEY)}
-          </Collapse>
-        </React.Fragment>
-      )}
+        {newEntryForm && (
+          <React.Fragment key={NEW_ENTRY_KEY}>
+            <ListItem sx={{ bgcolor: 'action.hover', borderBottom: '1px solid rgba(255, 255, 255, 0.12)' }}>
+              <ListItemIcon><ExpandMoreIcon /></ListItemIcon>
+              <ListItemText primary="New Entry (Unsaved)" />
+              <IconButton onClick={() => handleDelete(NEW_ENTRY_KEY)}>
+                <DeleteIcon />
+              </IconButton>
+            </ListItem>
+            <Collapse in={true} timeout="auto">
+              {renderEntryForm(NEW_ENTRY_KEY)}
+            </Collapse>
+          </React.Fragment>
+        )}
+      </Box>
     </Box>
   );
 }

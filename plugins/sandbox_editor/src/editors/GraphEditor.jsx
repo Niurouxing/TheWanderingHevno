@@ -228,43 +228,47 @@ export function GraphEditor({ sandboxId, scope, graphName, graphData, onBack }) 
   };
 
   return (
-    <Box sx={{ p: 2 }}>
-      <Typography variant="h5" gutterBottom>Editing Graph: {graphName}</Typography>
-      <Button variant="outlined" onClick={onBack} sx={{ mb: 2 }}>Back to Overview</Button>
-      <Button variant="contained" startIcon={<AddIcon />} onClick={handleAddNodeClick} sx={{ mb: 2, ml: 2 }}>Add Node</Button>
-      {errorMessage && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErrorMessage('')}>{errorMessage}</Alert>}
+    <Box sx={{ p: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <Box sx={{ flexShrink: 0 }}>
+        <Typography variant="h5" gutterBottom>Editing Graph: {graphName}</Typography>
+        <Button variant="outlined" onClick={onBack} sx={{ mb: 2 }}>Back to Overview</Button>
+        <Button variant="contained" startIcon={<AddIcon />} onClick={handleAddNodeClick} sx={{ mb: 2, ml: 2 }}>Add Node</Button>
+        {errorMessage && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErrorMessage('')}>{errorMessage}</Alert>}
+      </Box>
 
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleNodeDragEnd}>
-        <SortableContext items={nodes.map(n => n.id)} strategy={verticalListSortingStrategy}>
-          <List>
-            {nodes.map((node) => (
-              <SortableNodeItem
-                key={node.id}
-                id={node.id}
-                node={node}
-                expanded={!!expandedNodes[node.id]}
-                onToggleExpand={() => toggleNodeExpand(node.id)}
-                onDelete={() => handleNodeDelete(node.id)}
-              >
-                <Collapse in={!!expandedNodes[node.id]} timeout="auto" unmountOnExit>
-                  {renderNodeForm(node.id)}
-                </Collapse>
-              </SortableNodeItem>
-            ))}
-          </List>
-        </SortableContext>
-      </DndContext>
+      <Box sx={{ flexGrow: 1, overflowY: 'auto' }}>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleNodeDragEnd}>
+          <SortableContext items={nodes.map(n => n.id)} strategy={verticalListSortingStrategy}>
+            <List>
+              {nodes.map((node) => (
+                <SortableNodeItem
+                  key={node.id}
+                  id={node.id}
+                  node={node}
+                  expanded={!!expandedNodes[node.id]}
+                  onToggleExpand={() => toggleNodeExpand(node.id)}
+                  onDelete={() => handleNodeDelete(node.id)}
+                >
+                  <Collapse in={!!expandedNodes[node.id]} timeout="auto" unmountOnExit>
+                    {renderNodeForm(node.id)}
+                  </Collapse>
+                </SortableNodeItem>
+              ))}
+            </List>
+          </SortableContext>
+        </DndContext>
 
-      {/* --- [MODIFIED] Wrapped the new form in a div and attached the ref --- */}
-      <div ref={newNodeFormRef}>
-        {newNodeForm && (
-          <React.Fragment key={NEW_NODE_KEY}>
-            <Collapse in={true} timeout="auto">
-              {renderNodeForm(NEW_NODE_KEY)}
-            </Collapse>
-          </React.Fragment>
-        )}
-      </div>
+        {/* --- [MODIFIED] Wrapped the new form in a div and attached the ref --- */}
+        <div ref={newNodeFormRef}>
+          {newNodeForm && (
+            <React.Fragment key={NEW_NODE_KEY}>
+              <Collapse in={true} timeout="auto">
+                {renderNodeForm(NEW_NODE_KEY)}
+              </Collapse>
+            </React.Fragment>
+          )}
+        </div>
+      </Box>
     </Box>
   );
 }
