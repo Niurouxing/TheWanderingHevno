@@ -3,7 +3,7 @@
 import logging
 from typing import Dict, List, Any
 from uuid import UUID
-from fastapi import APIRouter
+
 
 from backend.core.contracts import Container, HookManager
 from plugins.core_engine.contracts import ExecutionContext
@@ -82,15 +82,7 @@ async def apply_pending_synthesis(context: ExecutionContext, container: Containe
 
     return context
 
-# --- [新增] API路由提供钩子 ---
-async def provide_api_router(routers: List[APIRouter]) -> List[APIRouter]:
-    """钩子实现：将本插件的API路由添加到应用中。"""
-    from .api import memoria_router
-    routers.append(memoria_router)
-    logger.debug("Provided memoria editor API router to the application.")
-    return routers
-
-# --- [修改] 主注册函数 ---
+# --- 主注册函数 ---
 def register_plugin(container: Container, hook_manager: HookManager):
     logger.info("--> 正在注册 [core_memoria] 插件...")
 
@@ -110,12 +102,6 @@ def register_plugin(container: Container, hook_manager: HookManager):
         plugin_name="core_memoria"
     )
 
-    # 添加新的钩子实现以注册API路由
-    hook_manager.add_implementation(
-        "collect_api_routers",
-        provide_api_router,
-        plugin_name="core_memoria"
-    )
-    logger.debug("钩子实现 'collect_runtimes', 'before_graph_execution', and 'collect_api_routers' 已注册。")
+    logger.debug("钩子实现 'collect_runtimes' 和 'before_graph_execution' 已注册。")
 
     logger.info("插件 [core_memoria] 注册成功。")

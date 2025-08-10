@@ -25,7 +25,7 @@ class MemoriaAddRuntime(RuntimeInterface):
             raise ValueError("MemoriaAddRuntime requires 'stream' and 'content' in its config.")
         
         level = config.get("level", "event")
-        tags = config.gfet("tags", [])
+        tags = config.get("tags", [])
         
         # 从 moment_state 中获取或创建 memoria 数据
         memoria_data = context.shared.moment_state.setdefault("memoria", {"__global_sequence__": 0})

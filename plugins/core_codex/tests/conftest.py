@@ -2,10 +2,10 @@
 
 import pytest
 
-# 告诉 pytest 加载项目根目录下的共享 fixtures。
-# 这会使 test_engine_setup, sandbox_factory, client, 和所有数据 fixtures
-# (如 linear_collection, codex_basic_data) 对本目录下的所有测试可见。
+# 加载项目根的共享 fixtures 和 core_engine 的共享 fixtures
+# 这将使 client, sandbox_factory, mutate_resource_api, query_resource_api 等全部可用
 pytest_plugins = [
     "tests.conftest",
-    "tests.conftest_data"
+    "tests.conftest_data",
+    "plugins.core_engine.tests.conftest"
 ]

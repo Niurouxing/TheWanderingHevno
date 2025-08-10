@@ -74,6 +74,12 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
 
 # --- 2. 核心服务与引擎 Fixtures (用于集成测试) ---
 
+@pytest.fixture(autouse=True)
+def force_llm_debug_mode(monkeypatch):
+    """在所有 engine 测试运行期间，自动设置环境变量，强制使用 MockLLMService。"""
+    monkeypatch.setenv("HEVNO_LLM_DEBUG_MODE", "true")
+
+
 @pytest.fixture(scope="function")
 def test_engine_setup(client: AsyncClient) -> Tuple[ExecutionEngineInterface, Container, HookManager]:
     """
@@ -149,6 +155,37 @@ def sandbox_factory(
 
     return _sandbox_factory
 
+
+@pytest.fixture
+def codex_sandbox_factory(sandbox_factory: callable) -> callable:
+    """
+    一个便利的包装器，将通用的 sandbox_factory 和 codex 测试数据结合起来。
+    """
+    async def _create_codex_sandbox(codex_data: dict):
+        # 导入需要的模型
+        from plugins.core_engine.contracts import Sandbox, GraphCollection
+
+        # 从 codex_data 中分离出图、lore 和 moment
+        graph_collection_dict = codex_data.get("lore", {}).get("graphs", {})
+        initial_lore = codex_data.get("lore", {})
+        initial_moment = codex_data.get("moment", {})
+        
+        # 从 lore 数据中移除 'graphs'，因为它会被自动添加
+        if 'graphs' in initial_lore:
+            # 使用副本以避免修改原始fixture数据
+            initial_lore = initial_lore.copy()
+            del initial_lore['graphs']
+            
+        graph_collection_obj = GraphCollection.model_validate(graph_collection_dict)
+
+        # 调用父工厂 (sandbox_factory 是通过 pytest_plugins 注入的)
+        sandbox: Sandbox = await sandbox_factory(
+            graph_collection=graph_collection_obj,
+            initial_lore=initial_lore,
+            initial_moment=initial_moment
+        )
+        return sandbox
+    return _create_codex_sandbox
 
 # --- 3. 端到端 API 测试 Fixtures ---
 

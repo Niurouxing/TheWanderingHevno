@@ -2,9 +2,10 @@
 
 import pytest
 
-# Make project-level fixtures available to tests in this directory.
-# This imports test_engine_setup, sandbox_factory, client, and all data fixtures.
+# 加载项目根的共享 fixtures 和 core_engine 的共享 fixtures
+# 这将使 client, sandbox_factory, mutate_resource_api, query_resource_api 等全部可用
 pytest_plugins = [
     "tests.conftest",
-    "tests.conftest_data"
+    "tests.conftest_data",
+    "plugins.core_engine.tests.conftest" 
 ]
