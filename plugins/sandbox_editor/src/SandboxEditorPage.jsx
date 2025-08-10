@@ -5,6 +5,7 @@ import { useLayout } from '../../core_layout/src/context/LayoutContext';
 import { SCOPE_TABS } from './utils/constants';
 import { DataTree } from './components/DataTree';
 import { CodexEditor } from './editors/CodexEditor';
+import { GraphEditor } from './editors/GraphEditor';
 
 export function SandboxEditorPage({ services }) {
   // --- [修改 1/4] 从 LayoutContext 中获取 setActivePageId 和 setCurrentSandboxId ---
@@ -14,6 +15,7 @@ export function SandboxEditorPage({ services }) {
   const [error, setError] = useState('');
   const [activeScope, setActiveScope] = useState(0);
   const [editingCodex, setEditingCodex] = useState(null);
+  const [editingGraph, setEditingGraph] = useState(null); // 新增: 用于 graph 编辑
 
   const loadSandboxData = useCallback(async () => {
     if (!currentSandboxId) return;
@@ -47,6 +49,7 @@ export function SandboxEditorPage({ services }) {
   const handleScopeChange = (event, newValue) => {
     setActiveScope(newValue);
     setEditingCodex(null);
+    setEditingGraph(null);
   };
   
   // --- [新增 2/4] 添加返回按钮的点击处理函数 ---
@@ -56,7 +59,8 @@ export function SandboxEditorPage({ services }) {
   };
 
   const handleEdit = (path, value, codexName, activeScopeIndex) => {
-    if (value.entries && Array.isArray(value.entries)) {
+    if (value.__hevno_type__ === 'hevno/codex' && value.entries && Array.isArray(value.entries)) {
+      // 原有 codex 逻辑
       let effectiveScope = SCOPE_TABS[activeScopeIndex];
       if (activeScopeIndex === 0) {
         const parts = path.split('.');
@@ -64,6 +68,16 @@ export function SandboxEditorPage({ services }) {
         else if (parts[0] === 'initial_moment') effectiveScope = 'initial_moment';
       }
       setEditingCodex({ name: codexName || path.split('.').pop(), data: value, scope: effectiveScope });
+    } else if (value.__hevno_type__ === 'hevno/graph') {
+      // 新增: graph 编辑
+      let effectiveScope = SCOPE_TABS[activeScopeIndex];
+      // 类似 scope 处理
+      if (activeScopeIndex === 0) {
+        const parts = path.split('.');
+        if (parts[0] === 'initial_lore') effectiveScope = 'initial_lore';
+        else if (parts[0] === 'initial_moment') effectiveScope = 'initial_moment';
+      }
+      setEditingGraph({ name: codexName || path.split('.').pop(), data: value, scope: effectiveScope });
     } else {
       alert(`Edit functionality for "${path}" is not yet implemented.`);
     }
@@ -100,6 +114,16 @@ export function SandboxEditorPage({ services }) {
         codexName={editingCodex.name}
         codexData={editingCodex.data}
         onBack={handleBackFromCodex}
+      />
+    );
+  } else if (editingGraph) {
+    return (
+      <GraphEditor
+        sandboxId={currentSandboxId}
+        scope={editingGraph.scope}
+        graphName={editingGraph.name}
+        graphData={editingGraph.data}
+        onBack={() => { setEditingGraph(null); loadSandboxData(); }}
       />
     );
   }
