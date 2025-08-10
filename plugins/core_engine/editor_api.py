@@ -66,7 +66,12 @@ async def get_scope_content(
     # This might need to become async if get() needs to hit disk
     return get_scope_content_data(scope, sandbox, snapshot_store)
 
-@editor_router.put("/{scope}", response_model=Sandbox, summary="Completely replace the content of a scope")
+@editor_router.put(
+    "/{scope}", 
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Completely replace the content of a scope"
+)
 async def replace_scope_content(
     scope: Scope, data: Dict[str, Any] = Body(...),
     sandbox: Sandbox = Depends(get_sandbox),
@@ -74,15 +79,22 @@ async def replace_scope_content(
 ):
     if scope == "definition":
         def update_definition(s: Sandbox): s.definition = data
-        return await editor_utils.perform_sandbox_update(sandbox, update_definition)
-    if scope == "lore":
+        await editor_utils.perform_sandbox_update(sandbox, update_definition)
+    elif scope == "lore":
         def update_lore(s: Sandbox): s.lore = data
-        return await editor_utils.perform_sandbox_update(sandbox, update_lore)
-    if scope == "moment":
+        await editor_utils.perform_sandbox_update(sandbox, update_lore)
+    elif scope == "moment":
         def replace_moment(m: Dict[str, Any]) -> Dict[str, Any]: return data
-        return await editor_utils.perform_live_moment_update(sandbox, replace_moment)
-
-@editor_router.patch("/{scope}", response_model=Sandbox, summary="Partially modify a scope using JSON-Patch")
+        await editor_utils.perform_live_moment_update(sandbox, replace_moment)
+    
+    # 2. 修改返回值
+    return None
+@editor_router.patch(
+    "/{scope}", 
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Partially modify a scope using JSON-Patch"
+)
 async def patch_scope_content(
     scope: Scope, patch: List[Dict[str, Any]] = Body(...),
     sandbox: Sandbox = Depends(get_sandbox),
@@ -91,15 +103,19 @@ async def patch_scope_content(
     try:
         if scope == "definition":
             def patch_definition(s: Sandbox): jsonpatch.apply_patch(s.definition, patch, in_place=True)
-            return await editor_utils.perform_sandbox_update(sandbox, patch_definition)
-        if scope == "lore":
+            await editor_utils.perform_sandbox_update(sandbox, patch_definition)
+        elif scope == "lore":
             def patch_lore(s: Sandbox): jsonpatch.apply_patch(s.lore, patch, in_place=True)
-            return await editor_utils.perform_sandbox_update(sandbox, patch_lore)
-        if scope == "moment":
+            await editor_utils.perform_sandbox_update(sandbox, patch_lore)
+        elif scope == "moment":
             def apply_patch_to_moment(m: Dict[str, Any]) -> Dict[str, Any]:
                 jsonpatch.apply_patch(m, patch, in_place=True)
                 return m
-            return await editor_utils.perform_live_moment_update(sandbox, apply_patch_to_moment)
+            await editor_utils.perform_live_moment_update(sandbox, apply_patch_to_moment)
+        
+        # 2. 修改返回值
+        return None
+
     except jsonpatch.JsonPatchException as e:
         raise HTTPException(status_code=422, detail=f"Invalid JSON-Patch operation: {e}")
     except Exception as e:

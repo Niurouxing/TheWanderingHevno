@@ -70,31 +70,53 @@ class TestScopeAPI:
         【关键E2E测试】验证对不同作用域的修改是否遵循正确的快照创建规则。
         """
         sandbox_id = setup_sandbox.id
-        original_snapshot_id = setup_sandbox.head_snapshot_id
+        
+        # 【修改点】因为后续会修改 sandbox 对象，先获取原始快照ID
+        #         我们不能再依赖 API 返回的 sandbox 对象
+        res_get_sandbox = await client.get(f"/api/sandboxes/{sandbox_id}")
+        assert res_get_sandbox.status_code == 200
+        original_snapshot_id = UUID(res_get_sandbox.json()["head_snapshot_id"])
         
         # --- 1. 修改 lore (不应创建新快照) ---
         new_lore = {"new_key": "lore_val"}
         res_put_lore = await client.put(f"/api/sandboxes/{sandbox_id}/lore", json=new_lore)
-        assert res_put_lore.status_code == 200
-        assert res_put_lore.json()["lore"] == new_lore
-        assert UUID(res_put_lore.json()["head_snapshot_id"]) == original_snapshot_id, \
+        # 【修改点】期望 204 No Content
+        assert res_put_lore.status_code == 204
+        
+        # 验证修改是否生效，并且快照ID未变
+        res_get_sandbox_after_lore = await client.get(f"/api/sandboxes/{sandbox_id}")
+        assert res_get_sandbox_after_lore.status_code == 200
+        lore_sandbox_data = res_get_sandbox_after_lore.json()
+        assert lore_sandbox_data["lore"] == new_lore
+        assert UUID(lore_sandbox_data["head_snapshot_id"]) == original_snapshot_id, \
             "Updating lore should NOT create a new snapshot"
 
         # --- 2. 修改 definition (不应创建新快照) ---
         patch_def_op = [{"op": "add", "path": "/new_setting", "value": "enabled"}]
         res_patch_def = await client.patch(f"/api/sandboxes/{sandbox_id}/definition", json=patch_def_op)
-        assert res_patch_def.status_code == 200
-        assert res_patch_def.json()["definition"]["new_setting"] == "enabled"
-        assert UUID(res_patch_def.json()["head_snapshot_id"]) == original_snapshot_id, \
+        # 【修改点】期望 204 No Content
+        assert res_patch_def.status_code == 204
+        
+        # 验证修改是否生效，并且快照ID未变
+        res_get_sandbox_after_def = await client.get(f"/api/sandboxes/{sandbox_id}")
+        assert res_get_sandbox_after_def.status_code == 200
+        def_sandbox_data = res_get_sandbox_after_def.json()
+        assert def_sandbox_data["definition"]["new_setting"] == "enabled"
+        assert UUID(def_sandbox_data["head_snapshot_id"]) == original_snapshot_id, \
             "Updating definition should NOT create a new snapshot"
         
         # --- 3. 修改 moment (必须创建新快照) ---
         patch_moment_op = [{"op": "add", "path": "/new_status", "value": "patched"}]
         res_patch_moment = await client.patch(f"/api/sandboxes/{sandbox_id}/moment", json=patch_moment_op)
-        assert res_patch_moment.status_code == 200
+        # 【修改点】期望 204 No Content
+        assert res_patch_moment.status_code == 204
         
-        updated_sandbox_data = res_patch_moment.json()
-        new_snapshot_id = UUID(updated_sandbox_data["head_snapshot_id"])
+        # 验证修改是否生效，并且快照ID已更新
+        res_get_sandbox_after_moment = await client.get(f"/api/sandboxes/{sandbox_id}")
+        assert res_get_sandbox_after_moment.status_code == 200
+        moment_sandbox_data = res_get_sandbox_after_moment.json()
+        new_snapshot_id = UUID(moment_sandbox_data["head_snapshot_id"])
+        
         assert new_snapshot_id != original_snapshot_id, "Updating moment MUST create a new snapshot"
 
         # 验证新快照的内容是否正确
@@ -111,11 +133,15 @@ class TestGraphNodeInstructionAPI:
         assert main_graph_from_lore is not None, "Fixture 'linear_collection' is missing 'main' graph."
         
         # 将 'main' 图从 lore 复制到 moment
+        # 【修改点】PUT /moment/graphs/{graph_name} 的返回是 GraphDefinition, 不是 Sandbox
         response = await client.put(
             f"/api/sandboxes/{sandbox.id}/moment/graphs/main",
             json=main_graph_from_lore
         )
+        # 它的返回码是 200 OK，因为它返回了被创建/更新的资源
         assert response.status_code == 200, "Failed to prepare moment scope for test"
+        # 确认返回的是一个图定义
+        assert "nodes" in response.json()
 
     @pytest.mark.parametrize("scope", ["lore", "moment"])
     async def test_graph_crud(self, client: AsyncClient, setup_sandbox: Sandbox, scope: str):
