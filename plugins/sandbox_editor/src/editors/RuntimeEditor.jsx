@@ -1,7 +1,6 @@
 // plugins/sandbox_editor/src/editors/RuntimeEditor.jsx
-// 这是一个子组件，用于编辑单个节点内的 run 列表 (二级列表)
-import React, { useState } from 'react';
-import { Box, List, ListItem, ListItemIcon, ListItemText, Collapse, IconButton, Button, Select, MenuItem,Typography } from '@mui/material';
+import React, { useState, useEffect } from 'react';
+import { Box, List, Collapse, IconButton, Button, Select, MenuItem, Typography, Paper, ListSubheader } from '@mui/material'; // --- [MODIFIED] Import ListSubheader
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -24,149 +23,176 @@ import {
 import { SortableRuntimeItem } from '../components/SortableRuntimeItem';
 import { RuntimeConfigForm } from './RuntimeConfigForm';
 
-export function RuntimeEditor({ runList, onRunListChange, sandboxId, scope, graphName, nodeId }) {
-  const [runs, setRuns] = useState(runList);
-  const [editingRuns, setEditingRuns] = useState({}); // 草稿区 for individual run items, key是 index (stringified)
-  const [expandedRuns, setExpandedRuns] = useState({});
-  const [newRunFormIndex, setNewRunFormIndex] = useState(null); // 新 runtime 的临时索引
+const NEW_RUNTIME_SYMBOL = Symbol('new_runtime');
+
+export function RuntimeEditor({ runList, onRunListChange }) {
+  const [runs, setRuns] = useState(runList || []);
+  const [editingRun, setEditingRun] = useState(null);
+  const [draftData, setDraftData] = useState(null);
+
+  useEffect(() => {
+    setRuns(runList || []);
+  }, [runList]);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
-  const toggleRunExpand = (index) => {
-    const isExpanded = !!expandedRuns[index];
-    setExpandedRuns(prev => ({ ...prev, [index]: !isExpanded }));
-    if (!isExpanded && !editingRuns[index]) {
-      const runToEdit = runs[index];
-      if (runToEdit) {
-        setEditingRuns(prev => ({ ...prev, [index]: { ...runToEdit } }));
-      }
+  const handleToggleExpand = (index) => {
+    if (editingRun === index) {
+      setEditingRun(null);
+      setDraftData(null);
+    } else {
+      setEditingRun(index);
+      setDraftData({ ...runs[index] });
     }
   };
 
-  const handleRunDragEnd = (event) => {
+  const handleDragEnd = (event) => {
     const { active, over } = event;
     if (active.id !== over.id) {
-      const oldIndex = parseInt(active.id, 10);
-      const newIndex = parseInt(over.id, 10);
-      const newOrderedRuns = arrayMove(runs, oldIndex, newIndex);
+      const oldI = parseInt(active.id, 10);
+      const newI = parseInt(over.id, 10);
+
+      const newOrderedRuns = arrayMove(runs, oldI, newI);
       setRuns(newOrderedRuns);
       onRunListChange(newOrderedRuns);
-      // TODO: 如果需要，发送到后端 reorder API
     }
   };
 
-  const handleAddRunClick = () => {
-    if (newRunFormIndex !== null) {
-      alert("Please save or discard the current new runtime first.");
+  const handleAddClick = () => {
+    if (editingRun !== null) {
+      alert("Please save or discard the current runtime first.");
       return;
     }
-    const newIndex = runs.length;
-    setNewRunFormIndex(newIndex);
-    setEditingRuns(prev => ({ ...prev, [newIndex]: { runtime: '', config: {} } }));
-    setExpandedRuns(prev => ({ ...prev, [newIndex]: true }));
+    setEditingRun(NEW_RUNTIME_SYMBOL);
+    setDraftData({ runtime: '', config: {} });
   };
-
-  const handleRunSave = (index) => {
-    const draftData = editingRuns[index];
+  
+  const handleSave = () => {
     if (!draftData.runtime) {
       alert("Runtime type is required.");
       return;
     }
-    const newRuns = [...runs];
-    newRuns[index] = draftData;
+    let newRuns;
+    if (editingRun === NEW_RUNTIME_SYMBOL) {
+      newRuns = [...runs, draftData];
+    } else {
+      newRuns = runs.map((run, i) => (i === editingRun ? draftData : run));
+    }
     setRuns(newRuns);
     onRunListChange(newRuns);
-    setEditingRuns(prev => { const { [index]: _, ...rest } = prev; return rest; });
-    setExpandedRuns(prev => ({ ...prev, [index]: false }));
-    if (index === newRunFormIndex) {
-      setNewRunFormIndex(null);
-    }
-    // TODO: 发送到后端 update API
+    
+    setEditingRun(null);
+    setDraftData(null);
   };
 
-  const handleRunDelete = (index) => {
+  const handleDelete = (index) => {
     const newRuns = runs.filter((_, i) => i !== index);
     setRuns(newRuns);
     onRunListChange(newRuns);
-    // TODO: 发送到后端 delete API
-    if (index === newRunFormIndex) {
-      setNewRunFormIndex(null);
-    }
   };
+  
+  const handleDiscard = () => {
+      setEditingRun(null);
+      setDraftData(null);
+  }
 
-  const handleRunChange = (index, field, value) => {
-    setEditingRuns(prev => ({ ...prev, [index]: { ...prev[index], [field]: value } }));
-  };
+  const handleDraftChange = (field, value) => {
+      setDraftData(prev => ({...prev, [field]: value}));
+  }
 
-  const renderRunForm = (index) => {
-    const data = editingRuns[index];
-    if (!data) return null;
+  const renderRunForm = () => {
+    if (!draftData) return null;
+    const isNew = editingRun === NEW_RUNTIME_SYMBOL;
     return (
-      <Box sx={{ pl: 4, pb: 2 }}>
+      <Paper sx={{ p: 2, m: 1, border: `1px solid`, borderColor: 'primary.main' }}>
+         <Typography variant="h6" sx={{mb: 2}}>{isNew ? "Add New Runtime" : "Edit Runtime"}</Typography>
         <Select
-          value={data.runtime}
-          onChange={(e) => handleRunChange(index, 'runtime', e.target.value)}
+          value={draftData.runtime}
+          onChange={(e) => handleDraftChange('runtime', e.target.value)}
           fullWidth
-          sx={{ mb: 2 }}
+          size="small"
           displayEmpty
+          sx={{ mb: 2 }}
         >
-          <MenuItem value="" disabled>Select Runtime Type</MenuItem>
-          {/* TODO: 从文档或后端获取所有可用 runtime 类型 */}
+          <MenuItem value="" disabled><em>Select Runtime Type</em></MenuItem>
+          
+          {/* --- [MODIFIED] Added all runtimes from docs, with groups --- */}
+          <ListSubheader>LLM</ListSubheader>
+          <MenuItem value="llm.default">llm.default</MenuItem>
+
+          <ListSubheader>Memoria</ListSubheader>
+          <MenuItem value="memoria.add">memoria.add</MenuItem>
+          <MenuItem value="memoria.query">memoria.query</MenuItem>
+          <MenuItem value="memoria.aggregate">memoria.aggregate</MenuItem>
+
+          <ListSubheader>Codex</ListSubheader>
+          <MenuItem value="codex.invoke">codex.invoke</MenuItem>
+
+          <ListSubheader>System IO</ListSubheader>
           <MenuItem value="system.io.input">system.io.input</MenuItem>
           <MenuItem value="system.io.log">system.io.log</MenuItem>
+
+          <ListSubheader>System Data</ListSubheader>
           <MenuItem value="system.data.format">system.data.format</MenuItem>
-          {/* ... 其他类型 ... */}
+          <MenuItem value="system.data.parse">system.data.parse</MenuItem>
+          <MenuItem value="system.data.regex">system.data.regex</MenuItem>
+          
+          <ListSubheader>System Flow</ListSubheader>
+          <MenuItem value="system.flow.call">system.flow.call</MenuItem>
+          <MenuItem value="system.flow.map">system.flow.map</MenuItem>
+
+          <ListSubheader>System Advanced</ListSubheader>
+          <MenuItem value="system.execute">system.execute</MenuItem>
         </Select>
-        {data.runtime && (
+        {draftData.runtime && (
           <RuntimeConfigForm
-            runtimeType={data.runtime}
-            config={data.config || {}}
-            onConfigChange={(newConfig) => handleRunChange(index, 'config', newConfig)}
+            runtimeType={draftData.runtime}
+            config={draftData.config || {}}
+            onConfigChange={(newConfig) => handleDraftChange('config', newConfig)}
           />
         )}
-        <Button variant="contained" startIcon={<SaveIcon />} onClick={() => handleRunSave(index)} sx={{ mt: 2 }}>
-          Save Runtime
-        </Button>
-      </Box>
+        <Box sx={{mt: 2, display: 'flex', gap: 1}}>
+            <Button variant="contained" startIcon={<SaveIcon />} onClick={handleSave}>
+                {isNew ? "Add" : "Save"}
+            </Button>
+            <Button variant="outlined" onClick={handleDiscard}>
+                Cancel
+            </Button>
+        </Box>
+      </Paper>
     );
   };
 
   return (
-    <Box sx={{ mt: 2 }}>
-      <Typography variant="subtitle1" gutterBottom>Runtime Instructions</Typography>
-      <Button variant="outlined" startIcon={<AddIcon />} onClick={handleAddRunClick} size="small" sx={{ mb: 1 }}>Add Runtime</Button>
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleRunDragEnd}>
-        <SortableContext items={runs.map((_, i) => i.toString())} strategy={verticalListSortingStrategy}>
-          <List disablePadding>
-            {runs.map((run, index) => (
-              <SortableRuntimeItem
-                key={index}
-                id={index.toString()}
-                run={run}
-                expanded={!!expandedRuns[index]}
-                onToggleExpand={() => toggleRunExpand(index)}
-                onDelete={() => handleRunDelete(index)}
-              >
-                <Collapse in={!!expandedRuns[index]} timeout="auto" unmountOnExit>
-                  {renderRunForm(index)}
-                </Collapse>
-              </SortableRuntimeItem>
-            ))}
-            {newRunFormIndex !== null && (
-              <ListItem sx={{ bgcolor: 'action.hover' }}>
-                <ListItemIcon><ChevronRightIcon /></ListItemIcon>
-                <ListItemText primary="New Runtime (Unsaved)" />
-                <IconButton onClick={() => handleRunDelete(newRunFormIndex)}>
-                  <DeleteIcon />
-                </IconButton>
-              </ListItem>
-            )}
-          </List>
-        </SortableContext>
-      </DndContext>
-    </Box>
+    <Paper variant="outlined" sx={{ mt: 2, p:1 }}>
+      <Box sx={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+        <Typography variant="subtitle1" gutterBottom component="div">Runtime Instructions</Typography>
+        <Button variant="outlined" startIcon={<AddIcon />} onClick={handleAddClick} size="small" sx={{ mb: 1 }} disabled={editingRun !== null}>
+          Add Runtime
+        </Button>
+      </Box>
+
+      {editingRun !== null ? renderRunForm() : (
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={runs.map((_, i) => i.toString())} strategy={verticalListSortingStrategy}>
+              <List disablePadding>
+                {runs.map((run, index) => (
+                  <SortableRuntimeItem
+                    key={index}
+                    id={index.toString()}
+                    run={run}
+                    onEdit={() => handleToggleExpand(index)}
+                    onDelete={() => handleDelete(index)}
+                  />
+                ))}
+                {runs.length === 0 && <Typography color="text.secondary" sx={{p:2, textAlign: 'center'}}>No runtimes defined.</Typography>}
+              </List>
+            </SortableContext>
+          </DndContext>
+      )}
+    </Paper>
   );
 }

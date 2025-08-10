@@ -1,6 +1,6 @@
 // plugins/sandbox_editor/src/editors/GraphEditor.jsx
-import React, { useState } from 'react';
-import { Box, Typography, List, Collapse, IconButton, Button, TextField, Select, MenuItem, Alert, Chip, InputAdornment } from '@mui/material';
+import React, { useState, useRef, useEffect } from 'react'; // --- [MODIFIED] Import useRef and useEffect
+import { Box, Typography, List, Collapse, IconButton, Button, TextField, Alert, Chip, InputAdornment } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
@@ -24,10 +24,13 @@ import { RuntimeEditor } from './RuntimeEditor';
 
 export function GraphEditor({ sandboxId, scope, graphName, graphData, onBack }) {
   const [nodes, setNodes] = useState(graphData.nodes || []);
-  const [editingNodes, setEditingNodes] = useState({}); // 草稿区 for nodes, key是原始ID
+  const [editingNodes, setEditingNodes] = useState({});
   const [expandedNodes, setExpandedNodes] = useState({});
-  const [newNodeForm, setNewNodeForm] = useState(null); // 新节点表单
+  const [newNodeForm, setNewNodeForm] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
+
+  // --- [NEW] Create a ref for the new node form container ---
+  const newNodeFormRef = useRef(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -35,6 +38,13 @@ export function GraphEditor({ sandboxId, scope, graphName, graphData, onBack }) 
   );
 
   const NEW_NODE_KEY = 'new_node_form';
+
+  // --- [NEW] Add an effect to scroll to the new form when it appears ---
+  useEffect(() => {
+    if (newNodeForm && newNodeFormRef.current) {
+      newNodeFormRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+  }, [newNodeForm]);
 
   const toggleNodeExpand = (originalId) => {
     const isExpanded = !!expandedNodes[originalId];
@@ -52,10 +62,25 @@ export function GraphEditor({ sandboxId, scope, graphName, graphData, onBack }) 
     if (active.id !== over.id) {
       const oldIndex = nodes.findIndex(n => n.id === active.id);
       const newIndex = nodes.findIndex(n => n.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+
       const newOrderedNodes = arrayMove(nodes, oldIndex, newIndex);
-      setNodes(newOrderedNodes);
-      // TODO: 发送到后端 /api/sandboxes/{sandboxId}/{scope}/graphs/{graphName}/nodes:reorder
-      // body: { node_ids: newOrderedNodes.map(n => n.id) }
+      setNodes(newOrderedNodes); // Optimistic UI update
+
+      try {
+        const nodeIds = newOrderedNodes.map(n => n.id);
+        const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/graphs/${graphName}/nodes:reorder`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ node_ids: nodeIds }),
+        });
+        if (!response.ok) {
+          throw new Error('Failed to save new node order.');
+        }
+      } catch (e) {
+        setErrorMessage(e.message);
+        setNodes(nodes); // Revert on failure
+      }
     }
   };
 
@@ -64,9 +89,7 @@ export function GraphEditor({ sandboxId, scope, graphName, graphData, onBack }) 
       alert("Please save or discard the current new node first.");
       return;
     }
-    setNewNodeForm({
-      id: '', depends_on: [], run: [], metadata: {}
-    });
+    setNewNodeForm({ id: '', depends_on: [], run: [], metadata: {} });
   };
 
   const handleNodeSave = async (formKey) => {
@@ -79,21 +102,63 @@ export function GraphEditor({ sandboxId, scope, graphName, graphData, onBack }) 
       return;
     }
 
-    // TODO: 发送到后端
-    // 如果 isNew: POST /api/sandboxes/{sandboxId}/{scope}/graphs/{graphName}/nodes
-    // 否则: PUT /api/sandboxes/{sandboxId}/{scope}/graphs/{graphName}/nodes/{originalId}
-    // body: draftData
-    // 如果 id 变化: 先 POST 新节点，然后 DELETE 旧节点
-
     if (isNew) {
-      // 模拟成功
-      setNodes(prev => [...prev, draftData]);
-      setNewNodeForm(null);
+      try {
+        const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/graphs/${graphName}/nodes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(draftData),
+        });
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({ detail: "Failed to create node." }));
+          throw new Error(err.detail);
+        }
+        const savedNode = await response.json();
+        setNodes(prev => [...prev, savedNode]);
+        setNewNodeForm(null);
+      } catch (e) {
+        setErrorMessage(e.message);
+      }
+      return;
+    }
+
+    const originalId = formKey;
+    const idHasChanged = originalId !== draftData.id;
+
+    if (idHasChanged) {
+      try {
+        const createResponse = await fetch(`/api/sandboxes/${sandboxId}/${scope}/graphs/${graphName}/nodes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(draftData),
+        });
+        if (!createResponse.ok) throw new Error("Failed to create new node for rename.");
+        const createdNode = await createResponse.json();
+        
+        await fetch(`/api/sandboxes/${sandboxId}/${scope}/graphs/${graphName}/nodes/${originalId}`, { method: 'DELETE' });
+
+        setNodes(prev => [...prev.filter(n => n.id !== originalId), createdNode]);
+        setEditingNodes(prev => { const { [originalId]: _, ...rest } = prev; return rest; });
+        setExpandedNodes(prev => ({ ...prev, [originalId]: false }));
+
+      } catch (e) {
+        setErrorMessage(e.message);
+      }
     } else {
-      const originalId = formKey;
-      setNodes(prev => prev.map(n => n.id === originalId ? draftData : n));
-      setEditingNodes(prev => { const { [originalId]: _, ...rest } = prev; return rest; });
-      setExpandedNodes(prev => ({ ...prev, [originalId]: false }));
+      try {
+        const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/graphs/${graphName}/nodes/${originalId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(draftData),
+        });
+        if (!response.ok) throw new Error("Failed to update node.");
+        
+        setNodes(prev => prev.map(n => (n.id === originalId ? draftData : n)));
+        setEditingNodes(prev => { const { [originalId]: _, ...rest } = prev; return rest; });
+        setExpandedNodes(prev => ({ ...prev, [originalId]: false }));
+      } catch (e) {
+        setErrorMessage(e.message);
+      }
     }
   };
 
@@ -102,16 +167,23 @@ export function GraphEditor({ sandboxId, scope, graphName, graphData, onBack }) 
     if (id === NEW_NODE_KEY) {
       setNewNodeForm(null);
     } else {
-      // TODO: DELETE /api/sandboxes/{sandboxId}/{scope}/graphs/{graphName}/nodes/{id}
-      setNodes(prev => prev.filter(n => n.id !== id));
+        if (!window.confirm(`Are you sure you want to delete node "${id}"?`)) return;
+      try {
+        const response = await fetch(`/api/sandboxes/${sandboxId}/${scope}/graphs/${graphName}/nodes/${id}`, { method: 'DELETE' });
+        if(!response.ok) throw new Error("Failed to delete node from server.");
+        setNodes(prev => prev.filter(n => n.id !== id));
+      } catch (e) {
+        setErrorMessage(e.message);
+      }
     }
   };
-
+  
   const handleNodeChange = (formKey, field, value) => {
+    const updater = (prev) => ({ ...prev, [field]: value });
     if (formKey === NEW_NODE_KEY) {
-      setNewNodeForm(prev => ({ ...prev, [field]: value }));
+      setNewNodeForm(updater);
     } else {
-      setEditingNodes(prev => ({ ...prev, [formKey]: { ...prev[formKey], [field]: value } }));
+      setEditingNodes(prev => ({ ...prev, [formKey]: updater(prev[formKey]) }));
     }
   };
 
@@ -120,7 +192,7 @@ export function GraphEditor({ sandboxId, scope, graphName, graphData, onBack }) 
     const data = isNew ? newNodeForm : editingNodes[formKey];
     if (!data) return null;
     return (
-      <Box sx={{ pl: 4, pb: 2 }}>
+      <Box sx={{ pl: 4, pb: 2, border: '1px solid rgba(255,255,255,0.2)', borderRadius: 1, m:1 }}>
         <TextField
           label="Node ID"
           value={data.id}
@@ -133,7 +205,7 @@ export function GraphEditor({ sandboxId, scope, graphName, graphData, onBack }) 
         <TextField
           label="Depends On (comma-separated IDs)"
           value={(data.depends_on || []).join(', ')}
-          onChange={(e) => handleNodeChange(formKey, 'depends_on', e.target.value.split(',').map(id => id.trim()))}
+          onChange={(e) => handleNodeChange(formKey, 'depends_on', e.target.value.split(',').map(id => id.trim()).filter(Boolean))}
           fullWidth
           sx={{ mb: 2 }}
           InputProps={{
@@ -144,14 +216,9 @@ export function GraphEditor({ sandboxId, scope, graphName, graphData, onBack }) 
             ),
           }}
         />
-        {/* 二级: Runtime 列表编辑器 */}
         <RuntimeEditor
           runList={data.run || []}
-          onRunListChange={(newRun) => handleNodeChange(formKey, 'run', newRun)}
-          sandboxId={sandboxId}
-          scope={scope}
-          graphName={graphName}
-          nodeId={data.id} // 用于后端API，如果需要
+          onRunListChange={(newRunList) => handleNodeChange(formKey, 'run', newRunList)}
         />
         <Button variant="contained" startIcon={<SaveIcon />} onClick={() => handleNodeSave(formKey)} sx={{ mt: 2 }}>
           Save Node
@@ -165,7 +232,7 @@ export function GraphEditor({ sandboxId, scope, graphName, graphData, onBack }) 
       <Typography variant="h5" gutterBottom>Editing Graph: {graphName}</Typography>
       <Button variant="outlined" onClick={onBack} sx={{ mb: 2 }}>Back to Overview</Button>
       <Button variant="contained" startIcon={<AddIcon />} onClick={handleAddNodeClick} sx={{ mb: 2, ml: 2 }}>Add Node</Button>
-      {errorMessage && <Alert severity="error" sx={{ mb: 2 }}>{errorMessage}</Alert>}
+      {errorMessage && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErrorMessage('')}>{errorMessage}</Alert>}
 
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleNodeDragEnd}>
         <SortableContext items={nodes.map(n => n.id)} strategy={verticalListSortingStrategy}>
@@ -176,8 +243,8 @@ export function GraphEditor({ sandboxId, scope, graphName, graphData, onBack }) 
                 id={node.id}
                 node={node}
                 expanded={!!expandedNodes[node.id]}
-                onToggleExpand={toggleNodeExpand}
-                onDelete={handleNodeDelete}
+                onToggleExpand={() => toggleNodeExpand(node.id)}
+                onDelete={() => handleNodeDelete(node.id)}
               >
                 <Collapse in={!!expandedNodes[node.id]} timeout="auto" unmountOnExit>
                   {renderNodeForm(node.id)}
@@ -188,20 +255,16 @@ export function GraphEditor({ sandboxId, scope, graphName, graphData, onBack }) 
         </SortableContext>
       </DndContext>
 
-      {newNodeForm && (
-        <React.Fragment key={NEW_NODE_KEY}>
-          <ListItem sx={{ bgcolor: 'action.hover', borderBottom: '1px solid rgba(255, 255, 255, 0.12)' }}>
-            <ListItemIcon><ExpandMoreIcon /></ListItemIcon>
-            <ListItemText primary="New Node (Unsaved)" />
-            <IconButton onClick={() => handleNodeDelete(NEW_NODE_KEY)}>
-              <DeleteIcon />
-            </IconButton>
-          </ListItem>
-          <Collapse in={true} timeout="auto">
-            {renderNodeForm(NEW_NODE_KEY)}
-          </Collapse>
-        </React.Fragment>
-      )}
+      {/* --- [MODIFIED] Wrapped the new form in a div and attached the ref --- */}
+      <div ref={newNodeFormRef}>
+        {newNodeForm && (
+          <React.Fragment key={NEW_NODE_KEY}>
+            <Collapse in={true} timeout="auto">
+              {renderNodeForm(NEW_NODE_KEY)}
+            </Collapse>
+          </React.Fragment>
+        )}
+      </div>
     </Box>
   );
 }

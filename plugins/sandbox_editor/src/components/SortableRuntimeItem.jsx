@@ -1,15 +1,13 @@
 // plugins/sandbox_editor/src/components/SortableRuntimeItem.jsx
-// 类似于 SortableNodeItem，但为 runtime item 定制 (二级)
 import React from 'react';
-import { ListItem, ListItemIcon, ListItemText, IconButton } from '@mui/material';
+import { ListItem, ListItemIcon, ListItemText, IconButton, Chip } from '@mui/material';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
-export function SortableRuntimeItem({ id, run, expanded, onToggleExpand, onDelete, children }) {
+export function SortableRuntimeItem({ id, run, onEdit, onDelete }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
 
   const style = {
@@ -23,22 +21,27 @@ export function SortableRuntimeItem({ id, run, expanded, onToggleExpand, onDelet
   return (
     <div ref={setNodeRef} style={style}>
       <ListItem
-        button
-        onClick={() => onToggleExpand(id)}
-        sx={{ pl: 4, borderBottom: '1px dashed rgba(255, 255, 255, 0.08)' }}
+        // --- [FIX] Removed the "button" prop and the top-level onClick handler ---
+        sx={{ pl: 2, borderBottom: '1px dashed rgba(255, 255, 255, 0.08)' }}
+        secondaryAction={
+            <>
+                <IconButton size="small" edge="end" aria-label="edit" onClick={onEdit}>
+                    <EditIcon fontSize="small" />
+                </IconButton>
+                <IconButton size="small" edge="end" aria-label="delete" onClick={(e) => { e.stopPropagation(); onDelete(); }}>
+                    <DeleteIcon fontSize="small" />
+                </IconButton>
+            </>
+        }
       >
         <ListItemIcon {...attributes} {...listeners} sx={{ cursor: 'grab', minWidth: 32 }}>
           <DragIndicatorIcon fontSize="small" />
         </ListItemIcon>
-        <ListItemIcon sx={{ minWidth: 32 }}>
-          {expanded ? <ExpandMoreIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
-        </ListItemIcon>
-        <ListItemText primary={run.runtime || 'Untitled Runtime'} secondary="Config keys: ..." />
-        <IconButton size="small" onClick={(e) => { e.stopPropagation(); onDelete(id); }}>
-          <DeleteIcon fontSize="small" />
-        </IconButton>
+        <ListItemText 
+            primary={<Chip label={run.runtime || 'Untitled'} size="small" variant="outlined" />} 
+            secondary={`Config keys: ${Object.keys(run.config || {}).length}`} 
+        />
       </ListItem>
-      {children}
     </div>
   );
 }
