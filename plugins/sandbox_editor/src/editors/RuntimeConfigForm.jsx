@@ -116,7 +116,6 @@ export function RuntimeConfigForm({ runtimeType, config, onConfigChange }) {
                 onChange={(e) => handleChange(field.key, e.target.value)}
                 fullWidth
                 multiline={field.multiline}
-                rows={field.multiline ? 3 : 1}
                 variant="outlined"
                 size="small"
               />

@@ -213,9 +213,11 @@ export function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) 
         />
         <TextField
           label="内容"
-          value={data.content}
+          value={data.content || ''}
           onChange={(e) => handleChange(formKey, 'content', e.target.value)}
-          multiline rows={4} fullWidth sx={{ mb: 2 }}
+          multiline
+          fullWidth
+          sx={{ mb: 2 }}
         />
         <TextField
           label="顺序"
