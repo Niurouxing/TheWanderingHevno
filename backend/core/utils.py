@@ -1,7 +1,62 @@
 # backend/core/utils.py
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple, Union
 from pathlib import Path
+
+def _navigate_to_sub_path(
+    root_obj: Dict[str, Any], 
+    sub_path: str, 
+    create_if_missing: bool = False
+) -> Tuple[Union[Dict, List], Union[str, int]]:
+    """
+    Navigates a nested structure and returns the PARENT object and the FINAL key/index.
+    
+    Example: for path "a/b/0", it returns the list at root['a']['b'] and the index 0.
+    This allows the caller to perform GET, SET, or DELETE operations.
+    
+    Args:
+        root_obj: The dictionary to start from.
+        sub_path: A slash-separated path string (e.g., "data/users/0/name").
+        create_if_missing: If True, creates intermediate dictionaries for PUT operations.
+        
+    Returns:
+        A tuple of (parent_object, final_key_or_index).
+        
+    Raises:
+        HTTPException if the path is invalid or not found.
+    """
+    parts = [p for p in sub_path.split('/') if p]
+    if not parts:
+        raise HTTPException(status_code=400, detail="Sub-path cannot be empty.")
+
+    current_obj = root_obj
+    for i, part in enumerate(parts[:-1]): # Iterate to the second-to-last part
+        try:
+            # Try to convert to int for list access
+            try:
+                key = int(part)
+                current_obj = current_obj[key]
+                continue
+            except (ValueError, TypeError):
+                # It's a dictionary key
+                if part not in current_obj:
+                    if create_if_missing and isinstance(current_obj, dict):
+                        current_obj[part] = {}
+                    else:
+                        raise HTTPException(status_code=404, detail=f"Path segment '{part}' not found.")
+                current_obj = current_obj[part]
+
+        except (KeyError, IndexError, TypeError):
+            raise HTTPException(status_code=404, detail=f"Path not found at segment '{part}'.")
+
+    # Now handle the final part
+    final_key = parts[-1]
+    try: # Try to convert final key to int
+        final_key = int(final_key)
+    except ValueError:
+        pass # It's a string key
+        
+    return current_obj, final_key
 
 def unwrap_dot_accessible_dicts(data: Any) -> Any:
     """
