@@ -27,7 +27,7 @@ class AutoSynthesisConfig(BaseModel):
     enabled: bool = Field(default=False)
     trigger_count: int = Field(default=10, gt=0, description="触发综合所需的条目数量。")
     level: str = Field(default="summary", description="综合后产生的新条目的层级。")
-    model: str = Field(default="gemini/gemini-1.5-flash", description="用于执行综合的 LLM 模型。")
+    model: str = Field(default="gemini/gemini-2.5-flash", description="用于执行综合的 LLM 模型。")
     prompt: str = Field(
         default="The following is a series of events. Please provide a concise summary.\n\nEvents:\n{events_text}",
         description="用于综合的 LLM 提示模板。必须包含 '{events_text}' 占位符。"

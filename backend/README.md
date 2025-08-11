@@ -1355,7 +1355,7 @@ Codex 是构建能感知环境、拥有深度背景的 AI 代理和动态世界�
             'enabled': True,
             'trigger_count': 10,  // 每发生 10 次事件
             'level': 'milestone', // 就生成一个“里程碑”级别的总结
-            'model': 'gemini/gemini-1.5-flash',
+            'model': 'gemini/gemini-2.5-flash',
             'prompt': '''
 As a master storyteller, synthesize the following sequence of events into a single, cohesive paragraph that captures the key developments and overall tone.
 

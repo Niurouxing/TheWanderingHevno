@@ -15,7 +15,7 @@ class LLMRuntime(RuntimeInterface):
         prompt = config.get("prompt")
         
         if not model_name:
-            raise ValueError("LLMRuntime requires a 'model' field in its config (e.g., 'gemini/gemini-1.5-flash').")
+            raise ValueError("LLMRuntime requires a 'model' field in its config (e.g., 'gemini/gemini-2.5-flash').")
         if not prompt:
             raise ValueError("LLMRuntime requires a 'prompt' field in its config.")
 

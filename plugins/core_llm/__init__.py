@@ -8,13 +8,14 @@ from typing import List, Dict, Type
 from backend.core.contracts import Container, HookManager
 
 # 导入本插件内部的组件
-from .service import LLMService, MockLLMService
+from .service import LLMService
 from .manager import KeyPoolManager, CredentialManager
 from .registry import ProviderRegistry
 from .runtime import LLMRuntime
 from .reporters import LLMProviderReporter
 from .providers.base import LLMProvider
 from .providers.gemini import GeminiProvider
+from .providers.mock import MockProvider
 
 logger = logging.getLogger(__name__)
 
@@ -24,13 +25,8 @@ def _create_provider_registry() -> ProviderRegistry:
     """工厂：创建 ProviderRegistry 的【空】实例。"""
     return ProviderRegistry()
 
-def _create_llm_service(container: Container) -> LLMService | MockLLMService:
+def _create_llm_service(container: Container) -> LLMService:
     """这个工厂函数现在只负责创建服务，不再负责填充注册表。"""
-    is_debug_mode = os.getenv("HEVNO_LLM_DEBUG_MODE", "false").lower() == "true"
-    if is_debug_mode:
-        logger.warning("LLM Gateway is in MOCK/DEBUG mode.")
-        return MockLLMService()
-
     # 依赖容器来获取已注册（但可能尚未填充）的服务
     provider_registry: ProviderRegistry = container.resolve("provider_registry")
     key_manager: KeyPoolManager = container.resolve("key_pool_manager")
@@ -56,7 +52,14 @@ async def provide_llm_providers(providers: Dict[str, Dict[str, any]]) -> Dict[st
             "class": GeminiProvider,
             "key_env_var": "GEMINI_API_KEYS"
         }
-    # 如果有其他 providers，也在这里添加
+    
+    # 无条件注册模拟提供商
+    if "mock" not in providers:
+        providers["mock"] = {
+            "class": MockProvider,
+            "key_env_var": "MOCK_API_KEYS_DUMMY" # 虚拟变量，不会被找到，因此不会创建密钥池
+        }
+    
     return providers
 
 async def populate_llm_services(container: Container, hook_manager: HookManager):

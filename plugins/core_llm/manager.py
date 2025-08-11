@@ -86,6 +86,19 @@ class ProviderKeyPool:
                 return key_info
         return None
 
+    def get_key_by_string(self, key_string: str) -> Optional[KeyInfo]:
+        """按密钥字符串查找 KeyInfo 对象。主要用于测试。"""
+        for key in self._keys:
+            if key.key_string == key_string:
+                return key
+        return None
+
+
+    def get_key_count(self) -> int:
+        """返回池中密钥的总数。"""
+        return len(self._keys)
+        
+
     @asynccontextmanager
     async def acquire_key(self) -> AsyncIterator[KeyInfo]:
         """

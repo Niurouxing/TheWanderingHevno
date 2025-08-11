@@ -26,6 +26,10 @@ dependencies = [
     "pytest",
     "pytest-asyncio",
     "httpx",
+    # 确保添加了运行真实 API 测试所需的库
+    "google-generativeai",
+    "tenacity",
+    "asgi-lifespan", # 根据您的 conftest.py，这个库是必须的
 ]
 
 [project.optional-dependencies]
@@ -38,31 +42,32 @@ dev = [
 hevno = "cli:app"
 
 [project.entry-points."hevno.plugins"]
+# 这部分通常用于打包发布后的插件发现，对于本地开发可能不是必需的
+# 但保留它没有坏处
 core_logging = "plugins.core_logging"
 
 [tool.setuptools]
-include-package-data = true # <-- 使用 MANIFEST.in
+include-package-data = true
 py-modules = ["cli"]
-# namespace-packages 已被移除
 
 [tool.setuptools.packages.find]
 where = ["."]
-# `include` 保持不变，它只是告诉 setuptools 去哪里找包，
-# 而 Python 如何解释这些包是另一回事。
 include = ["backend*", "plugins*"]
 
 
-# --- Pytest 配置 (已修正) ---
+# --- Pytest 配置 ---
 [tool.pytest.ini_options]
 # 明确指定测试文件的搜索路径
 testpaths = [
     "tests",
-    "plugins",
+    # 允许 pytest 在插件目录中发现 tests/ 子目录
+    "plugins", 
 ]
 
 # 配置 pytest-asyncio
 asyncio_mode = "auto"
 
+# 定义你的自定义标记
 markers = [
-    "e2e: 标记端到端测试",
+    "e2e: marks tests as end-to-end, which may require network access and secrets."
 ]

@@ -27,9 +27,6 @@ class GeminiProvider(LLMProvider):
         api_key: str,
         **kwargs: Any
     ) -> LLMResponse:
-        """
-        使用 Gemini API 生成内容。
-        """
         try:
             # 每次调用都独立配置，以支持多密钥轮换
             genai.configure(api_key=api_key)
@@ -52,7 +49,6 @@ class GeminiProvider(LLMProvider):
             )
 
             # 检查是否因安全策略被阻止
-            # 这是 Gemini 的“软失败”，不会抛出异常
             if not response.parts:
                 if response.prompt_feedback.block_reason:
                     error_message = f"Request blocked due to {response.prompt_feedback.block_reason.name}"
@@ -62,7 +58,7 @@ class GeminiProvider(LLMProvider):
                         error_details=LLMError(
                             error_type=LLMErrorType.INVALID_REQUEST_ERROR,
                             message=error_message,
-                            is_retryable=False # 内容过滤不应重试
+                            is_retryable=False
                         )
                     )
 
@@ -91,7 +87,6 @@ class GeminiProvider(LLMProvider):
                     is_retryable=False,
                 )
             )
-        # 注意: 其他 google_exceptions 将会在此处被抛出，由上层服务捕获并传递给 translate_error
 
     def translate_error(self, ex: Exception) -> LLMError:
         """
@@ -103,7 +98,7 @@ class GeminiProvider(LLMProvider):
             return LLMError(
                 error_type=LLMErrorType.AUTHENTICATION_ERROR,
                 message="Invalid API key or insufficient permissions.",
-                is_retryable=False,  # 使用相同密钥重试是无意义的
+                is_retryable=False,
                 provider_details=error_details,
             )
         
@@ -111,17 +106,29 @@ class GeminiProvider(LLMProvider):
             return LLMError(
                 error_type=LLMErrorType.RATE_LIMIT_ERROR,
                 message="Rate limit exceeded. Please try again later or use a different key.",
-                is_retryable=False,  # 对于单个密钥，应立即切换，而不是等待重试
+                is_retryable=False,
                 provider_details=error_details,
             )
 
+        # --- vvv START: 关键修改 vvv ---
         if isinstance(ex, google_exceptions.InvalidArgument):
+            # 检查具体的错误消息，因为 InvalidArgument 可能有很多原因
+            if "API key not valid" in str(ex):
+                return LLMError(
+                    error_type=LLMErrorType.AUTHENTICATION_ERROR,
+                    message=f"The provided API key is invalid. Details: {ex}",
+                    is_retryable=False, # 认证失败不应该重试同一个密钥
+                    provider_details=error_details,
+                )
+            
+            # 如果是其他类型的 InvalidArgument，则按原逻辑处理
             return LLMError(
                 error_type=LLMErrorType.INVALID_REQUEST_ERROR,
                 message=f"Invalid argument provided to the API. Check model name and parameters. Details: {ex}",
                 is_retryable=False,
                 provider_details=error_details,
             )
+        # --- ^^^ END: 关键修改 ^^^ ---
 
         if isinstance(ex, (google_exceptions.ServiceUnavailable, google_exceptions.DeadlineExceeded)):
             return LLMError(
@@ -142,6 +149,6 @@ class GeminiProvider(LLMProvider):
         return LLMError(
             error_type=LLMErrorType.UNKNOWN_ERROR,
             message=f"An unknown error occurred with the Gemini provider: {ex}",
-            is_retryable=False, # 默认未知错误不可重试，以防造成死循环
+            is_retryable=False,
             provider_details=error_details,
         )

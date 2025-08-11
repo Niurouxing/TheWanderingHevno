@@ -10,6 +10,13 @@ class LLMProvider(ABC):
     """
     一个抽象基-类，定义了所有 LLM 提供商适配器的标准接口。
     """
+    @classmethod
+    def requires_api_key(cls) -> bool:
+        """
+        声明此提供商是否需要 API 密钥才能工作。
+        如果此方法返回 False，LLM 服务将不会尝试为此提供商从池中获取密钥。
+        """
+        return True
 
     @abstractmethod
     async def generate(
