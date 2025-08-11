@@ -1,3 +1,4 @@
+// plugins/sandbox_editor/src/components/SortableEntryItem.jsx
 import React from 'react';
 import { ListItem, ListItemIcon, ListItemText, Switch, IconButton } from '@mui/material';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
