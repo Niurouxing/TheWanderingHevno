@@ -7,33 +7,28 @@ import { DataTree } from './components/DataTree';
 import { CodexEditor } from './editors/CodexEditor';
 import { GraphEditor } from './editors/GraphEditor';
 import { MemoriaEditor } from './editors/MemoriaEditor';
+// --- [修改 1/4] 导入新的API客户端 ---
+import { query } from './utils/api';
 
 export function SandboxEditorPage({ services }) {
-    // --- [修改 1/4] 从 LayoutContext 中获取 setActivePageId 和 setCurrentSandboxId ---
     const { currentSandboxId, setActivePageId, setCurrentSandboxId } = useLayout();
     const [sandboxData, setSandboxData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [activeScope, setActiveScope] = useState(0);
     const [editingCodex, setEditingCodex] = useState(null);
-    const [editingGraph, setEditingGraph] = useState(null); 
+    const [editingGraph, setEditingGraph] = useState(null);
     const [editingMemoria, setEditingMemoria] = useState(null);
 
+    // --- [修改 2/4] 重写数据加载函数，使用统一的 :query API ---
     const loadSandboxData = useCallback(async () => {
         if (!currentSandboxId) return;
         setLoading(true);
         setError('');
         try {
-            const [definitionRes, loreRes, momentRes] = await Promise.all([
-                fetch(`/api/sandboxes/${currentSandboxId}/definition`),
-                fetch(`/api/sandboxes/${currentSandboxId}/lore`),
-                fetch(`/api/sandboxes/${currentSandboxId}/moment`)
-            ]);
-            if (!definitionRes.ok || !loreRes.ok || !momentRes.ok) throw new Error('Failed to fetch sandbox scopes');
-            const definition = await definitionRes.json();
-            const lore = await loreRes.json();
-            const moment = await momentRes.json();
-            setSandboxData({ definition, lore, moment });
+            // 在一次API调用中获取所有需要的数据
+            const results = await query(currentSandboxId, ['definition', 'lore', 'moment']);
+            setSandboxData(results); // API返回的已经是 { definition: {...}, lore: {...}, moment: {...} } 格式
         } catch (e) {
             setError(e.message);
             console.error(e);
@@ -54,42 +49,34 @@ export function SandboxEditorPage({ services }) {
         setEditingGraph(null);
     };
 
-    // --- [新增 2/4] 添加返回按钮的点击处理函数 ---
     const handleGoBackToExplorer = () => {
-        setCurrentSandboxId(null); // 清理上下文
-        setActivePageId('sandbox_explorer.main_view'); // 切换页面
+        setCurrentSandboxId(null);
+        setActivePageId('sandbox_explorer.main_view');
     };
+    
+    // --- [修改 3/4] 简化 onEdit 处理，路径现在直接来源于DataTree ---
+    const handleEdit = (path, value) => {
+        const pathParts = path.split('/');
+        const editorType = value.__hevno_type__;
+        const name = pathParts[pathParts.length - 1]; // e.g., 'main' or 'npc_status'
+        const scope = pathParts[0]; // e.g., 'lore' or 'definition'
 
-    const handleEdit = (path, value, codexName, activeScopeIndex) => {
-        if (value.__hevno_type__ === 'hevno/codex' && value.entries && Array.isArray(value.entries)) {
-            // 原有 codex 逻辑
-            let effectiveScope = SCOPE_TABS[activeScopeIndex];
-            if (activeScopeIndex === 0) {
-                const parts = path.split('.');
-                if (parts[0] === 'initial_lore') effectiveScope = 'initial_lore';
-                else if (parts[0] === 'initial_moment') effectiveScope = 'initial_moment';
-            }
-            setEditingCodex({ name: codexName || path.split('.').pop(), data: value, scope: effectiveScope });
-        } else if (value.__hevno_type__ === 'hevno/graph') {
-            // 新增: graph 编辑
-            let effectiveScope = SCOPE_TABS[activeScopeIndex];
-            // 类似 scope 处理
-            if (activeScopeIndex === 0) {
-                const parts = path.split('.');
-                if (parts[0] === 'initial_lore') effectiveScope = 'initial_lore';
-                else if (parts[0] === 'initial_moment') effectiveScope = 'initial_moment';
-            }
-            setEditingGraph({ name: codexName || path.split('.').pop(), data: value, scope: effectiveScope });
-        } else if (value.__hevno_type__ === 'hevno/memoria') {
-            // New: memoria editing
-            setEditingMemoria({ data: value, scope: 'moment' }); // Memoria is always in moment
+        if (editorType === 'hevno/codex') {
+            setEditingCodex({ name, data: value, scope });
+        } else if (editorType === 'hevno/graph') {
+            setEditingGraph({ name, data: value, scope });
+        } else if (editorType === 'hevno/memoria') {
+             // Memoria 编辑器不需要 scope 和 name，它直接处理整个 moment.memoria 对象
+            setEditingMemoria({ data: value, path: path });
         } else {
-            alert(`Edit functionality for "${path}" is not yet implemented.`);
+            alert(`Edit functionality for type "${editorType}" at "${path}" is not yet implemented.`);
         }
     };
-
-    const handleBackFromCodex = () => {
+    
+    const handleBackToOverview = () => {
         setEditingCodex(null);
+        setEditingGraph(null);
+        setEditingMemoria(null);
         loadSandboxData();
     };
 
@@ -118,7 +105,7 @@ export function SandboxEditorPage({ services }) {
                 scope={editingCodex.scope}
                 codexName={editingCodex.name}
                 codexData={editingCodex.data}
-                onBack={handleBackFromCodex}
+                onBack={handleBackToOverview}
             />
         );
     } else if (editingGraph) {
@@ -128,23 +115,26 @@ export function SandboxEditorPage({ services }) {
                 scope={editingGraph.scope}
                 graphName={editingGraph.name}
                 graphData={editingGraph.data}
-                onBack={() => { setEditingGraph(null); loadSandboxData(); }}
+                onBack={handleBackToOverview}
             />
         );
     } else if (editingMemoria) {
-  return (
-    <MemoriaEditor
-      sandboxId={currentSandboxId}
-      scope={editingMemoria.scope}
-      memoriaData={editingMemoria.data}
-      onBack={() => { setEditingMemoria(null); loadSandboxData(); }}
-    />
-  );
-}
+      return (
+        <MemoriaEditor
+          sandboxId={currentSandboxId}
+          // --- [修改 4/4] 传递 memoria 对象的完整路径和数据 ---
+          basePath={editingMemoria.path}
+          memoriaData={editingMemoria.data}
+          onBack={handleBackToOverview}
+        />
+      );
+    }
+
+    // ... 其余渲染代码保持不变 ...
+    const sandboxName = (sandboxData.definition?.name || sandboxData.lore?.name || 'Sandbox');
 
     return (
         <Box sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
-            {/* --- [修改 3/4] 重新组织标题区域，添加返回按钮 --- */}
             <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, flexShrink: 0 }}>
                 <Button
                     variant="outlined"
@@ -155,11 +145,10 @@ export function SandboxEditorPage({ services }) {
                     返回沙盒列表
                 </Button>
                 <Typography variant="h4" component="h1" noWrap sx={{ flexGrow: 1 }}>
-                    正在编辑: {sandboxData?.name || 'Sandbox'}
+                    正在编辑: {sandboxName}
                 </Typography>
             </Box>
 
-            {/* --- [修改 4/4] 调整布局，使内容区可滚动 --- */}
             <Tabs value={activeScope} onChange={handleScopeChange} aria-label="sandbox scopes" sx={{ flexShrink: 0, borderBottom: 1, borderColor: 'divider' }}>
                 {SCOPE_TABS.map((scope, index) => (
                     <Tab label={scope.charAt(0).toUpperCase() + scope.slice(1)} key={index} />
@@ -167,7 +156,7 @@ export function SandboxEditorPage({ services }) {
             </Tabs>
             <Box sx={{ mt: 2, flexGrow: 1, overflowY: 'auto' }}>
                 {currentScopeData ? (
-                    <DataTree data={currentScopeData} onEdit={(path, value, codexName) => handleEdit(path, value, codexName, activeScope)} activeScope={activeScope} />
+                    <DataTree data={currentScopeData} path={SCOPE_TABS[activeScope]} onEdit={handleEdit} />
                 ) : (
                     <Typography color="text.secondary">该范围内没有可用数据</Typography>
                 )}

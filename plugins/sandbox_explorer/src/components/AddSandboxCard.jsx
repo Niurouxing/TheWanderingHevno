@@ -9,7 +9,7 @@ export function AddSandboxCard({ onClick }) {
     <Card 
       sx={{ 
         height: '100%', 
-        width: '250px',
+        width: '224px',
         display: 'flex',
         // 使用虚线边框来与实体卡片区分
         border: (theme) => `2px dashed ${theme.palette.divider}`,
