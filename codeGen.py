@@ -143,19 +143,19 @@ if __name__ == "__main__":
     #     # "./",
     # ]
 
-    paths = [
-        "./frontend",
-        "./plugins/core_layout",
-        "./plugins/page_demo",
-        "./plugins/sandbox_editor",
-        "./plugins/sandbox_explorer",
-        "./plugins/core_runner_ui",
-        "./plugins/core_remote_hooks",
-        "./plugins/core_websocket",
-        "./package.json",
-        "./vite.config.js",
-        "./index.html",
-    ]
+    # paths = [
+    #     "./frontend",
+    #     "./plugins/core_layout",
+    #     "./plugins/page_demo",
+    #     "./plugins/sandbox_editor",
+    #     "./plugins/sandbox_explorer",
+    #     "./plugins/core_runner_ui",
+    #     "./plugins/core_remote_hooks",
+    #     "./plugins/core_websocket",
+    #     "./package.json",
+    #     "./vite.config.js",
+    #     "./index.html",
+    # ]
 
     # paths = [
     #     "./backend", 
@@ -169,9 +169,9 @@ if __name__ == "__main__":
     #      "./vite.config.js",
     # ]
 
-    # paths = [  
-    #      "plugins/sandbox_editor",
-    # ]
+    paths = [  
+         "plugins/core_engine",
+    ]
     output_path = "code_collection.md"
     result = main(paths, output_path)
     print(result)

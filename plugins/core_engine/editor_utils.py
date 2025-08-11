@@ -150,12 +150,17 @@ class EditorUtilsService(EditorUtilsServiceInterface):
         
         # 为了效率，我们只加载一次头快照（如果需要的话）
         moment_data = None
-        if any(p.startswith("moment/") for p in paths):
+        
+        # --- [FIXED] ---
+        # 修正了条件，使其能正确处理对根作用域 "moment" 的请求
+        if any(p == 'moment' or p.startswith("moment/") for p in paths):
             if sandbox.head_snapshot_id:
                 head_snapshot = self._snapshot_store.get(sandbox.head_snapshot_id)
                 if head_snapshot:
                     moment_data = head_snapshot.moment
+            # 如果没有快照或未找到，moment_data 保持为 None，后续逻辑会处理
             if moment_data is None:
+                # 即使找不到快照，也初始化为空字典，以防后续代码出错
                 moment_data = {}
 
         for path in paths:
@@ -165,6 +170,7 @@ class EditorUtilsService(EditorUtilsServiceInterface):
 
             root_obj = None
             if scope == 'moment':
+                # 现在这里可以正确获取到加载的数据
                 root_obj = moment_data
             elif scope == 'lore':
                 root_obj = sandbox.lore
@@ -174,6 +180,11 @@ class EditorUtilsService(EditorUtilsServiceInterface):
                 # 如果 scope 无效，直接将结果设为 null
                 results[path] = None
                 continue
+            
+            # 如果 root_obj 本身就是 None（比如 moment 加载失败），直接返回
+            if root_obj is None:
+                results[path] = None
+                continue
 
             # 如果路径指向的是整个作用域
             if not sub_path:
@@ -181,6 +192,7 @@ class EditorUtilsService(EditorUtilsServiceInterface):
                 continue
 
             try:
+                # 注意: _navigate_to_sub_path 需要 root_obj 是字典或类似字典的对象
                 parent, key = _navigate_to_sub_path(root_obj, sub_path)
                 value = parent[key]
                 results[path] = unwrap_dot_accessible_dicts(value)
