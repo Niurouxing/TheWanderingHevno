@@ -11,7 +11,6 @@ class RuntimeRegistry:
     def __init__(self):
         self._registry: Dict[str, Type[RuntimeInterface]] = {}
 
-    # --- 核心修改: 这是一个常规方法，不再是装饰器工厂 ---
     def register(self, name: str, runtime_class: Type[RuntimeInterface]):
         """
         向注册表注册一个运行时类。

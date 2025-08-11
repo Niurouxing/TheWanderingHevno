@@ -22,7 +22,7 @@ from .contracts import (
 from backend.core.utils import DotAccessibleDict, unwrap_dot_accessible_dicts
 from .utils import ServiceResolverProxy 
 
-# --- Section 1: 状态存储类 (保持不变) ---
+# --- Section 1: 状态存储类 ---
 
 class SnapshotStore:
     """
@@ -105,7 +105,7 @@ async def create_next_snapshot(
     final_moment_state = context.shared.moment_state
     final_lore_state = context.shared.lore_state
     
-    # 【核心修复】调用从 backend.core.utils 导入的官方函数
+    # 调用从 backend.core.utils 导入的官方函数
     unwrapped_moment = unwrap_dot_accessible_dicts(final_moment_state)
     unwrapped_lore = unwrap_dot_accessible_dicts(final_lore_state)
     unwrapped_node_states = unwrap_dot_accessible_dicts(final_node_states)

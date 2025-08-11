@@ -128,7 +128,7 @@ export function CodexEditor({ sandboxId, basePath, codexName, codexData, onBack 
     setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  // --- [修复] 恢复渲染逻辑 ---
+  // ---恢复渲染逻辑 ---
   const renderEntryForm = (entry, index) => {
     return (
         <Box sx={{ pl: 9, pr: 2, pb: 2, pt: 1, borderTop: '1px solid rgba(255,255,255,0.1)'}}>

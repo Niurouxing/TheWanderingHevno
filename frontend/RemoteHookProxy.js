@@ -67,7 +67,6 @@ export class RemoteHookProxy {
   
   /**
    * 将前端实现的钩子清单发送到后端。
-   * 【已修改】这个方法现在由 FrontendLoader 在所有插件加载后显式调用。
    */
   syncFrontendHooks() {
     if (!this.localHookManager) {

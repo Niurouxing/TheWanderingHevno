@@ -5,7 +5,7 @@ import DescriptionIcon from '@mui/icons-material/Description';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import EditIcon from '@mui/icons-material/Edit';
-import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline'; // 新增图标
+import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline'; 
 import AutoStoriesIcon from '@mui/icons-material/AutoStories';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import HistoryIcon from '@mui/icons-material/History';
@@ -17,7 +17,7 @@ const HEVNO_TYPE_EDITORS = {
   'hevno/memoria': { icon: <HistoryIcon />, tooltip: 'Edit Memoria' },
 };
 
-// --- [修改] 添加 onAdd prop ---
+// --- 添加 onAdd prop ---
 export function DataTree({ data, path = '', onEdit, onAdd }) {
   const [expanded, setExpanded] = useState({});
   const toggleExpand = (key) => { setExpanded((prev) => ({ ...prev, [key]: !prev[key] })); };
@@ -35,7 +35,7 @@ export function DataTree({ data, path = '', onEdit, onAdd }) {
         const hevnoType = isObject(value) ? value.__hevno_type__ : undefined;
         const editorInfo = hevnoType ? HEVNO_TYPE_EDITORS[hevnoType] : null;
 
-        // --- [修改] 定义是否显示通用添加按钮的条件 ---
+        // --- 定义是否显示通用添加按钮的条件 ---
         const showAddButton = isObject(value) && !isArray(value) && !hevnoType;
 
         return (
@@ -44,7 +44,6 @@ export function DataTree({ data, path = '', onEdit, onAdd }) {
               disablePadding
               secondaryAction={
                 <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                  {/* --- [修改] 条件性地渲染添加按钮 --- */}
                   {showAddButton && (
                     <IconButton edge="end" onClick={() => onAdd(currentPath, Object.keys(value))} title="Add item to this object">
                         <AddCircleOutlineIcon fontSize="small" />
@@ -79,7 +78,6 @@ export function DataTree({ data, path = '', onEdit, onAdd }) {
             </ListItem>
             {isExpandable && !editorInfo && (
               <Collapse in={expanded[currentPath]} timeout="auto" unmountOnExit>
-                {/* --- [修改] 向下传递 onAdd prop --- */}
                 <DataTree data={value} path={currentPath} onEdit={onEdit} onAdd={onAdd} />
               </Collapse>
             )}

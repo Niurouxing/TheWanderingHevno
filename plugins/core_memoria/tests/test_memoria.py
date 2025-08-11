@@ -28,7 +28,7 @@ async def test_memoria_add_and_query(
     """
     engine, container, _ = test_engine_setup
 
-    # [修改] 直接使用通用的 sandbox_factory
+    # 直接使用通用的 sandbox_factory
     sandbox = await sandbox_factory(
         graph_collection=GraphCollection.model_validate({
             "main": {
@@ -64,7 +64,7 @@ async def test_memoria_aggregate_runtime(
     """
     engine, container, _ = test_engine_setup
 
-    # [修改] 直接使用通用的 sandbox_factory
+    # 直接使用通用的 sandbox_factory
     sandbox = await sandbox_factory(
         graph_collection=GraphCollection.model_validate({
             "main": {
@@ -101,7 +101,7 @@ async def test_complex_query_with_tags_and_levels(
     """
     engine, container, _ = test_engine_setup
 
-    # [修改] 直接使用通用的 sandbox_factory
+    # 直接使用通用的 sandbox_factory
     sandbox = await sandbox_factory(
         graph_collection=GraphCollection.model_validate({
             "main": {
@@ -148,8 +148,8 @@ async def test_synthesis_task_trigger_and_application(
     queue = task_manager._queue
 
     # Arrange:
-    # [修复] 1. 定义一个能执行两次 memoria.add 的图。
-    # [修复] 2. 从一个完全干净的 initial_moment 开始。
+    #1. 定义一个能执行两次 memoria.add 的图。
+    #2. 从一个完全干净的 initial_moment 开始。
     sandbox = await sandbox_factory(
         graph_collection=GraphCollection.model_validate({
             "main": {"nodes": [
@@ -194,7 +194,7 @@ async def test_synthesis_task_trigger_and_application(
     moment = final_snapshot.moment
     story_stream = moment["memoria"]["story"]
     
-    # [修复] 期望的结果现在是正确的: 2个原始事件 + 1个总结 = 3个条目
+    #期望的结果现在是正确的: 2个原始事件 + 1个总结 = 3个条目
     assert len(story_stream["entries"]) == 3
     
     original_entry_1 = story_stream["entries"][0]

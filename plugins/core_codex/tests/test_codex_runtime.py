@@ -72,7 +72,7 @@ async def test_invoke_recursion_enabled(
     final_snapshot = snapshot_store.get(final_sandbox.head_snapshot_id)
     assert final_snapshot is not None
     
-    # 【修复】从 final_snapshot.run_output 获取结果，而不是 final_sandbox
+    # 从 final_snapshot.run_output 获取结果，而不是 final_sandbox
     final_text = final_snapshot.run_output["recursive_invoke"]["output"]
     
     expected_output_string = (

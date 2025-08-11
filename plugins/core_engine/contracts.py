@@ -241,7 +241,7 @@ class SnapshotStoreInterface(ABC):
         """异步查找并加载属于特定沙盒的所有快照。"""
         raise NotImplementedError
     
-    # 【修复】添加缺失的方法以匹配实现
+    # 添加缺失的方法以匹配实现
     @abstractmethod
     async def delete_all_for_sandbox(self, sandbox_id: UUID) -> None:
         """异步删除属于特定沙盒的所有快照。"""
@@ -252,7 +252,6 @@ class SnapshotStoreInterface(ABC):
         """清除存储（在持久化存储中可能为空操作）。"""
         raise NotImplementedError
 
-# --- [新增] ---
 class SandboxStoreInterface(ABC):
     """定义沙盒存储的核心接口。"""
     @abstractmethod

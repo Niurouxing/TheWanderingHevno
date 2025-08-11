@@ -4,7 +4,7 @@ import logging
 from typing import Dict, List, Optional
 from uuid import UUID
 
-# 【修复】从 core_engine 导入接口定义
+# 从 core_engine 导入接口定义
 from plugins.core_engine.contracts import Sandbox, StateSnapshot, SnapshotStoreInterface, SandboxStoreInterface
 from backend.core.serialization import pickle_fallback_encoder
 from .contracts import PersistenceServiceInterface
@@ -12,18 +12,18 @@ from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
-# 【修复】继承自 SandboxStoreInterface
+# 继承自 SandboxStoreInterface
 class PersistentSandboxStore(SandboxStoreInterface):
     def __init__(self, persistence_service: PersistenceServiceInterface):
         self._persistence = persistence_service
         self._cache: Dict[UUID, Sandbox] = {}
         self._locks: Dict[UUID, asyncio.Lock] = {}
-        # 【修复】为 SnapshotStore 添加一个依赖，以便在删除时可以调用它
+        # 为 SnapshotStore 添加一个依赖，以便在删除时可以调用它
         self._snapshot_store: Optional[SnapshotStoreInterface] = None
         self._container: Optional['Container'] = None # type: ignore
         logger.info("PersistentSandboxStore initialized (cache is empty).")
 
-    # 【修复】提供一种方式来注入容器，以便稍后解析 snapshot_store
+    # 提供一种方式来注入容器，以便稍后解析 snapshot_store
     def set_container(self, container: 'Container'): # type: ignore
         self._container = container
 
@@ -78,7 +78,7 @@ class PersistentSandboxStore(SandboxStoreInterface):
     async def delete(self, key: UUID):
         lock = self._get_lock(key)
         async with lock:
-            # 【修复】正确地从容器中解析 snapshot_store 并调用其方法
+            # 正确地从容器中解析 snapshot_store 并调用其方法
             if self._container:
                 if not self._snapshot_store:
                     self._snapshot_store = self._container.resolve("snapshot_store")

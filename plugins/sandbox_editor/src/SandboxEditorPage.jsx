@@ -27,7 +27,7 @@ export function SandboxEditorPage({ services }) {
     const [addItemTarget, setAddItemTarget] = useState(null); // e.g., { path: 'lore.graphs', existingKeys: ['main'] }
 
     const loadSandboxData = useCallback(async () => {
-        // ... (此函数保持不变) ...
+        
         if (!currentSandboxId) return;
         setLoading(true);
         setError('');
@@ -49,20 +49,20 @@ export function SandboxEditorPage({ services }) {
     }, [currentSandboxId, loadSandboxData]);
 
     const handleScopeChange = (event, newValue) => {
-        // ... (此函数保持不变) ...
+        
         setActiveScope(newValue);
         setEditingCodex(null);
         setEditingGraph(null);
     };
 
     const handleGoBackToExplorer = () => {
-        // ... (此函数保持不变) ...
+        
         setCurrentSandboxId(null);
         setActivePageId('sandbox_explorer.main_view');
     };
     
     const handleEdit = (path, value) => {
-        // ... (此函数保持不变) ...
+        
         const editorType = isObject(value) ? value.__hevno_type__ : undefined;
         if (editorType) {
             const pathParts = path.split('/');
@@ -77,7 +77,7 @@ export function SandboxEditorPage({ services }) {
     };
     
     const handleBackToOverview = () => {
-        // ... (此函数保持不变) ...
+        
         setEditingCodex(null);
         setEditingGraph(null);
         setEditingMemoria(null);
@@ -85,7 +85,7 @@ export function SandboxEditorPage({ services }) {
     };
 
     const handleGenericSave = async (path, newValue) => {
-        // ... (此函数保持不变) ...
+        
         try {
             await mutate(currentSandboxId, [{ type: 'UPSERT', path, value: newValue }]);
             setEditingGeneric(null);

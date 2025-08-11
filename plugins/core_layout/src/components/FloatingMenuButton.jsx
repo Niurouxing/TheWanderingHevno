@@ -45,7 +45,7 @@ export function FloatingMenuButton() {
       pageId: null,
     },
     ...pages
-      .filter(page => page.menu) // 新增: 只添加有 menu 的页面到动作列表
+      .filter(page => page.menu) 
       .map(page => ({
         icon: <DynamicIcon name={page.menu.icon} />,
         name: page.menu.title,

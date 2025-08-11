@@ -1,4 +1,4 @@
-# plugins/core_memoria/runtimes.py (已重构)
+# plugins/core_memoria/runtimes.py
 
 import logging
 from typing import Dict, Any, List
@@ -6,7 +6,6 @@ from typing import Dict, Any, List
 from backend.core.contracts import BackgroundTaskManager 
 from plugins.core_engine.contracts import ExecutionContext, RuntimeInterface
 
-# 本地导入保持不变
 from .models import Memoria, MemoryEntry
 from .tasks import run_synthesis_task
 
@@ -93,7 +92,7 @@ class MemoriaQueryRuntime(RuntimeInterface):
         if not stream:
             return {"output": []}
 
-        # --- 过滤逻辑 (保持不变) ---
+        # --- 过滤逻辑 ---
         results = stream.entries
         
         levels_to_get = config.get("levels")
@@ -119,11 +118,10 @@ class MemoriaQueryRuntime(RuntimeInterface):
 
 class MemoriaAggregateRuntime(RuntimeInterface):
     """
-    【保持不变】将一批记忆条目聚合成格式化的文本。
+    将一批记忆条目聚合成格式化的文本。
     此运行时只处理传入的配置，不直接与状态交互，因此无需修改。
     """
     async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
-        # ... (此函数的代码保持不变) ...
         entries_data = config.get("entries")
         template = config.get("template", "{content}")
         joiner = config.get("joiner", "\n\n")

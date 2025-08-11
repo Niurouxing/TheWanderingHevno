@@ -76,7 +76,7 @@ class TestLLMServiceLogic:
     @pytest.mark.skip(reason="暂时跳过，稍后处理")
     async def test_retry_on_provider_error_and_succeed(self, llm_service_components: Tuple[LLMServiceInterface, KeyPoolManager, Container]):
         llm_service, _, _ = llm_service_components
-        # 【修改】: 抛出一个具体的、可被翻译的异常类型
+        # : 抛出一个具体的、可被翻译的异常类型
         retryable_exception = google_exceptions.ServiceUnavailable("503 Service Unavailable")
         success_response = LLMResponse(status=LLMResponseStatus.SUCCESS, content="Success after retry!")
 
@@ -95,7 +95,7 @@ class TestLLMServiceLogic:
     @pytest.mark.skip(reason="暂时跳过，稍后处理")
     async def test_final_failure_after_all_retries(self, llm_service_components: Tuple[LLMServiceInterface, KeyPoolManager, Container]):
         llm_service, _, _ = llm_service_components
-        # 【修改】: 抛出一个具体的、可被翻译的异常类型
+        # : 抛出一个具体的、可被翻译的异常类型
         retryable_exception = google_exceptions.ServiceUnavailable("503 Service Unavailable")
         
         with patch.object(GeminiProvider, 'generate', new_callable=AsyncMock) as mock_generate:

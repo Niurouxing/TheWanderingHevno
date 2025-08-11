@@ -1,6 +1,5 @@
 # backend/core/serialization.py
 
-# 【核心修改】导入 cloudpickle 而不是 pickle
 import cloudpickle
 import base64
 import json

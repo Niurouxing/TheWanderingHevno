@@ -11,7 +11,7 @@ from .api import diagnostics_router  # 导入新创建的路由器
 
 logger = logging.getLogger(__name__)
 
-# --- 服务工厂 (保持不变) ---
+# --- 服务工厂 ---
 def _create_auditor() -> Auditor:
     return Auditor([])
 
@@ -34,7 +34,7 @@ async def provide_plugin_reporter(reporters: List[Reportable], container: Contai
     logger.debug("Provided 'PluginReporter' to the auditor.")
     return reporters
 
-# --- 【关键新增】提供API路由的钩子实现 ---
+# --- 提供API路由的钩子实现 ---
 async def provide_api_routers(routers: List[APIRouter]) -> List[APIRouter]:
     """钩子实现：将本插件的 diagnostics_router 添加到应用中。"""
     routers.append(diagnostics_router)
@@ -60,8 +60,8 @@ def register_plugin(container: Container, hook_manager: HookManager):
         provide_plugin_reporter,
         plugin_name="core_diagnostics"
     )
-    
-    # 3. 【关键新增】注册提供API路由的钩子
+
+    # 3. 注册提供API路由的钩子
     hook_manager.add_implementation(
         "collect_api_routers",
         provide_api_routers,

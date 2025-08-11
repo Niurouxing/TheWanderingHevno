@@ -172,7 +172,7 @@ class HookManager(HookManagerInterface):
     async def filter(self, hook_name: str, data: T, **kwargs: Any) -> T:
         """
         触发一个“过滤型”钩子，形成处理链。
-        【保持不变】此类型钩子仅在本地执行。
+        此类型钩子仅在本地执行。
         """
         if hook_name not in self._hooks:
             return data
@@ -195,7 +195,7 @@ class HookManager(HookManagerInterface):
     async def decide(self, hook_name: str, **kwargs: Any) -> Optional[Any]:
         """
         触发一个“决策型”钩子。按优先级从高到低执行，并返回第一个非 None 的结果。
-        【保持不变】此类型钩子仅在本地执行。
+        此类型钩子仅在本地执行。
         """
         if hook_name not in self._hooks:
             return None

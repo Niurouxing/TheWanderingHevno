@@ -98,7 +98,7 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack 
         setExpandedNodes(prev => ({ ...prev, [id]: !prev[id] }));
     };
 
-    // --- [修复] 恢复渲染逻辑 ---
+    // ---恢复渲染逻辑 ---
     const renderNodeForm = (node, index) => {
         return (
             <Box sx={{ pl: 9, pr: 2, pb: 2, borderTop: '1px solid rgba(255,255,255,0.1)' }}>

@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from enum import Enum
 from datetime import datetime, timezone
 
-# 【修复】不再从 core_engine.contracts 导入 Sandbox 和 StateSnapshot
+# 不再从 core_engine.contracts 导入 Sandbox 和 StateSnapshot
 # from plugins.core_engine.contracts import Sandbox, StateSnapshot
 
 T = TypeVar('T', bound=BaseModel)
@@ -85,7 +85,7 @@ class PersistenceServiceInterface(ABC):
     async def delete_all_for_sandbox(self, sandbox_id: UUID) -> None:
         raise NotImplementedError
     
-    # --- 包导入/导出方法 (保持不变) ---
+    # --- 包导入/导出方法 ---
     @abstractmethod
     async def export_package(self, manifest: PackageManifest, data_files: Dict[str, Any], base_image_bytes: Optional[bytes] = None) -> bytes:
         raise NotImplementedError
@@ -94,7 +94,7 @@ class PersistenceServiceInterface(ABC):
     async def import_package(self, package_bytes: bytes) -> Tuple[PackageManifest, Dict[str, str], bytes]:
         raise NotImplementedError
     
-    # --- 沙盒图标处理方法 (保持不变) ---
+    # --- 沙盒图标处理方法 ---
     @abstractmethod
     async def save_sandbox_icon(self, sandbox_id: str, icon_bytes: bytes) -> Path:
         raise NotImplementedError
@@ -107,7 +107,6 @@ class PersistenceServiceInterface(ABC):
     def get_default_icon_path(self) -> Path:
         raise NotImplementedError
 
-    # --- [新增] ---
     @property
     @abstractmethod
     def sandboxes_root_dir(self) -> Path:

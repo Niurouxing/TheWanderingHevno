@@ -102,7 +102,7 @@ class TestResourceMutationAPI:
         # 验证
         res_get = await client.get(f"/api/sandboxes/{sandbox_id}")
         nodes = res_get.json()["definition"]["initial_lore"]["graphs"]["main"]["nodes"]
-        assert len(nodes) == 4 # 原有3个 + 新增1个
+        assert len(nodes) == 4 
         assert nodes[3]["id"] == "D_appended"
 
     async def test_moment_mutation_direct_mode(self, client: AsyncClient, setup_sandbox: Sandbox):

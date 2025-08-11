@@ -23,7 +23,7 @@ async def setup_sandbox(client: AsyncClient, linear_collection) -> Sandbox:
         }
     }
     response = await client.post("/api/sandboxes", json=create_request_body)
-    # [修复] 笔误：状态码应该是 201
+    # 笔误：状态码应该是 201
     assert response.status_code == 201, f"Failed to create sandbox: {response.text}"
     sandbox = Sandbox.model_validate(response.json())
     yield sandbox
@@ -76,7 +76,7 @@ class TestCodexViaResourceAPI:
         query_after_delete = await query_resource_api(client, sandbox_id, [codex_path])
         assert query_after_delete[codex_path] is None
 
-    # [修改] 直接在参数中请求 fixture 化的 API 辅助函数
+    #  直接在参数中请求 fixture 化的 API 辅助函数
     async def test_add_and_reorder_entries_in_moment(self, client: AsyncClient, setup_sandbox: Sandbox, mutate_resource_api, query_resource_api):
         """
         验证在 moment 作用域中添加和重排 Codex 条目。

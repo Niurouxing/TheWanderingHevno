@@ -13,7 +13,6 @@ from asgi_lifespan import LifespanManager
 from tests.conftest_data import *
 
 # 平台核心
-# 【修改】从 backend.main 导入 app，而不是自己调用 create_app()
 # 这样可以确保我们测试的是与手动运行完全相同的实例
 from backend.main import app as main_app 
 
@@ -24,7 +23,6 @@ from plugins.core_engine.contracts import (
     ExecutionEngineInterface, 
     GraphCollection
 )
-# 【修改】从 core_engine 导入存储接口，这是它们现在所属的位置
 from plugins.core_engine.contracts import SandboxStoreInterface, SnapshotStoreInterface
 
 @pytest.fixture(scope="session")
@@ -61,7 +59,6 @@ def event_loop():
 @pytest.fixture(scope="session")
 async def client() -> AsyncGenerator[AsyncClient, None]:
     """
-    【最终修复】
     一个用于端到端测试的、正确处理应用生命周期的 AsyncClient fixture。
     这个 fixture 会在整个测试会ভিশн中只启动一次应用。
     """
@@ -90,7 +87,6 @@ def test_engine_setup(client: AsyncClient) -> Tuple[ExecutionEngineInterface, Co
     它从 session 级别的应用中获取服务，确保测试运行在完全配置的环境中。
     在每次测试前，它会清理存储的缓存，以确保测试隔离性。
     """
-    # 【最终修复】: 直接从导入的 main_app 访问 state。
     # 因为 client fixture (session-scoped) 已经确保了 main_app 的 lifespan 启动事件被触发。
     container: Container = main_app.state.container
     
