@@ -34,7 +34,7 @@ export function AddSandboxCard({ onClick }) {
       >
         <AddCircleOutlineRoundedIcon sx={{ fontSize: 48, color: 'text.secondary' }} />
         <Typography variant="h6" color="text.secondary" sx={{ mt: 1 }}>
-          导入新沙盒
+         添加沙盒
         </Typography>
       </CardActionArea>
     </Card>

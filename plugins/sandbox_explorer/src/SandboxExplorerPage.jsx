@@ -3,11 +3,11 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Box, Grid, Typography, CircularProgress, Button } from '@mui/material';
 
 import { SandboxCard } from './components/SandboxCard';
-import { CreateSandboxDialog } from './components/CreateSandboxDialog';
+import { AddSandboxDialog } from './components/AddSandboxDialog';
 import { AddSandboxCard } from './components/AddSandboxCard';
 import { useLayout } from '../../core_layout/src/context/LayoutContext';
 
-// --- API 调用函数 (保持不变) ---
+// --- API 调用函数 ---
 
 const fetchSandboxes = async () => {
   const response = await fetch('/api/sandboxes');
@@ -46,6 +46,20 @@ const importSandboxFromJson = async (file) => {
   return response.json();
 }
 
+// --- 新增的 API 调用函数 ---
+const createEmptySandbox = async (name) => {
+  const response = await fetch('/api/sandboxes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({ detail: "Unknown create error" }));
+    throw new Error(errData.detail || `Server error: ${response.status}`);
+  }
+  return response.json();
+};
+
 const triggerDownload = async (url, filename) => {
     const response = await fetch(url);
     if (!response.ok) {
@@ -78,7 +92,7 @@ export function SandboxExplorerPage({ services }) {
   const [sandboxes, setSandboxes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [isCreateDialogOpen, setCreateDialogOpen] = useState(false);
+  const [isAddDialogOpen, setAddDialogOpen] = useState(false);
   const { setActivePageId, setCurrentSandboxId } = useLayout();
   
   const hookManager = services.get('hookManager');
@@ -104,7 +118,7 @@ export function SandboxExplorerPage({ services }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleCreate = async (file) => {
+  const handleImport = async (file) => {
     if (file.type === 'application/json' || file.name.endsWith('.json')) {
       await importSandboxFromJson(file);
     } else if (file.type === 'image/png') {
@@ -112,6 +126,11 @@ export function SandboxExplorerPage({ services }) {
     } else {
       throw new Error('Unsupported file type.');
     }
+    await loadData();
+  };
+
+  const handleCreateEmpty = async (name) => {
+    await createEmptySandbox(name);
     await loadData();
   };
 
@@ -150,7 +169,6 @@ export function SandboxExplorerPage({ services }) {
     setActivePageId('sandbox_editor.main_view');
   };
 
-  // --- 关键修改: 新增的 handleRun 函数 ---
   const handleRun = (sandboxId) => {
     setCurrentSandboxId(sandboxId);
     setActivePageId('runner_ui.main_view');
@@ -163,7 +181,7 @@ export function SandboxExplorerPage({ services }) {
   if (error) {
     return (
         <Box sx={{p: 4, textAlign: 'center'}}>
-            <Typography variant="h6" color="error">导入沙盒失败</Typography>
+            <Typography variant="h6" color="error">加载沙盒失败</Typography>
             <Typography color="text.secondary">{error}</Typography>
             <Button variant="outlined" sx={{mt: 2}} onClick={loadData}>重试</Button>
         </Box>
@@ -175,17 +193,16 @@ export function SandboxExplorerPage({ services }) {
       <Typography variant="h4" gutterBottom>沙盒</Typography>
       
       <Grid container spacing={3}>
-        <Grid item xs={12} sm={6} md={4} lg={3}>
-          <AddSandboxCard onClick={() => setCreateDialogOpen(true)} />
+        <Grid >
+          <AddSandboxCard onClick={() => setAddDialogOpen(true)} />
         </Grid>
 
         {sandboxes.map((sandbox) => (
-          <Grid item key={sandbox.id} xs={12} sm={6} md={4} lg={3}>
+          <Grid key={sandbox.id} >
             <SandboxCard 
                 sandbox={sandbox}
                 onSelect={handleSelect}
                 onEdit={() => handleEdit(sandbox.id)}
-                // --- 关键修改: 将 onRun 绑定到新的处理器 ---
                 onRun={() => handleRun(sandbox.id)}
                 onDelete={handleDelete}
                 onExportPng={() => handleExport(sandbox.id, sandbox.name, 'png')}
@@ -195,10 +212,11 @@ export function SandboxExplorerPage({ services }) {
         ))}
       </Grid>
       
-      <CreateSandboxDialog
-        open={isCreateDialogOpen}
-        onClose={() => setCreateDialogOpen(false)}
-        onCreate={handleCreate}
+      <AddSandboxDialog
+        open={isAddDialogOpen}
+        onClose={() => setAddDialogOpen(false)}
+        onImport={handleImport}
+        onCreateEmpty={handleCreateEmpty}
       />
     </Box>
   );

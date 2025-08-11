@@ -91,6 +91,7 @@ async def create_sandbox(
     DEFAULT_LORE = {
         "graphs": {
             "main": {
+                "__hevno_type__": "hevno/graph",
                 "nodes": [
                     {"id": "record_user_input", "run": [{"runtime": "memoria.add", "config": {"stream": "chat_history", "level": "user", "content": "{{ moment.__input__ }}"}}]},
                     {"id": "generate_response", "depends_on": ["record_user_input"], "run": [{"runtime": "llm.default", "config": {"model": "gemini/gemini-1.5-flash", "prompt": "You are a helpful assistant. The user said: {{ moment.__input__ }}"}}]},
@@ -102,6 +103,7 @@ async def create_sandbox(
     }
     DEFAULT_MOMENT = {
         "memoria": {
+            "__hevno_type__": "hevno/memoria",
             "__global_sequence__": 0,
             "chat_history": {"config": {}, "entries": []}
         }

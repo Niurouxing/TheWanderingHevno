@@ -18,7 +18,7 @@ export function FloatingMenuButton() {
   const { pages, activePageId, setActivePageId } = useLayout();
   const draggableRef = useRef(null);
 
-  const [direction, setDirection] = useState('up');
+  const [direction, setDirection] = useState('down');
   const [tooltipPlacement, setTooltipPlacement] = useState('left');
 
   const updateDirections = useCallback(() => {
@@ -72,7 +72,7 @@ export function FloatingMenuButton() {
         ref={draggableRef} 
         sx={{ 
           position: 'absolute', 
-          bottom: 24, 
+          top: 24, 
           right: 24, 
           zIndex: 1300 
         }}

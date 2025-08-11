@@ -149,6 +149,7 @@ if __name__ == "__main__":
         "./plugins/page_demo",
         "./plugins/sandbox_editor",
         "./plugins/sandbox_explorer",
+        "./plugins/core_runner_ui",
         "./plugins/core_remote_hooks",
         "./plugins/core_websocket",
         "./package.json",
