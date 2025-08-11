@@ -93,10 +93,10 @@ async def create_sandbox(
             "main": {
                 "__hevno_type__": "hevno/graph",
                 "nodes": [
-                    {"id": "record_user_input", "run": [{"runtime": "memoria.add", "config": {"stream": "chat_history", "level": "user", "content": "{{ moment.__input__ }}"}}]},
-                    {"id": "generate_response", "depends_on": ["record_user_input"], "run": [{"runtime": "llm.default", "config": {"model": "gemini/gemini-2.5-flash", "prompt": "You are a helpful assistant. The user said: {{ moment.__input__ }}"}}]},
-                    {"id": "set_output", "depends_on": ["generate_response"], "run": [{"runtime": "system.execute", "config": {"code": "{{ moment.__output__ = nodes.generate_response.llm_output }}"}}]},
-                    {"id": "record_ai_response", "depends_on": ["set_output"], "run": [{"runtime": "memoria.add", "config": {"stream": "chat_history", "level": "ai", "content": "{{ moment.__output__ }}"}}]}
+                    {"id": "record_user_input", "run": [{"runtime": "memoria.add", "config": {"stream": "chat_history", "level": "user", "content": "{{ moment._user_input }}"}}]},
+                    {"id": "generate_response", "depends_on": ["record_user_input"], "run": [{"runtime": "llm.default", "config": {"model": "gemini/gemini-2.5-flash", "prompt": "You are a helpful assistant. The user said: {{ moment._user_input }}"}}]},
+                    {"id": "set_output", "depends_on": ["generate_response"], "run": [{"runtime": "system.execute", "config": {"code": "{{ moment._user_output = nodes.generate_response.llm_output }}"}}]},
+                    {"id": "record_ai_response", "depends_on": ["set_output"], "run": [{"runtime": "memoria.add", "config": {"stream": "chat_history", "level": "ai", "content": "{{ moment._user_output }}"}}]}
                 ]
             }
         }

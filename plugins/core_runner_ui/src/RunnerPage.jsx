@@ -28,8 +28,8 @@ export function RunnerPage() {
         setIsLoading(true);
         setError('');
         try {
-            const data = await query(currentSandboxId, ['moment.memoria.chat_history.entries']);
-            const history = data['moment.memoria.chat_history.entries'] || [];
+            const data = await query(currentSandboxId, ['moment/memoria/chat_history/entries']);
+            const history = data['moment/memoria/chat_history/entries'] || [];
             setMessages(history);
         } catch (e) {
             setError(`Failed to load chat history: ${e.message}`);
@@ -65,7 +65,7 @@ export function RunnerPage() {
             // 1. Mutate: 写入用户输入
             await mutate(currentSandboxId, [{
                 type: 'UPSERT',
-                path: 'moment.__input__',
+                path: 'moment/_user_input',
                 value: inputText
             }]);
 
@@ -80,8 +80,8 @@ export function RunnerPage() {
             }
 
             // 3. Query: 获取更新后的聊天记录
-            const data = await query(currentSandboxId, ['moment.memoria.chat_history.entries']);
-            const newHistory = data['moment.memoria.chat_history.entries'] || [];
+            const data = await query(currentSandboxId, ['moment/memoria/chat_history/entries']);
+            const newHistory = data['moment/memoria/chat_history/entries'] || [];
             setMessages(newHistory);
 
         } catch (e) {
