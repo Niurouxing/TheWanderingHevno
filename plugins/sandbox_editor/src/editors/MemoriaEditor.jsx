@@ -1,21 +1,20 @@
 // plugins/sandbox_editor/src/editors/MemoriaEditor.jsx
 import React, { useState, useEffect } from 'react';
-import { Box, Typography, List, ListItem, ListItemIcon, ListItemText, Collapse, IconButton, Button, TextField, Alert, Paper, Chip, InputAdornment } from '@mui/material';
+import { Box, Typography, List, Collapse, IconButton, Button, TextField, Alert, Chip, InputAdornment } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import SaveIcon from '@mui/icons-material/Save';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
-import { arrayMove, SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
 
-import { SortableMemoryEntryItem } from '../components/SortableMemoryEntryItem';
+import { SortableMemoryEntryItem } from '../components/SortableStreamItem';
 import { mutate } from '../utils/api';
-
+import { SortableStreamItem } from '../components/SortableStreamItem'; // 新组件，类似于 SortableNodeItem
 
 export function MemoriaEditor({ sandboxId, basePath, memoriaData, onBack }) {
-  // ... (所有 state 和 hooks 保持不变) ...
-  const [streams, setStreams] = useState({});
+  const [streams, setStreams] = useState([]); // 更改为数组 [{name: string, data: {config: {}, entries: []}}]
   const [globalSequence, setGlobalSequence] = useState(0);
   const [expandedStreams, setExpandedStreams] = useState({});
   const [expandedEntries, setExpandedEntries] = useState({});
@@ -26,27 +25,26 @@ export function MemoriaEditor({ sandboxId, basePath, memoriaData, onBack }) {
   useEffect(() => {
     if (!memoriaData) return;
     
-    const initialStreams = {};
-    Object.entries(memoriaData).forEach(([key, value]) => {
-      if (key === '__hevno_type__' || key === '__global_sequence__') {
-        if (key === '__global_sequence__') setGlobalSequence(value);
-        return;
-      }
-      const entriesWithInternalIds = (value.entries || []).map((entry, index) => ({
-        ...entry,
-        _internal_id: `${key}_${Date.now()}_${index}`,
-      }));
-      initialStreams[key] = { ...value, entries: entriesWithInternalIds };
-    });
+    let gs = 0;
+    const initialStreams = Object.entries(memoriaData)
+      .filter(([key]) => key !== '__hevno_type__' && key !== '__global_sequence__')
+      .map(([name, data]) => {
+        if (key === '__global_sequence__') gs = value;
+        const entriesWithInternalIds = (data.entries || []).map((entry, index) => ({
+          ...entry,
+          _internal_id: `${name}_${Date.now()}_${index}`,
+        }));
+        return { name, data: { ...data, entries: entriesWithInternalIds } };
+      });
+    setGlobalSequence(gs);
     setStreams(initialStreams);
   }, [memoriaData]);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
-    useSensor(KeyboardSensor)
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
-  
-  // ... (所有 handle 函数保持不变) ...
+
   const handleSaveAll = async () => {
     setLoading(true);
     setErrorMessage('');
@@ -54,13 +52,12 @@ export function MemoriaEditor({ sandboxId, basePath, memoriaData, onBack }) {
       __hevno_type__: 'hevno/memoria',
       __global_sequence__: globalSequence,
     };
-    for (const streamName in streams) {
-      const stream = streams[streamName];
-      payload[streamName] = {
-        ...stream,
-        entries: stream.entries.map(({ _internal_id, ...rest }) => rest),
+    streams.forEach(({ name, data }) => {
+      payload[name] = {
+        ...data,
+        entries: data.entries.map(({ _internal_id, ...rest }) => rest),
       };
-    }
+    });
     try {
       await mutate(sandboxId, [{ type: 'UPSERT', path: basePath, value: payload }]);
       alert('Memoria saved successfully!');
@@ -74,45 +71,47 @@ export function MemoriaEditor({ sandboxId, basePath, memoriaData, onBack }) {
 
   const handleAddStream = () => {
     const name = newStreamName.trim();
-    if (!name || streams[name]) {
+    if (!name || streams.some(s => s.name === name)) {
       setErrorMessage(name ? `Stream "${name}" already exists.` : "Stream name is required.");
       return;
     }
-    setStreams(prev => ({ ...prev, [name]: { config: {}, entries: [] } }));
+    setStreams(prev => [...prev, { name, data: { config: {}, entries: [] } }]);
     setNewStreamName('');
   };
 
   const handleDeleteStream = (streamName) => {
     if (!window.confirm(`Are you sure you want to delete the stream "${streamName}"? This cannot be undone until you save.`)) return;
+    setStreams(prev => prev.filter(s => s.name !== streamName));
+  };
+
+  const handleAddEntry = (streamIndex) => {
     setStreams(prev => {
-      const newStreams = { ...prev };
-      delete newStreams[streamName];
+      const newStreams = [...prev];
+      const stream = newStreams[streamIndex];
+      const newEntry = {
+        content: '', level: 'event', tags: [],
+        _internal_id: `${stream.name}_${Date.now()}`
+      };
+      stream.data.entries = [...stream.data.entries, newEntry];
+      setExpandedEntries(exp => ({ ...exp, [newEntry._internal_id]: true }));
       return newStreams;
     });
   };
 
-  const handleAddEntry = (streamName) => {
+  const handleDeleteEntry = (streamIndex, entryInternalId) => {
     setStreams(prev => {
-      const newEntry = {
-        content: '', level: 'event', tags: [],
-        _internal_id: `${streamName}_${Date.now()}`
-      };
-      const updatedEntries = [...prev[streamName].entries, newEntry];
-      setExpandedEntries(exp => ({ ...exp, [newEntry._internal_id]: true }));
-      return { ...prev, [streamName]: { ...prev[streamName], entries: updatedEntries } };
+      const newStreams = [...prev];
+      const stream = newStreams[streamIndex];
+      stream.data.entries = stream.data.entries.filter(e => e._internal_id !== entryInternalId);
+      return newStreams;
     });
   };
 
-  const handleDeleteEntry = (streamName, entryInternalId) => {
+  const handleEntryChange = (streamIndex, entryInternalId, field, value) => {
     setStreams(prev => {
-      const updatedEntries = prev[streamName].entries.filter(e => e._internal_id !== entryInternalId);
-      return { ...prev, [streamName]: { ...prev[streamName], entries: updatedEntries } };
-    });
-  };
-  
-  const handleEntryChange = (streamName, entryInternalId, field, value) => {
-    setStreams(prev => {
-      const updatedEntries = prev[streamName].entries.map(entry => {
+      const newStreams = [...prev];
+      const stream = newStreams[streamIndex];
+      stream.data.entries = stream.data.entries.map(entry => {
         if (entry._internal_id === entryInternalId) {
           let finalValue = value;
           if (field === 'tags' && typeof value === 'string') {
@@ -122,20 +121,31 @@ export function MemoriaEditor({ sandboxId, basePath, memoriaData, onBack }) {
         }
         return entry;
       });
-      return { ...prev, [streamName]: { ...prev[streamName], entries: updatedEntries } };
+      return newStreams;
     });
   };
 
-  const handleEntryDragEnd = (streamName, event) => {
+  const handleStreamDragEnd = (event) => {
     const { active, over } = event;
-    if (active && over && active.id !== over.id) {
+    if (active.id !== over.id) {
+      const oldIndex = streams.findIndex(s => s.name === active.id);
+      const newIndex = streams.findIndex(s => s.name === over.id);
+      const reorderedStreams = arrayMove(streams, oldIndex, newIndex);
+      setStreams(reorderedStreams);
+    }
+  };
+
+  const handleEntryDragEnd = (streamIndex, event) => {
+    const { active, over } = event;
+    if (active.id !== over.id) {
       setStreams(prev => {
-        const stream = prev[streamName];
-        const oldIndex = stream.entries.findIndex(e => e._internal_id === active.id);
-        const newIndex = stream.entries.findIndex(e => e._internal_id === over.id);
-        if (oldIndex === -1 || newIndex === -1) return prev;
-        const reorderedEntries = arrayMove(stream.entries, oldIndex, newIndex);
-        return { ...prev, [streamName]: { ...prev[streamName], entries: reorderedEntries } };
+        const newStreams = [...prev];
+        const stream = newStreams[streamIndex];
+        const oldI = stream.data.entries.findIndex(e => e._internal_id === active.id);
+        const newI = stream.data.entries.findIndex(e => e._internal_id === over.id);
+        if (oldI === -1 || newI === -1) return prev;
+        stream.data.entries = arrayMove(stream.data.entries, oldI, newI);
+        return newStreams;
       });
     }
   };
@@ -147,12 +157,12 @@ export function MemoriaEditor({ sandboxId, basePath, memoriaData, onBack }) {
   const toggleEntryExpand = (entryInternalId) => {
     setExpandedEntries(prev => ({...prev, [entryInternalId]: !prev[entryInternalId] }));
   };
-  
-  const renderEntryForm = (streamName, entry) => (
-    <Box sx={{ p: 2, pl: 7 }}>
-      <TextField label="内容" value={entry.content || ''} onChange={(e) => handleEntryChange(streamName, entry._internal_id, 'content', e.target.value)} multiline fullWidth variant="outlined" sx={{ mb: 2 }} autoFocus/>
-      <TextField label="级别" value={entry.level || 'event'} onChange={(e) => handleEntryChange(streamName, entry._internal_id, 'level', e.target.value)} fullWidth sx={{ mb: 2 }} size="small" variant="outlined"/>
-      <TextField label="标签 (逗号分隔)" value={(entry.tags || []).join(', ')} onChange={(e) => handleEntryChange(streamName, entry._internal_id, 'tags', e.target.value)} fullWidth sx={{ mb: 2 }} variant="outlined" size="small"
+
+  const renderEntryForm = (streamIndex, entry) => (
+    <Box sx={{ pl: 9, pr: 2, pb: 2, pt: 1, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+      <TextField label="内容" value={entry.content || ''} onChange={(e) => handleEntryChange(streamIndex, entry._internal_id, 'content', e.target.value)} multiline fullWidth variant="outlined" sx={{ mb: 2 }} autoFocus/>
+      <TextField label="级别" value={entry.level || 'event'} onChange={(e) => handleEntryChange(streamIndex, entry._internal_id, 'level', e.target.value)} fullWidth sx={{ mb: 2 }} size="small" variant="outlined"/>
+      <TextField label="标签 (逗号分隔)" value={(entry.tags || []).join(', ')} onChange={(e) => handleEntryChange(streamIndex, entry._internal_id, 'tags', e.target.value)} fullWidth sx={{ mb: 2 }} variant="outlined" size="small"
         InputProps={{ startAdornment: (<InputAdornment position="start">{(entry.tags || []).filter(t => t).map((tag, i) => <Chip key={i} label={tag} size="small" sx={{ mr: 0.5 }} />)}</InputAdornment>),}}
       />
     </Box>
@@ -166,50 +176,53 @@ export function MemoriaEditor({ sandboxId, basePath, memoriaData, onBack }) {
             <Button variant="contained" color="success" startIcon={<SaveIcon />} onClick={handleSaveAll} disabled={loading}>{loading ? '正在保存...' : '全部保存'}</Button>
         </Box>
         {errorMessage && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErrorMessage('')}>{errorMessage}</Alert>}
-        <Paper variant="outlined" sx={{ p: 2, display: 'flex', gap: 2, alignItems: 'center', mb: 2, flexShrink: 0 }}>
-            <TextField label="新Stream名称" value={newStreamName} onChange={e => setNewStreamName(e.target.value)} size="small" variant="outlined" />
+        <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mb: 2, flexShrink: 0 }}>
+            <TextField label="新Stream名称" value={newStreamName} onChange={e => setNewStreamName(e.target.value)} size="small" variant="outlined" fullWidth />
             <Button variant="contained" startIcon={<AddIcon />} onClick={handleAddStream}>添加Stream</Button>
-        </Paper>
+        </Box>
         <Box sx={{ flexGrow: 1, overflowY: 'auto' }}>
-            <List disablePadding>
-                {Object.entries(streams).map(([streamName, streamData]) => (
-                // --- [美术修复] ---
-                // 将 elevation={3} 替换为 variant="outlined"
-                // 这将使用边框进行分组，而不是使用会改变背景色的阴影
-                <Paper key={streamName} variant="outlined" sx={{ mb: 2, overflow: 'hidden' }}>
-                    <ListItem button onClick={() => toggleStreamExpand(streamName)} sx={{ backgroundColor: 'rgba(255,255,255,0.05)' }}>
-                        <ListItemIcon>{expandedStreams[streamName] ? <ExpandMoreIcon /> : <ChevronRightIcon />}</ListItemIcon>
-                        <ListItemText primary={streamName} secondary={`条目数量: ${streamData.entries?.length || 0}`} />
-                        <IconButton edge="end" title="删除此Stream" onClick={(e) => { e.stopPropagation(); handleDeleteStream(streamName); }}><DeleteIcon /></IconButton>
-                    </ListItem>
-                    <Collapse in={!!expandedStreams[streamName]} timeout="auto" unmountOnExit>
-                    <Box sx={{ p: 2, pt: 1 }}> {/* 减少一点顶部内边距，视觉上更紧凑 */}
-                        <Button variant="outlined" startIcon={<AddIcon />} onClick={() => handleAddEntry(streamName)} size="small" sx={{ mb: 2 }}>添加条目</Button>
-                        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(e) => handleEntryDragEnd(streamName, e)}>
-                        <SortableContext items={(streamData.entries || []).map(e => e._internal_id)} strategy={verticalListSortingStrategy}>
-                            <List disablePadding>
-                            {(streamData.entries || []).map((entry) => (
-                                <SortableMemoryEntryItem
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleStreamDragEnd}>
+              <SortableContext items={streams.map(s => s.name)} strategy={verticalListSortingStrategy}>
+                <List disablePadding>
+                  {streams.map((stream, streamIndex) => (
+                    <SortableStreamItem
+                      key={stream.name}
+                      id={stream.name}
+                      stream={stream}
+                      expanded={!!expandedStreams[stream.name]}
+                      onToggleExpand={() => toggleStreamExpand(stream.name)}
+                      onDelete={() => handleDeleteStream(stream.name)}
+                    >
+                      <Collapse in={!!expandedStreams[stream.name]} timeout="auto" unmountOnExit>
+                        <Box sx={{ pl: 4, pr: 2, pb: 2, pt: 1, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                          <Button variant="outlined" startIcon={<AddIcon />} onClick={() => handleAddEntry(streamIndex)} size="small" sx={{ mb: 2 }}>添加条目</Button>
+                          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(e) => handleEntryDragEnd(streamIndex, e)}>
+                            <SortableContext items={(stream.data.entries || []).map(e => e._internal_id)} strategy={verticalListSortingStrategy}>
+                              <List disablePadding>
+                                {(stream.data.entries || []).map((entry) => (
+                                  <SortableMemoryEntryItem
                                     key={entry._internal_id}
                                     id={entry._internal_id}
                                     entry={entry}
                                     expanded={!!expandedEntries[entry._internal_id]}
                                     onToggleExpand={() => toggleEntryExpand(entry._internal_id)}
-                                    onDelete={() => handleDeleteEntry(streamName, entry._internal_id)}
-                                >
+                                    onDelete={() => handleDeleteEntry(streamIndex, entry._internal_id)}
+                                  >
                                     <Collapse in={!!expandedEntries[entry._internal_id]} timeout="auto" unmountOnExit>
-                                        {renderEntryForm(streamName, entry)}
+                                      {renderEntryForm(streamIndex, entry)}
                                     </Collapse>
-                                </SortableMemoryEntryItem>
-                            ))}
-                            </List>
-                        </SortableContext>
-                        </DndContext>
-                    </Box>
-                    </Collapse>
-                </Paper>
-                ))}
-            </List>
+                                  </SortableMemoryEntryItem>
+                                ))}
+                              </List>
+                            </SortableContext>
+                          </DndContext>
+                        </Box>
+                      </Collapse>
+                    </SortableStreamItem>
+                  ))}
+                </List>
+              </SortableContext>
+            </DndContext>
         </Box>
     </Box>
   );
