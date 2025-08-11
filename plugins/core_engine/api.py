@@ -3,6 +3,7 @@
 import io
 import logging
 import json
+import time
 import uuid
 from typing import Dict, Any, List, Optional
 from uuid import UUID
@@ -19,7 +20,9 @@ from plugins.core_engine.contracts import (
     Sandbox, 
     StateSnapshot, 
     ExecutionEngineInterface,
-    SnapshotStoreInterface
+    SnapshotStoreInterface,
+    StepDiagnostics,
+    StepResponse
 )
 from plugins.core_persistence.contracts import (
     PersistenceServiceInterface, 
@@ -40,16 +43,10 @@ router = APIRouter(
 
 class CreateSandboxRequest(BaseModel):
     name: str = Field(..., description="沙盒的人类可读名称。")
-    definition: Dict[str, Any] = Field(
-        ..., 
-        description="沙盒的'设计蓝图'，必须包含 'initial_lore' 和 'initial_moment' 键。"
+    definition: Optional[Dict[str, Any]] = Field(
+        None, 
+        description="沙盒的'设计蓝图'，如果未提供，将使用默认模板。"
     )
-    @field_validator('definition')
-    @classmethod
-    def check_definition_structure(cls, v: Dict[str, Any]) -> Dict[str, Any]:
-        if "initial_lore" not in v or "initial_moment" not in v:
-            raise ValueError("Definition must contain 'initial_lore' and 'initial_moment' keys.")
-        return v
 
 class SandboxListItem(BaseModel):
     id: UUID
@@ -88,13 +85,48 @@ async def create_sandbox(
 ):
     """
     创建一个新的沙盒，并将其立即持久化到本地文件系统。
+    如果未提供定义，则使用默认的聊天机器人模板。
     """
-    initial_lore = request_body.definition.get("initial_lore", {})
-    initial_moment = request_body.definition.get("initial_moment", {})
-    
+    # 定义默认模板
+    DEFAULT_LORE = {
+        "graphs": {
+            "main": {
+                "nodes": [
+                    {"id": "record_user_input", "run": [{"runtime": "memoria.add", "config": {"stream": "chat_history", "level": "user", "content": "{{ moment.__input__ }}"}}]},
+                    {"id": "generate_response", "depends_on": ["record_user_input"], "run": [{"runtime": "llm.default", "config": {"model": "gemini/gemini-1.5-flash", "prompt": "You are a helpful assistant. The user said: {{ moment.__input__ }}"}}]},
+                    {"id": "set_output", "depends_on": ["generate_response"], "run": [{"runtime": "system.execute", "config": {"code": "{{ moment.__output__ = nodes.generate_response.llm_output }}"}}]},
+                    {"id": "record_ai_response", "depends_on": ["set_output"], "run": [{"runtime": "memoria.add", "config": {"stream": "chat_history", "level": "ai", "content": "{{ moment.__output__ }}"}}]}
+                ]
+            }
+        }
+    }
+    DEFAULT_MOMENT = {
+        "memoria": {
+            "__global_sequence__": 0,
+            "chat_history": {"config": {}, "entries": []}
+        }
+    }
+    DEFAULT_DEFINITION = {
+        "initial_lore": DEFAULT_LORE,
+        "initial_moment": DEFAULT_MOMENT
+    }
+
+    if request_body.definition:
+        # 验证用户提供的 definition
+        if "initial_lore" not in request_body.definition or "initial_moment" not in request_body.definition:
+            raise HTTPException(status_code=422, detail="Custom definition must contain 'initial_lore' and 'initial_moment' keys.")
+        initial_lore = request_body.definition.get("initial_lore", {})
+        initial_moment = request_body.definition.get("initial_moment", {})
+        definition = request_body.definition
+    else:
+        # 使用默认模板
+        initial_lore = DEFAULT_LORE
+        initial_moment = DEFAULT_MOMENT
+        definition = DEFAULT_DEFINITION
+
     sandbox = Sandbox(
         name=request_body.name,
-        definition=request_body.definition,
+        definition=definition,
         lore=initial_lore
     )
     if sandbox.id in sandbox_store:
@@ -114,7 +146,7 @@ async def create_sandbox(
     return sandbox
 
 
-@router.post("/{sandbox_id}/step", response_model=Sandbox, summary="Execute a step")
+@router.post("/{sandbox_id}/step", response_model=StepResponse, summary="Execute a step")
 async def execute_sandbox_step(
     sandbox_id: UUID, 
     user_input: Dict[str, Any] = Body(...),
@@ -123,18 +155,34 @@ async def execute_sandbox_step(
 ):
     """
     执行一步计算。持久化逻辑已封装在 engine.step 方法内部。
+    返回一个包含执行元数据和更新后沙盒的信封。
     """
     sandbox = sandbox_store.get(sandbox_id)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found.")
     
+    start_time = time.monotonic()
+    
     try:
         updated_sandbox = await engine.step(sandbox, user_input)
+        execution_time_ms = (time.monotonic() - start_time) * 1000
+        
+        return StepResponse(
+            status="COMPLETED",
+            sandbox=updated_sandbox,
+            diagnostics=StepDiagnostics(execution_time_ms=execution_time_ms)
+        )
     except Exception as e:
         logger.error(f"Error during engine step for sandbox {sandbox_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Engine execution failed: {e}")
-
-    return updated_sandbox
+        # 失败时，返回执行前的沙盒状态
+        return JSONResponse(
+            status_code=500,
+            content=StepResponse(
+                status="ERROR",
+                sandbox=sandbox, # 返回原始沙盒
+                error_message=str(e)
+            ).model_dump(mode="json")
+        )
 
 
 @router.put("/{sandbox_id}/revert", status_code=200, summary="Revert to a snapshot")

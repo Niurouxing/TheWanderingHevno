@@ -290,3 +290,16 @@ class SandboxStoreInterface(ABC):
         if sandbox is None:
             raise KeyError(key)
         return sandbox
+
+# --- 5. API 契约 ---
+
+class StepDiagnostics(BaseModel):
+    """用于承载本次执行的诊断信息。"""
+    execution_time_ms: float
+
+class StepResponse(BaseModel):
+    """/step 端点的标准响应信封。"""
+    status: Literal["COMPLETED", "ERROR"]
+    sandbox: Sandbox
+    diagnostics: Optional[StepDiagnostics] = None
+    error_message: Optional[str] = None
