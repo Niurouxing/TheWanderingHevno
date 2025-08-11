@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-// ... imports保持不变 ...
 import { List, ListItem, ListItemIcon, ListItemText, Collapse, IconButton, Typography } from '@mui/material';
 import FolderIcon from '@mui/icons-material/Folder';
 import DescriptionIcon from '@mui/icons-material/Description';
@@ -12,12 +11,11 @@ import HistoryIcon from '@mui/icons-material/History';
 import { isObject, isArray } from '../utils/constants';
 
 const HEVNO_TYPE_EDITORS = {
-  'hevno/codex': { icon: <AutoStoriesIcon />, tooltip: 'Edit Codex' },
-  'hevno/graph': { icon: <AccountTreeIcon />, tooltip: 'Edit Graph' },
-  'hevno/memoria': { icon: <HistoryIcon />, tooltip: 'Edit Memoria' },
+  'hevno/codex': { icon: <AutoStoriesIcon />, tooltip: '编辑 Codex' },
+  'hevno/graph': { icon: <AccountTreeIcon />, tooltip: '编辑 Graph' },
+  'hevno/memoria': { icon: <HistoryIcon />, tooltip: '编辑 Memoria' },
 };
 
-// --- [核心修改] onEdit现在将传递一个正确的、用'/'分隔的路径 ---
 export function DataTree({ data, path = '', onEdit }) {
   const [expanded, setExpanded] = useState({});
   const toggleExpand = (key) => { setExpanded((prev) => ({ ...prev, [key]: !prev[key] })); };
@@ -29,7 +27,6 @@ export function DataTree({ data, path = '', onEdit }) {
       {Object.entries(data).map(([key, value]) => {
         if (key === '__hevno_type__') return null;
 
-        // 使用斜杠构建API兼容的路径
         const currentPath = path ? `${path}/${key}` : key;
         const isExpandable = isObject(value) || isArray(value);
         
@@ -41,11 +38,10 @@ export function DataTree({ data, path = '', onEdit }) {
             <ListItem
               disablePadding
               secondaryAction={
-                editorInfo ? (
-                  <IconButton edge="end" onClick={() => onEdit(currentPath, value)} title={editorInfo.tooltip}>
-                    <EditIcon />
-                  </IconButton>
-                ) : null
+                // --- [修改] 为所有条目统一提供编辑按钮 ---
+                <IconButton edge="end" onClick={() => onEdit(currentPath, value)} title={editorInfo ? editorInfo.tooltip : '编辑值'}>
+                  <EditIcon />
+                </IconButton>
               }
             >
               <ListItemIcon sx={{minWidth: '40px'}}>
@@ -58,7 +54,7 @@ export function DataTree({ data, path = '', onEdit }) {
                     ? `类型: ${hevnoType.split('/')[1]}`
                     : !isExpandable 
                         ? (typeof value === 'string' ? value.slice(0, 50) + (value.length > 50 ? '...' : '') : JSON.stringify(value)) 
-                        : `${isArray(value) ? 'Array' : 'Object'} (${Object.keys(value).length} 项)`
+                        : `${isArray(value) ? '数组' : '对象'} (${Object.keys(value).length} 项)`
                 }
                 onClick={isExpandable && !editorInfo ? () => toggleExpand(currentPath) : undefined}
                 sx={{ cursor: (isExpandable && !editorInfo) ? 'pointer' : 'default' }}

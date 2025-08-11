@@ -7,8 +7,10 @@ import { DataTree } from './components/DataTree';
 import { CodexEditor } from './editors/CodexEditor';
 import { GraphEditor } from './editors/GraphEditor';
 import { MemoriaEditor } from './editors/MemoriaEditor';
-// --- [修改 1/4] 导入新的API客户端 ---
-import { query } from './utils/api';
+// --- [修改 1/5] 导入新的API客户端和通用编辑器 ---
+import { query, mutate } from './utils/api';
+import { GenericEditorDialog } from './editors/GenericEditorDialog';
+import { isObject } from './utils/constants';
 
 export function SandboxEditorPage({ services }) {
     const { currentSandboxId, setActivePageId, setCurrentSandboxId } = useLayout();
@@ -19,16 +21,16 @@ export function SandboxEditorPage({ services }) {
     const [editingCodex, setEditingCodex] = useState(null);
     const [editingGraph, setEditingGraph] = useState(null);
     const [editingMemoria, setEditingMemoria] = useState(null);
+    // --- [修改 2/5] 添加用于通用编辑器的状态 ---
+    const [editingGeneric, setEditingGeneric] = useState(null);
 
-    // --- [修改 2/4] 重写数据加载函数，使用统一的 :query API ---
     const loadSandboxData = useCallback(async () => {
         if (!currentSandboxId) return;
         setLoading(true);
         setError('');
         try {
-            // 在一次API调用中获取所有需要的数据
             const results = await query(currentSandboxId, ['definition', 'lore', 'moment']);
-            setSandboxData(results); // API返回的已经是 { definition: {...}, lore: {...}, moment: {...} } 格式
+            setSandboxData(results);
         } catch (e) {
             setError(e.message);
             console.error(e);
@@ -54,23 +56,27 @@ export function SandboxEditorPage({ services }) {
         setActivePageId('sandbox_explorer.main_view');
     };
     
-    // --- [修改 3/4] 简化 onEdit 处理，路径现在直接来源于DataTree ---
+    // --- [修改 3/5] 重写 onEdit 处理器以路由到正确的编辑器 ---
     const handleEdit = (path, value) => {
-        const pathParts = path.split('/');
-        const editorType = value.__hevno_type__;
-        const name = pathParts[pathParts.length - 1];
+        const editorType = isObject(value) ? value.__hevno_type__ : undefined;
 
-        // 不再需要 'scope' 变量。我们直接使用完整的 'path'。
-        if (editorType === 'hevno/codex') {
-            // 将完整路径作为 basePath 存储
-            setEditingCodex({ name, data: value, basePath: path });
-        } else if (editorType === 'hevno/graph') {
-            // 将完整路径作为 basePath 存储
-            setEditingGraph({ name, data: value, basePath: path });
-        } else if (editorType === 'hevno/memoria') {
-            setEditingMemoria({ data: value, path: path });
+        if (editorType) {
+            const pathParts = path.split('/');
+            const name = pathParts[pathParts.length - 1];
+
+            if (editorType === 'hevno/codex') {
+                setEditingCodex({ name, data: value, basePath: path });
+            } else if (editorType === 'hevno/graph') {
+                setEditingGraph({ name, data: value, basePath: path });
+            } else if (editorType === 'hevno/memoria') {
+                setEditingMemoria({ data: value, path: path });
+            } else {
+                // 对于未知的特殊类型，也使用通用编辑器
+                setEditingGeneric({ path, value });
+            }
         } else {
-            alert(`Edit functionality for type "${editorType}" at "${path}" is not yet implemented.`);
+            // 对于所有普通值（字符串、数字、数组、普通对象），使用通用编辑器
+            setEditingGeneric({ path, value });
         }
     };
     
@@ -79,6 +85,19 @@ export function SandboxEditorPage({ services }) {
         setEditingGraph(null);
         setEditingMemoria(null);
         loadSandboxData();
+    };
+
+    // --- [修改 4/5] 添加保存通用数据的方法 ---
+    const handleGenericSave = async (path, newValue) => {
+        try {
+            await mutate(currentSandboxId, [{ type: 'UPSERT', path, value: newValue }]);
+            setEditingGeneric(null); // 关闭对话框
+            await loadSandboxData(); // 重新加载数据以刷新树
+        } catch (err) {
+            console.error(`保存路径 "${path}" 的值失败:`, err);
+            // 将错误重新抛出，以便对话框可以捕获并显示它
+            throw err;
+        }
     };
 
     if (!currentSandboxId) {
@@ -100,49 +119,19 @@ export function SandboxEditorPage({ services }) {
     const currentScopeData = sandboxData[SCOPE_TABS[activeScope]];
 
     if (editingCodex) {
-        return (
-            <CodexEditor
-                sandboxId={currentSandboxId}
-                basePath={editingCodex.basePath} // 使用新的 basePath 属性
-                codexName={editingCodex.name}
-                codexData={editingCodex.data}
-                onBack={handleBackToOverview}
-            />
-        );
+        return <CodexEditor sandboxId={currentSandboxId} basePath={editingCodex.basePath} codexName={editingCodex.name} codexData={editingCodex.data} onBack={handleBackToOverview} />;
     } else if (editingGraph) {
-        return (
-            <GraphEditor
-                sandboxId={currentSandboxId}
-                basePath={editingGraph.basePath} // 使用新的 basePath 属性
-                graphName={editingGraph.name}
-                graphData={editingGraph.data}
-                onBack={handleBackToOverview}
-            />
-        );
+        return <GraphEditor sandboxId={currentSandboxId} basePath={editingGraph.basePath} graphName={editingGraph.name} graphData={editingGraph.data} onBack={handleBackToOverview} />;
     } else if (editingMemoria) {
-      return (
-        <MemoriaEditor
-          sandboxId={currentSandboxId}
-          // --- [修改 4/4] 传递 memoria 对象的完整路径和数据 ---
-          basePath={editingMemoria.path}
-          memoriaData={editingMemoria.data}
-          onBack={handleBackToOverview}
-        />
-      );
+      return <MemoriaEditor sandboxId={currentSandboxId} basePath={editingMemoria.path} memoriaData={editingMemoria.data} onBack={handleBackToOverview} />;
     }
 
-    // ... 其余渲染代码保持不变 ...
     const sandboxName = (sandboxData.definition?.name || sandboxData.lore?.name || 'Sandbox');
 
     return (
         <Box sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, flexShrink: 0 }}>
-                <Button
-                    variant="outlined"
-                    startIcon={<ArrowBackIcon />}
-                    onClick={handleGoBackToExplorer}
-                    sx={{ mr: 2 }}
-                >
+                <Button variant="outlined" startIcon={<ArrowBackIcon />} onClick={handleGoBackToExplorer} sx={{ mr: 2 }}>
                     返回沙盒列表
                 </Button>
                 <Typography variant="h4" component="h1" noWrap sx={{ flexGrow: 1 }}>
@@ -162,6 +151,14 @@ export function SandboxEditorPage({ services }) {
                     <Typography color="text.secondary">该范围内没有可用数据</Typography>
                 )}
             </Box>
+
+            {/* --- [修改 5/5] 在页面上渲染通用编辑器对话框 --- */}
+            <GenericEditorDialog
+                open={!!editingGeneric}
+                onClose={() => setEditingGeneric(null)}
+                onSave={handleGenericSave}
+                item={editingGeneric}
+            />
         </Box>
     );
 }
