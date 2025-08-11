@@ -1,0 +1,21 @@
+{
+    "id": "core_runner_ui",
+    "name": "Sandbox Runner UI",
+    "version": "1.0.0",
+    "description": "Provides the primary user interface for interacting with a running sandbox.",
+    "author": "Hevno Team",
+    "frontend": {
+        "type": "page-component",
+        "priority": 110,
+        "entryPoint": "dist/main.js",
+        "srcEntryPoint": "src/RunnerPage.jsx",
+        "contributions": {
+            "pageComponents": [
+                {
+                    "id": "runner_ui.main_view",
+                    "componentExportName": "RunnerPage"
+                }
+            ]
+        }
+    }
+}

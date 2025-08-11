@@ -1,13 +1,13 @@
 // plugins/sandbox_explorer/src/SandboxExplorerPage.jsx
 import React, { useState, useEffect, useCallback } from 'react';
-import { Box, Grid, Typography, CircularProgress, Button } from '@mui/material'; // --- MODIFIED: 导入 Button ---
+import { Box, Grid, Typography, CircularProgress, Button } from '@mui/material';
 
 import { SandboxCard } from './components/SandboxCard';
 import { CreateSandboxDialog } from './components/CreateSandboxDialog';
 import { AddSandboxCard } from './components/AddSandboxCard';
 import { useLayout } from '../../core_layout/src/context/LayoutContext';
 
-// --- API 调用函数 ---
+// --- API 调用函数 (保持不变) ---
 
 const fetchSandboxes = async () => {
   const response = await fetch('/api/sandboxes');
@@ -18,7 +18,6 @@ const fetchSandboxes = async () => {
   return response.json();
 };
 
-// --- MODIFIED: 重命名为 importSandboxFromPng ---
 const importSandboxFromPng = async (file) => {
   const formData = new FormData();
   formData.append('file', file);
@@ -33,11 +32,9 @@ const importSandboxFromPng = async (file) => {
   return response.json();
 };
 
-// --- NEW: 添加用于 JSON 导入的 API 函数 ---
 const importSandboxFromJson = async (file) => {
   const formData = new FormData();
   formData.append('file', file);
-  // 使用新的后端端点
   const response = await fetch('/api/sandboxes/import/json', {
     method: 'POST',
     body: formData,
@@ -49,7 +46,6 @@ const importSandboxFromJson = async (file) => {
   return response.json();
 }
 
-// --- NEW: 辅助函数，用于触发浏览器下载 ---
 const triggerDownload = async (url, filename) => {
     const response = await fetch(url);
     if (!response.ok) {
@@ -108,20 +104,15 @@ export function SandboxExplorerPage({ services }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- MODIFIED: 更新 handleCreate 以处理不同文件类型 ---
   const handleCreate = async (file) => {
-    // 根据文件类型调用不同的导入函数
     if (file.type === 'application/json' || file.name.endsWith('.json')) {
-      console.log('Importing from JSON...');
       await importSandboxFromJson(file);
     } else if (file.type === 'image/png') {
-      console.log('Importing from PNG...');
       await importSandboxFromPng(file);
     } else {
-      // 这是一个备用检查，理论上在对话框组件中已被阻止
       throw new Error('Unsupported file type.');
     }
-    await loadData(); // 成功后刷新列表
+    await loadData();
   };
 
   const handleDelete = async (sandboxId) => {
@@ -159,6 +150,12 @@ export function SandboxExplorerPage({ services }) {
     setActivePageId('sandbox_editor.main_view');
   };
 
+  // --- 关键修改: 新增的 handleRun 函数 ---
+  const handleRun = (sandboxId) => {
+    setCurrentSandboxId(sandboxId);
+    setActivePageId('runner_ui.main_view');
+  };
+
   if (loading) {
     return <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}><CircularProgress /></Box>;
   }
@@ -188,7 +185,8 @@ export function SandboxExplorerPage({ services }) {
                 sandbox={sandbox}
                 onSelect={handleSelect}
                 onEdit={() => handleEdit(sandbox.id)}
-                onRun={() => alert(`Running ${sandbox.name}`)}
+                // --- 关键修改: 将 onRun 绑定到新的处理器 ---
+                onRun={() => handleRun(sandbox.id)}
                 onDelete={handleDelete}
                 onExportPng={() => handleExport(sandbox.id, sandbox.name, 'png')}
                 onExportJson={() => handleExport(sandbox.id, sandbox.name, 'json')}
