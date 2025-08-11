@@ -7,9 +7,10 @@ import { DataTree } from './components/DataTree';
 import { CodexEditor } from './editors/CodexEditor';
 import { GraphEditor } from './editors/GraphEditor';
 import { MemoriaEditor } from './editors/MemoriaEditor';
-// --- [修改 1/5] 导入新的API客户端和通用编辑器 ---
 import { query, mutate } from './utils/api';
 import { GenericEditorDialog } from './editors/GenericEditorDialog';
+// --- [修改 1/4] 导入新的 AddItemDialog ---
+import { AddItemDialog } from './editors/AddItemDialog';
 import { isObject } from './utils/constants';
 
 export function SandboxEditorPage({ services }) {
@@ -21,10 +22,12 @@ export function SandboxEditorPage({ services }) {
     const [editingCodex, setEditingCodex] = useState(null);
     const [editingGraph, setEditingGraph] = useState(null);
     const [editingMemoria, setEditingMemoria] = useState(null);
-    // --- [修改 2/5] 添加用于通用编辑器的状态 ---
     const [editingGeneric, setEditingGeneric] = useState(null);
+    // --- [修改 2/4] 添加管理添加对话框的状态 ---
+    const [addItemTarget, setAddItemTarget] = useState(null); // e.g., { path: 'lore.graphs', existingKeys: ['main'] }
 
     const loadSandboxData = useCallback(async () => {
+        // ... (此函数保持不变) ...
         if (!currentSandboxId) return;
         setLoading(true);
         setError('');
@@ -46,91 +49,87 @@ export function SandboxEditorPage({ services }) {
     }, [currentSandboxId, loadSandboxData]);
 
     const handleScopeChange = (event, newValue) => {
+        // ... (此函数保持不变) ...
         setActiveScope(newValue);
         setEditingCodex(null);
         setEditingGraph(null);
     };
 
     const handleGoBackToExplorer = () => {
+        // ... (此函数保持不变) ...
         setCurrentSandboxId(null);
         setActivePageId('sandbox_explorer.main_view');
     };
     
-    // --- [修改 3/5] 重写 onEdit 处理器以路由到正确的编辑器 ---
     const handleEdit = (path, value) => {
+        // ... (此函数保持不变) ...
         const editorType = isObject(value) ? value.__hevno_type__ : undefined;
-
         if (editorType) {
             const pathParts = path.split('/');
             const name = pathParts[pathParts.length - 1];
-
-            if (editorType === 'hevno/codex') {
-                setEditingCodex({ name, data: value, basePath: path });
-            } else if (editorType === 'hevno/graph') {
-                setEditingGraph({ name, data: value, basePath: path });
-            } else if (editorType === 'hevno/memoria') {
-                setEditingMemoria({ data: value, path: path });
-            } else {
-                // 对于未知的特殊类型，也使用通用编辑器
-                setEditingGeneric({ path, value });
-            }
+            if (editorType === 'hevno/codex') setEditingCodex({ name, data: value, basePath: path });
+            else if (editorType === 'hevno/graph') setEditingGraph({ name, data: value, basePath: path });
+            else if (editorType === 'hevno/memoria') setEditingMemoria({ data: value, path: path });
+            else setEditingGeneric({ path, value });
         } else {
-            // 对于所有普通值（字符串、数字、数组、普通对象），使用通用编辑器
             setEditingGeneric({ path, value });
         }
     };
     
     const handleBackToOverview = () => {
+        // ... (此函数保持不变) ...
         setEditingCodex(null);
         setEditingGraph(null);
         setEditingMemoria(null);
         loadSandboxData();
     };
 
-    // --- [修改 4/5] 添加保存通用数据的方法 ---
     const handleGenericSave = async (path, newValue) => {
+        // ... (此函数保持不变) ...
         try {
             await mutate(currentSandboxId, [{ type: 'UPSERT', path, value: newValue }]);
-            setEditingGeneric(null); // 关闭对话框
-            await loadSandboxData(); // 重新加载数据以刷新树
+            setEditingGeneric(null);
+            await loadSandboxData();
         } catch (err) {
-            console.error(`保存路径 "${path}" 的值失败:`, err);
-            // 将错误重新抛出，以便对话框可以捕获并显示它
+            console.error(`Failed to save value for path "${path}":`, err);
             throw err;
         }
     };
 
-    if (!currentSandboxId) {
-        return (
-            <Box sx={{ p: 4, textAlign: 'center' }}>
-                <Typography variant="h6" color="error">未选择要编辑的沙盒</Typography>
-            </Box>
-        );
-    }
+    // --- [修改 3/4] 添加处理添加请求的函数 ---
+    const handleOpenAddDialog = (path, existingKeys) => {
+        setAddItemTarget({ path, existingKeys });
+    };
+
+    const handleAddItem = async (parentPath, key, value) => {
+        const fullPath = `${parentPath}/${key}`;
+        try {
+            await mutate(currentSandboxId, [{ type: 'UPSERT', path: fullPath, value }]);
+            setAddItemTarget(null); // 关闭对话框
+            await loadSandboxData(); // 重新加载数据
+        } catch (err) {
+            console.error(`Failed to add item at path "${fullPath}":`, err);
+            throw err; // 将错误传递回对话框以显示
+        }
+    };
+
+    // ... (加载和错误状态的渲染保持不变) ...
+    if (!currentSandboxId) return <Box sx={{ p: 4, textAlign: 'center' }}><Typography variant="h6" color="error">未选择要编辑的沙盒</Typography></Box>;
     if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}><CircularProgress /></Box>;
-    if (error) return (
-        <Box sx={{ p: 4, textAlign: 'center' }}>
-            <Typography variant="h6" color="error">加载沙盒失败</Typography>
-            <Typography color="text.secondary">{error}</Typography>
-            <Button variant="outlined" sx={{ mt: 2 }} onClick={loadSandboxData}>重试</Button>
-        </Box>
-    );
+    if (error) return <Box sx={{ p: 4, textAlign: 'center' }}><Typography variant="h6" color="error">加载沙盒失败</Typography><Typography color="text.secondary">{error}</Typography><Button variant="outlined" sx={{ mt: 2 }} onClick={loadSandboxData}>重试</Button></Box>;
 
     const currentScopeData = sandboxData[SCOPE_TABS[activeScope]];
 
-    if (editingCodex) {
-        return <CodexEditor sandboxId={currentSandboxId} basePath={editingCodex.basePath} codexName={editingCodex.name} codexData={editingCodex.data} onBack={handleBackToOverview} />;
-    } else if (editingGraph) {
-        return <GraphEditor sandboxId={currentSandboxId} basePath={editingGraph.basePath} graphName={editingGraph.name} graphData={editingGraph.data} onBack={handleBackToOverview} />;
-    } else if (editingMemoria) {
-      return <MemoriaEditor sandboxId={currentSandboxId} basePath={editingMemoria.path} memoriaData={editingMemoria.data} onBack={handleBackToOverview} />;
-    }
+    if (editingCodex) return <CodexEditor sandboxId={currentSandboxId} basePath={editingCodex.basePath} codexName={editingCodex.name} codexData={editingCodex.data} onBack={handleBackToOverview} />;
+    if (editingGraph) return <GraphEditor sandboxId={currentSandboxId} basePath={editingGraph.basePath} graphName={editingGraph.name} graphData={editingGraph.data} onBack={handleBackToOverview} />;
+    if (editingMemoria) return <MemoriaEditor sandboxId={currentSandboxId} basePath={editingMemoria.path} memoriaData={editingMemoria.data} onBack={handleBackToOverview} />;
 
     const sandboxName = (sandboxData.definition?.name || sandboxData.lore?.name || 'Sandbox');
 
     return (
         <Box sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, flexShrink: 0 }}>
+                {/* ... (头部UI保持不变) ... */}
                 <Button variant="outlined" startIcon={<ArrowBackIcon />} onClick={handleGoBackToExplorer} sx={{ mr: 2 }}>
                     返回沙盒列表
                 </Button>
@@ -146,18 +145,21 @@ export function SandboxEditorPage({ services }) {
             </Tabs>
             <Box sx={{ mt: 2, flexGrow: 1, overflowY: 'auto' }}>
                 {currentScopeData ? (
-                    <DataTree data={currentScopeData} path={SCOPE_TABS[activeScope]} onEdit={handleEdit} />
+                    // --- [修改 4/4] 将 onAdd 处理器传递给 DataTree ---
+                    <DataTree data={currentScopeData} path={SCOPE_TABS[activeScope]} onEdit={handleEdit} onAdd={handleOpenAddDialog} />
                 ) : (
                     <Typography color="text.secondary">该范围内没有可用数据</Typography>
                 )}
             </Box>
 
-            {/* --- [修改 5/5] 在页面上渲染通用编辑器对话框 --- */}
-            <GenericEditorDialog
-                open={!!editingGeneric}
-                onClose={() => setEditingGeneric(null)}
-                onSave={handleGenericSave}
-                item={editingGeneric}
+            <GenericEditorDialog open={!!editingGeneric} onClose={() => setEditingGeneric(null)} onSave={handleGenericSave} item={editingGeneric} />
+            
+            <AddItemDialog
+                open={!!addItemTarget}
+                onClose={() => setAddItemTarget(null)}
+                onAdd={handleAddItem}
+                parentPath={addItemTarget?.path}
+                existingKeys={addItemTarget?.existingKeys}
             />
         </Box>
     );
