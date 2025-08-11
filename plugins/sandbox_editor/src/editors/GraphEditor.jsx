@@ -11,7 +11,7 @@ import { SortableNodeItem } from '../components/SortableNodeItem';
 import { RuntimeEditor } from './RuntimeEditor';
 import { mutate } from '../utils/api';
 
-export function GraphEditor({ sandboxId, scope, graphName, graphData, onBack }) {
+export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack }) {
     const [nodes, setNodes] = useState([]);
     const [expandedNodes, setExpandedNodes] = useState({});
     const [errorMessage, setErrorMessage] = useState('');
@@ -25,8 +25,6 @@ export function GraphEditor({ sandboxId, scope, graphName, graphData, onBack }) 
         useSensor(PointerSensor),
         useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
     );
-
-    const basePath = `${scope}/graphs/${graphName}`;
 
     const syncNodes = async (updatedNodes, optimisticState) => {
         setErrorMessage('');

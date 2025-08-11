@@ -58,15 +58,16 @@ export function SandboxEditorPage({ services }) {
     const handleEdit = (path, value) => {
         const pathParts = path.split('/');
         const editorType = value.__hevno_type__;
-        const name = pathParts[pathParts.length - 1]; // e.g., 'main' or 'npc_status'
-        const scope = pathParts[0]; // e.g., 'lore' or 'definition'
+        const name = pathParts[pathParts.length - 1];
 
+        // 不再需要 'scope' 变量。我们直接使用完整的 'path'。
         if (editorType === 'hevno/codex') {
-            setEditingCodex({ name, data: value, scope });
+            // 将完整路径作为 basePath 存储
+            setEditingCodex({ name, data: value, basePath: path });
         } else if (editorType === 'hevno/graph') {
-            setEditingGraph({ name, data: value, scope });
+            // 将完整路径作为 basePath 存储
+            setEditingGraph({ name, data: value, basePath: path });
         } else if (editorType === 'hevno/memoria') {
-             // Memoria 编辑器不需要 scope 和 name，它直接处理整个 moment.memoria 对象
             setEditingMemoria({ data: value, path: path });
         } else {
             alert(`Edit functionality for type "${editorType}" at "${path}" is not yet implemented.`);
@@ -102,7 +103,7 @@ export function SandboxEditorPage({ services }) {
         return (
             <CodexEditor
                 sandboxId={currentSandboxId}
-                scope={editingCodex.scope}
+                basePath={editingCodex.basePath} // 使用新的 basePath 属性
                 codexName={editingCodex.name}
                 codexData={editingCodex.data}
                 onBack={handleBackToOverview}
@@ -112,7 +113,7 @@ export function SandboxEditorPage({ services }) {
         return (
             <GraphEditor
                 sandboxId={currentSandboxId}
-                scope={editingGraph.scope}
+                basePath={editingGraph.basePath} // 使用新的 basePath 属性
                 graphName={editingGraph.name}
                 graphData={editingGraph.data}
                 onBack={handleBackToOverview}

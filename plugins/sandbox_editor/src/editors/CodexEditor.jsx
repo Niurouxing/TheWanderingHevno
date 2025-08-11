@@ -10,7 +10,7 @@ import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSo
 import { SortableEntryItem } from '../components/SortableEntryItem';
 import { mutate } from '../utils/api';
 
-export function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) {
+export function CodexEditor({ sandboxId, basePath, codexName, codexData, onBack }) {
   const [entries, setEntries] = useState([]);
   const [expanded, setExpanded] = useState({});
   const [errorMessage, setErrorMessage] = useState('');
@@ -23,8 +23,6 @@ export function CodexEditor({ sandboxId, scope, codexName, codexData, onBack }) 
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
-
-  const basePath = `${scope}/codices/${codexName}`;
 
   const syncEntries = async (updatedEntries, optimisticState) => {
     setErrorMessage('');
