@@ -1,6 +1,7 @@
 # plugins/core_llm/runtime.py
 
 import logging
+from datetime import datetime
 from typing import Dict, Any, List
 
 from plugins.core_engine.contracts import ExecutionContext, RuntimeInterface, MacroEvaluationServiceInterface
@@ -10,7 +11,6 @@ logger = logging.getLogger(__name__)
 
 class LLMRuntime(RuntimeInterface):
     """
-    【重构】
     一个强大的运行时，它通过“列表展开”机制编排一个结构化的消息列表，
     然后通过 Hevno LLM Gateway 发起调用。
     """
@@ -77,15 +77,51 @@ class LLMRuntime(RuntimeInterface):
         llm_params = {k: v for k, v in config.items() if k not in ["model", "prompt", "contents"]}
         llm_service = context.shared.services.llm_service
 
+        node = kwargs.get("node")
+        
+        # 准备要发送的请求体
+        request_payload = {
+            "model_name": model_name,
+            "messages": final_messages,
+            **llm_params
+        }
+        
+        response: LLMResponse = None
         try:
-            response: LLMResponse = await llm_service.request(
-                model_name=model_name,
-                messages=final_messages,
-                **llm_params
-            )
+            response = await llm_service.request(**request_payload)
             
+            # --- 无论成功与否，都记录日志 ---
+            if "diagnostics_log" in context.run_vars:
+                diagnostic_entry = {
+                    "timestamp": datetime.now().isoformat(),
+                    "node_id": node.id if node else 'unknown',
+                    "runtime": "llm.default",
+                    "request": request_payload,
+                    # 使用 model_dump 确保 Pydantic 模型被正确序列化
+                    "response": response.model_dump(mode='json') if response else None 
+                }
+                context.run_vars["diagnostics_log"].append(diagnostic_entry)
+
             if response.error_details:
                 return {"error": response.error_details.message, "error_type": response.error_details.error_type.value, "details": response.error_details.model_dump()}
             return {"llm_output": response.content, "usage": response.usage, "model_name": response.model_name}
+        
         except LLMRequestFailedError as e:
+            # --- 在异常情况下也记录日志 ---
+            if "diagnostics_log" in context.run_vars:
+                diagnostic_entry = {
+                    "timestamp": datetime.now().isoformat(),
+                    "node_id": node.id if node else 'unknown',
+                    "runtime": "llm.default",
+                    "request": request_payload,
+                    "response": {
+                        "status": "ERROR",
+                        "error_details": {
+                            "message": str(e),
+                            "last_known_provider_error": e.last_error.model_dump(mode='json') if e.last_error else None
+                        }
+                    }
+                }
+                context.run_vars["diagnostics_log"].append(diagnostic_entry)
+            
             return {"error": str(e), "details": e.last_error.model_dump() if e.last_error else None}

@@ -1,5 +1,5 @@
 // plugins/core_runner_ui/src/RunnerPage.jsx
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { 
     Box, Typography, CircularProgress, Alert, Paper, IconButton, Collapse, CssBaseline,
     AppBar, Toolbar, Tooltip, useTheme, useMediaQuery
@@ -28,6 +28,35 @@ export function RunnerPage() {
     const [diagnostics, setDiagnostics] = useState(null);
     const [showDiagnostics, setShowDiagnostics] = useState(false);
     const [isHistoryDrawerOpen, setHistoryDrawerOpen] = useState(isLargeScreen);
+    const [diagnosticsHeight, setDiagnosticsHeight] = useState(200);
+    const resizeRef = useRef(null);
+
+    const handleResizeMouseDown = useCallback((e) => {
+        e.preventDefault();
+        resizeRef.current = {
+            initialHeight: diagnosticsHeight,
+            initialY: e.clientY,
+        };
+        document.addEventListener('mousemove', handleResizeMouseMove);
+        document.addEventListener('mouseup', handleResizeMouseUp);
+    }, [diagnosticsHeight]);
+
+    const handleResizeMouseMove = useCallback((e) => {
+        if (!resizeRef.current) return;
+        const { initialHeight, initialY } = resizeRef.current;
+        const dy = e.clientY - initialY;
+        // 当把手在顶部时，向下拖动（dy > 0）应该减小高度，因此用减法
+        const newHeight = initialHeight - dy;
+        // 设置最小和最大高度
+        const clampedHeight = Math.max(50, Math.min(newHeight, 600));
+        setDiagnosticsHeight(clampedHeight);
+    }, []);
+
+    const handleResizeMouseUp = useCallback(() => {
+        resizeRef.current = null;
+        document.removeEventListener('mousemove', handleResizeMouseMove);
+        document.removeEventListener('mouseup', handleResizeMouseUp);
+    }, []);
 
     // 监听屏幕尺寸变化以调整侧边栏状态
     useEffect(() => {
@@ -268,9 +297,41 @@ export function RunnerPage() {
                 <Box sx={{ flexShrink: 0, p: { xs: 1, sm: 2 } }}>
                     {error && <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setError('')}>{error}</Alert>}
                     <Collapse in={showDiagnostics}>
-                        <Paper variant="outlined" sx={{ p: 2, mb: 1.5, maxHeight: 200, overflowY: 'auto', bgcolor: 'background.default' }}>
-                            <Typography variant="subtitle2">诊断信息</Typography>
-                            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: '0.8rem' }}>
+                        <Paper 
+                            variant="outlined" 
+                            sx={{ 
+                                p: 2, 
+                                pt: 3, // 为顶部的把手增加内边距
+                                mb: 1.5, 
+                                height: diagnosticsHeight, 
+                                overflow: 'hidden', 
+                                bgcolor: 'background.default',
+                                position: 'relative',
+                                display: 'flex',
+                                flexDirection: 'column'
+                            }}
+                        >
+                            <Box
+                                onMouseDown={handleResizeMouseDown}
+                                sx={{
+                                    position: 'absolute',
+                                    top: 0, // 移动到顶部
+                                    left: 0,
+                                    right: 0,
+                                    height: '10px',
+                                    cursor: 'ns-resize',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    '&:hover div': {
+                                        backgroundColor: theme.palette.action.active,
+                                    }
+                                }}
+                            >
+                                 <Box sx={{ width: '40px', height: '4px', backgroundColor: theme.palette.divider, borderRadius: '2px', transition: 'background-color 0.2s' }} />
+                            </Box>
+                            <Typography variant="subtitle2" sx={{ flexShrink: 0 }}>诊断信息</Typography>
+                            <pre style={{ flexGrow: 1, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: '0.8rem', overflowY: 'auto' }}>
                                 {JSON.stringify(diagnostics, null, 2)}
                             </pre>
                         </Paper>

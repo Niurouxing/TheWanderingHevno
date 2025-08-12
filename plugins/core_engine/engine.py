@@ -162,6 +162,7 @@ class ExecutionEngine(SubGraphRunner):
         
         # 4. 执行图
         final_node_states = await self._internal_execute_graph(main_graph_def, context)
+        diagnostics_log = context.run_vars.get("diagnostics_log", [])
         
         # 5. 创建新快照和更新后的 Lore
         new_snapshot, updated_lore = await create_next_snapshot(
@@ -196,6 +197,8 @@ class ExecutionEngine(SubGraphRunner):
         )
         
         # 7. 返回更新后的 Sandbox 对象
+        setattr(sandbox, '_temp_diagnostics_log', diagnostics_log)
+        
         return sandbox
 
     async def execute_graph(
@@ -303,6 +306,7 @@ class ExecutionEngine(SubGraphRunner):
                         )
                     )
                 run.set_node_result(node_id, output)
+
             except Exception as e:
                 error_message = f"Worker-level error for node {node_id}: {type(e).__name__}: {e}"
                 import traceback
@@ -390,7 +394,8 @@ class ExecutionEngine(SubGraphRunner):
                     config=processed_config,
                     context=context,
                     subgraph_runner=self,
-                    pipeline_state=pipeline_state
+                    pipeline_state=pipeline_state,
+                    node=node
                 )
                 
                 if not isinstance(output, dict):

@@ -296,6 +296,10 @@ class SandboxStoreInterface(ABC):
 class StepDiagnostics(BaseModel):
     """用于承载本次执行的诊断信息。"""
     execution_time_ms: float
+    detailed_log: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="一个包含本次 step 执行期间所有详细诊断事件的列表。"
+    )
 
 class StepResponse(BaseModel):
     """/step 端点的标准响应信封。"""

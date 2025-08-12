@@ -270,10 +270,18 @@ async def execute_sandbox_step(
         updated_sandbox = await engine.step(sandbox, user_input)
         execution_time_ms = (time.monotonic() - start_time) * 1000
         
+        # 从临时属性中获取诊断日志
+        diagnostics_log = getattr(updated_sandbox, '_temp_diagnostics_log', None)
+        if hasattr(updated_sandbox, '_temp_diagnostics_log'):
+            delattr(updated_sandbox, '_temp_diagnostics_log') # 清理临时属性
+
         return StepResponse(
             status="COMPLETED",
             sandbox=updated_sandbox,
-            diagnostics=StepDiagnostics(execution_time_ms=execution_time_ms)
+            diagnostics=StepDiagnostics(
+                execution_time_ms=execution_time_ms,
+                detailed_log=diagnostics_log # 将日志放入响应
+            )
         )
     except Exception as e:
         logger.error(f"Error during engine step for sandbox {sandbox_id}: {e}", exc_info=True)

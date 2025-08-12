@@ -63,15 +63,22 @@ def create_main_execution_context(
     从持久化的 Snapshot 和 Sandbox 中，为一次安全的、隔离的执行准备运行时上下文。
     使用深拷贝来防止执行过程意外修改原始状态。
     """
+    # 在 run_vars 中添加一个 diagnostics_log 列表
+    initial_run_vars = {
+        "triggering_input": {},
+        "diagnostics_log": []
+    }
+    if run_vars:
+        initial_run_vars.update(run_vars)
+        
     shared_context = SharedContext(
-        # 【新】从 sandbox 和 snapshot 中深拷贝三层作用域的状态
         definition_state=deepcopy(sandbox.definition),
         lore_state=deepcopy(sandbox.lore),
         moment_state=deepcopy(snapshot.moment),
         
         session_info={
             "start_time": snapshot.created_at,
-            "turn_count": 0 # (此逻辑可能需要根据需求调整)
+            "turn_count": 0
         },
         global_write_lock=asyncio.Lock(),
         services=DotAccessibleDict(ServiceResolverProxy(container))
@@ -79,9 +86,10 @@ def create_main_execution_context(
     return ExecutionContext(
         shared=shared_context,
         initial_snapshot=snapshot,
-        run_vars=run_vars or {},
+        run_vars=initial_run_vars,
         hook_manager=hook_manager
     )
+
 
 def create_sub_execution_context(
     parent_context: ExecutionContext, 
