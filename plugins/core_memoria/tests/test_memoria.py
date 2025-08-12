@@ -55,41 +55,12 @@ async def test_memoria_add_and_query(
     assert query_output[0]["content"] == "The player entered the village."
 
 
-async def test_memoria_aggregate_runtime(
-    test_engine_setup: Tuple[ExecutionEngineInterface, Container, HookManager],
-    sandbox_factory: callable
-):
-    """
-    Tests the full flow from adding, querying, to aggregating memories into a string.
-    """
-    engine, container, _ = test_engine_setup
-
-    # 直接使用通用的 sandbox_factory
-    sandbox = await sandbox_factory(
-        graph_collection=GraphCollection.model_validate({
-            "main": {
-                "nodes": [
-                    {"id": "add1", "run": [{"runtime": "memoria.add", "config": {"stream": "log", "content": "First event."}}]},
-                    {"id": "add2", "run": [{"runtime": "memoria.add", "config": {"stream": "log", "content": "Second event."}}]},
-                    {"id": "query", "depends_on": ["add1", "add2"], "run": [{"runtime": "memoria.query", "config": {"stream": "log", "latest": 2}}]},
-                    {"id": "aggregate", "run": [{"runtime": "memoria.aggregate", "config": {
-                        "entries": "{{ nodes.query.output }}",
-                        "template": "Event #{sequence_id}: {content}",
-                        "joiner": " | "
-                    }}]}
-                ]
-            }
-        })
-    )
-
-    final_sandbox = await engine.step(sandbox, {})
-    snapshot_store = container.resolve("snapshot_store")
-    final_snapshot = snapshot_store.get(final_sandbox.head_snapshot_id)
-    assert final_snapshot is not None
-
-    # sequence_id 是从 1 开始递增的
-    expected_string = "Event #1: First event. | Event #2: Second event."
-    assert final_snapshot.run_output["aggregate"]["output"] == expected_string
+# --- TEST REMOVED ---
+# async def test_memoria_aggregate_runtime(...):
+# This test has been removed because the 'memoria.aggregate' runtime has been deprecated
+# in favor of the more generic 'system.data.format' runtime from core_engine.
+# The functionality of formatting a list of dictionaries is now tested as part of
+# the core_engine plugin's tests.
 
 
 async def test_complex_query_with_tags_and_levels(

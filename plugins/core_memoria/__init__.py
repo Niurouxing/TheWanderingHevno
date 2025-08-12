@@ -7,7 +7,7 @@ from uuid import UUID
 
 from backend.core.contracts import Container, HookManager
 from plugins.core_engine.contracts import ExecutionContext
-from .runtimes import MemoriaAddRuntime, MemoriaQueryRuntime, MemoriaAggregateRuntime
+from .runtimes import MemoriaAddRuntime, MemoriaQueryRuntime
 from .models import Memoria, MemoryEntry
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,6 @@ async def provide_memoria_runtimes(runtimes: dict) -> dict:
     memoria_runtimes = {
         "memoria.add": MemoriaAddRuntime,
         "memoria.query": MemoriaQueryRuntime,
-        "memoria.aggregate": MemoriaAggregateRuntime,
     }
     
     for name, runtime_class in memoria_runtimes.items():

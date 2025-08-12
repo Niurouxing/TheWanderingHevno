@@ -114,31 +114,3 @@ class MemoriaQueryRuntime(RuntimeInterface):
         results.sort(key=lambda e: e.sequence_id, reverse=reverse)
 
         return {"output": [entry.model_dump() for entry in results]}
-
-
-class MemoriaAggregateRuntime(RuntimeInterface):
-    """
-    将一批记忆条目聚合成格式化的文本。
-    此运行时只处理传入的配置，不直接与状态交互，因此无需修改。
-    """
-    async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
-        entries_data = config.get("entries")
-        template = config.get("template", "{content}")
-        joiner = config.get("joiner", "\n\n")
-
-        if not isinstance(entries_data, list):
-            raise TypeError("MemoriaAggregateRuntime 'entries' field must be a list of memory entry objects.")
-        
-        formatted_parts = []
-        for entry_dict in entries_data:
-            # 简单的模板替换
-            part = template.format(
-                id=entry_dict.get('id', ''),
-                sequence_id=entry_dict.get('sequence_id', ''),
-                level=entry_dict.get('level', ''),
-                tags=', '.join(entry_dict.get('tags', [])),
-                content=entry_dict.get('content', '')
-            )
-            formatted_parts.append(part)
-        
-        return {"output": joiner.join(formatted_parts)}
