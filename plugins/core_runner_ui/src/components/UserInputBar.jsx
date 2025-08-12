@@ -1,23 +1,11 @@
 // plugins/core_runner_ui/src/components/UserInputBar.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { TextField, Button, Box, CircularProgress } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 
-export function UserInputBar({ onSendMessage, isLoading, initialText = '' }) {
+// [重构] 移除了 initialText 相关的 props 和 useEffect
+export function UserInputBar({ onSendMessage, isLoading }) {
     const [text, setText] = useState('');
-    const inputRef = React.useRef(null);
-
-    // 当外部的 initialText 变化时，更新内部状态
-    useEffect(() => {
-        setText(initialText);
-        // 如果有初始文本，聚焦并移动光标到末尾
-        if (initialText && inputRef.current) {
-            inputRef.current.focus();
-            setTimeout(() => {
-                inputRef.current.selectionStart = inputRef.current.selectionEnd = initialText.length;
-            }, 0);
-        }
-    }, [initialText]);
 
     const handleSubmit = (e) => {
         e.preventDefault();
@@ -30,7 +18,6 @@ export function UserInputBar({ onSendMessage, isLoading, initialText = '' }) {
     return (
         <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <TextField
-                inputRef={inputRef} 
                 fullWidth
                 variant="outlined"
                 placeholder="在此输入消息..."

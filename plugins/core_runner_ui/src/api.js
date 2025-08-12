@@ -2,6 +2,15 @@
 
 const BASE_URL = '/api/sandboxes';
 
+export async function getSandboxDetails(sandboxId) {
+    const response = await fetch(`${BASE_URL}/${sandboxId}`); // 使用标准的 GET /resource/{id}
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({ detail: `Failed to fetch details for sandbox ${sandboxId}.` }));
+        throw new Error(err.detail || `HTTP Error ${response.status}`);
+    }
+    return response.json();
+}
+
 /**
  * 统一写入 API
  */
