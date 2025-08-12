@@ -7,10 +7,23 @@ from plugins.core_engine.contracts import GraphCollection
 
 @pytest.fixture(scope="session")
 def linear_collection() -> GraphCollection:
+    # CHANGED: Updated llm.default calls from 'prompt' to 'contents' list.
     return GraphCollection.model_validate({"main": {"nodes": [
         {"id": "A", "run": [{"runtime": "system.io.input", "config": {"value": "a story about a cat"}}]},
-        {"id": "B", "run": [{"runtime": "llm.default", "config": {"model": "mock/model", "prompt": "{{ f'The story is: {nodes.A.output}' }}"}}]},
-        {"id": "C", "run": [{"runtime": "llm.default", "config": {"model": "mock/model", "prompt": "{{ nodes.B.llm_output }}"}}]}
+        {"id": "B", "run": [{"runtime": "llm.default", "config": {
+            "model": "mock/model", 
+            "contents": [{
+                "role": "user",
+                "content": "{{ f'The story is: {nodes.A.output}' }}"
+            }]
+        }}]},
+        {"id": "C", "run": [{"runtime": "llm.default", "config": {
+            "model": "mock/model",
+            "contents": [{
+                "role": "user",
+                "content": "{{ nodes.B.llm_output }}"
+            }]
+        }}]}
     ]}})
 
 @pytest.fixture(scope="session")
@@ -23,13 +36,20 @@ def parallel_collection() -> GraphCollection:
 
 @pytest.fixture(scope="session")
 def pipeline_collection() -> GraphCollection:
-    # 已更新: world.main_character -> moment.main_character
+    # CHANGED: Updated the llm.default call from 'prompt' to 'contents' list.
     return GraphCollection.model_validate({"main": {"nodes": [{"id": "A", "run": [
         {"runtime": "system.execute", "config": {"code": "moment.main_character = 'Sir Reginald'"}},
         {"runtime": "system.io.input", "config": {"value": "A secret message"}},
-        {"runtime": "llm.default", "config": {"model": "mock/model", "prompt": "{{ f'Tell a story about {moment.main_character}. He just received this message: {pipe.output}' }}"}}
+        {"runtime": "llm.default", "config": {
+            "model": "mock/model", 
+            "contents": [{
+                "role": "user",
+                "content": "{{ f'Tell a story about {moment.main_character}. He just received this message: {pipe.output}' }}"
+            }]
+        }}
     ]}]}})
 
+# ... (rest of the file remains unchanged) ...
 @pytest.fixture(scope="session")
 def world_vars_collection() -> GraphCollection:
     # 已更新: world.theme -> moment.theme

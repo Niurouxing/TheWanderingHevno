@@ -1,4 +1,4 @@
-# tests/conftest.py
+# ./conftest.py
 
 import pytest
 import asyncio
