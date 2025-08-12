@@ -89,7 +89,6 @@ async def create_sandbox(
     # --- [MODIFIED] 扩展默认模板以包含 codex 定义 ---
     DEFAULT_LORE = {
         "graphs": {
-            "__hevno_type__": "hevno/graph_collection",
             "main": {
                 "__hevno_type__": "hevno/graph",
                 "nodes": [
@@ -142,7 +141,7 @@ async def create_sandbox(
                                         "name": "注入聊天记录",
                                         "type": "INJECT_MESSAGES",
                                         "source": "{{ nodes.get_chat_history.output }}",
-                                        "is_enabled": "{{ nodes.get_chat_history.output | length > 0 }}"
+                                        "is_enabled": "{{  len(nodes.get_chat_history.output) > 0 }}"
                                     },
                                     {
                                         "name": "用户当前输入",
@@ -160,7 +159,7 @@ async def create_sandbox(
                         "run": [{
                             "runtime": "system.execute", 
                             "config": {
-                                "code": "{{ moment._user_output = nodes.generate_response.output }}"
+                                "code": "{{ moment._user_output = nodes.generate_response.llm_output }}"
                             }
                         }]
                     },
@@ -180,7 +179,6 @@ async def create_sandbox(
             }
         },
         "codices": {
-            "__hevno_type__": "hevno/codex_collection",
             "ai_persona": {
                 "__hevno_type__": "hevno/codex",
                 "description": "Defines the core personality and instructions for the AI.",

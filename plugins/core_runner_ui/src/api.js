@@ -1,3 +1,5 @@
+// plugins/core_runner_ui/src/api.js
+
 const BASE_URL = '/api/sandboxes';
 
 /**
@@ -46,14 +48,43 @@ export async function step(sandboxId, input) {
         body: JSON.stringify(input),
     });
 
+    // 保持原有的错误处理
     if (!response.ok) {
         const err = await response.json().catch(() => ({ detail: "Step API call failed." }));
-        // 将错误包装成与成功响应相似的结构，以便于处理
         return {
             status: "ERROR",
             error_message: err.detail || `HTTP Error ${response.status}`,
             sandbox: null,
         }
+    }
+    return response.json();
+}
+
+/**
+ * 获取沙盒的完整快照历史
+ */
+export async function getHistory(sandboxId) {
+    const response = await fetch(`${BASE_URL}/${sandboxId}/history`);
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({ detail: "Failed to get history." }));
+        throw new Error(err.detail || `HTTP Error ${response.status}`);
+    }
+    return response.json();
+}
+
+/**
+ * 将沙盒回滚到指定的快照
+ */
+export async function revert(sandboxId, snapshotId) {
+    const response = await fetch(`${BASE_URL}/${sandboxId}/revert`, {
+        method: 'PUT', // 注意: 你的后端可能是 POST 或 PUT，根据实际情况调整
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ snapshot_id: snapshotId }),
+    });
+
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({ detail: "Revert operation failed." }));
+        throw new Error(err.detail || `HTTP Error ${response.status}`);
     }
     return response.json();
 }

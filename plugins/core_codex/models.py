@@ -20,12 +20,40 @@ class CodexConfig(BaseModel):
     recursion_depth: int = Field(default=3, ge=0)
     model_config = ConfigDict(extra='forbid')
 
-class Codex(BaseModel):
-    description: Optional[str] = None
-    config: CodexConfig = Field(default_factory=CodexConfig)
-    entries: List[CodexEntry]
-    metadata: Dict[str, Any] = Field(default_factory=dict) 
-    model_config = ConfigDict(extra='forbid')
+class Codex(RootModel[Dict[str, Any]]):
+    """
+    Codex 定义，本质上是一个字典。
+    它必须包含一个 'entries' 键，其值为一个条目列表。
+    """
+    @field_validator('root')
+    @classmethod
+    def check_entries_exist_and_are_valid(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        if 'entries' not in v or not isinstance(v['entries'], list):
+            raise ValueError("A codex must contain an 'entries' list.")
+        
+        # 手动验证每个条目
+        validated_entries = [CodexEntry.model_validate(entry) for entry in v['entries']]
+        v['entries'] = validated_entries
+        return v
+
+    @property
+    def entries(self) -> List[CodexEntry]:
+        """提供便捷的属性访问器。"""
+        return self.root['entries']
+
+    @property
+    def config(self) -> CodexConfig:
+        """提供便捷的属性访问器，并处理默认值。"""
+        config_data = self.root.get('config', {})
+        return CodexConfig.model_validate(config_data)
+
+    @property
+    def description(self) -> Optional[str]:
+        return self.root.get('description')
+
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        return self.root.get('metadata', {})
 
 class CodexCollection(RootModel[Dict[str, Codex]]):
     pass

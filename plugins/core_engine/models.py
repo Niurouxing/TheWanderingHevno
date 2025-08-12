@@ -28,10 +28,33 @@ class GenericNode(BaseModel):
     )
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
-class GraphDefinition(BaseModel):
-    """图定义，包含一个节点列表。"""
-    nodes: List[GenericNode]
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+class GraphDefinition(RootModel[Dict[str, Any]]):
+    """
+    图定义，本质上是一个字典。
+    它必须包含一个 'nodes' 键，其值为一个节点列表。
+    """
+    @field_validator('root')
+    @classmethod
+    def check_nodes_exist_and_are_valid(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        """验证器，确保 'nodes' 键存在且其内容是有效的节点列表。"""
+        if "nodes" not in v:
+            raise ValueError("A 'nodes' list must be defined in the graph definition.")
+        
+        # Pydantic v2 会自动验证内部列表的类型，如果 GenericNode 被正确定义。
+        # 这里我们手动触发一次验证以确保健壮性。
+        validated_nodes = [GenericNode.model_validate(node) for node in v["nodes"]]
+        v["nodes"] = validated_nodes # 可以选择用验证过的模型替换原始数据
+        return v
+
+    @property
+    def nodes(self) -> List[GenericNode]:
+        """提供便捷的属性访问器，用法与旧模型保持一致。"""
+        return self.root['nodes']
+    
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        """提供便捷的属性访问器。"""
+        return self.root.get('metadata', {})
 
 class GraphCollection(RootModel[Dict[str, GraphDefinition]]):
     """
