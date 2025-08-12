@@ -1,0 +1,26 @@
+{
+    "id": "core_llm_config",
+    "name": "LLM Configuration",
+    "version": "1.0.0",
+    "description": "Provides a UI to configure and monitor LLM provider API keys.",
+    "author": "Hevno Team",
+    "frontend": {
+        "type": "page-component",
+        "priority": 120,
+        "entryPoint": "dist/main.js",
+        "srcEntryPoint": "src/LLMConfigPage.jsx",
+        "contributions": {
+            "pageComponents": [
+                {
+                    "id": "llm_config.main_view",
+                    "componentExportName": "LLMConfigPage",
+                    "menu": {
+                        "path": "/config/llm",
+                        "title": "LLM 配置",
+                        "icon": "KeyRounded"
+                    }
+                }
+            ]
+        }
+    }
+}

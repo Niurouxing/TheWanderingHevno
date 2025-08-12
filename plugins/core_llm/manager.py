@@ -173,6 +173,26 @@ class KeyPoolManager:
         """获取指定提供商的密钥池。"""
         return self._pools.get(provider_name)
 
+    def update_provider_keys(self, provider_name: str, new_keys: List[str]):
+        """
+        在运行时用一组新密钥重新初始化一个提供商的密钥池。
+        """
+        if provider_name not in self._provider_env_vars:
+            raise ValueError(f"Provider '{provider_name}' is not registered.")
+        
+        if not new_keys:
+            # 如果提供了空列表，则移除密钥池
+            if provider_name in self._pools:
+                del self._pools[provider_name]
+                print(f"Key pool for provider '{provider_name}' has been cleared.")
+            return
+
+        # 创建一个新的密钥池并替换旧的
+        self._pools[provider_name] = ProviderKeyPool(provider_name, new_keys)
+        print(f"Re-initialized provider '{provider_name}' with {len(new_keys)} new in-memory keys.")
+
+
+
     # 为了方便上层服务调用，我们将核心方法直接暴露在这里
     
     @asynccontextmanager

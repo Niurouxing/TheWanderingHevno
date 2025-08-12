@@ -3,6 +3,7 @@
 import logging
 import os
 from typing import List, Dict, Type
+from fastapi import APIRouter, Depends
 
 # 从平台核心导入接口和类型
 from backend.core.contracts import Container, HookManager
@@ -16,6 +17,7 @@ from .reporters import LLMProviderReporter
 from .providers.base import LLMProvider
 from .providers.gemini import GeminiProvider
 from .providers.mock import MockProvider
+from .config_api import config_api_router
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +111,13 @@ async def provide_reporter(reporters: list, container: Container) -> list:
     logger.debug("Provided 'LLMProviderReporter' to the auditor.")
     return reporters
 
+async def provide_api_router(routers: List[APIRouter]) -> List[APIRouter]:
+    """钩子实现：将本插件的配置API路由添加到收集中。"""
+    routers.append(config_api_router)
+    logger.debug("Provided LLM configuration API router to the application.")
+    return routers
+
+
 
 # --- 主注册函数 (Main Registration Function) ---
 def register_plugin(container: Container, hook_manager: HookManager):
@@ -122,6 +131,11 @@ def register_plugin(container: Container, hook_manager: HookManager):
     hook_manager.add_implementation("services_post_register", populate_llm_services, plugin_name="core_llm")
     hook_manager.add_implementation("collect_llm_providers", provide_llm_providers, plugin_name="core_llm")
     hook_manager.add_implementation("collect_runtimes", provide_runtime, plugin_name="core_llm")
+    hook_manager.add_implementation(
+        "collect_api_routers",
+        provide_api_router,
+        plugin_name="core_llm"
+    )
     
     # 移除 lambda，因为 HookManager 现在足够智能
     hook_manager.add_implementation("collect_reporters", provide_reporter, plugin_name="core_llm")
