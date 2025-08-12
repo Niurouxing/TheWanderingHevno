@@ -24,11 +24,6 @@ const RUNTIME_CONFIG_SPECS = {
         { key: 'tags', type: 'text', label: '标签 (逗号分隔)' },
         { key: 'order', type: 'select', label: '排序', options: ['升序', '降序'], default: '升序' },
     ],
-    'memoria.aggregate': [
-        { key: 'entries', type: 'text', label: '条目 (宏, 如来自 pipe.output)', required: true, multiline: true },
-        { key: 'template', type: 'text', label: '模板', default: '{content}' },
-        { key: 'joiner', type: 'text', label: '连接符', default: '\\n\\n' },
-    ],
     // Codex
     'codex.invoke': [
             { key: 'recursion_enabled', type: 'switch', label: '启用递归', default: false },

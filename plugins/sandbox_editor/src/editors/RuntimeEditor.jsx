@@ -125,7 +125,6 @@ export function RuntimeEditor({ runList, onRunListChange }) {
           <ListSubheader>Memoria</ListSubheader>
           <MenuItem value="memoria.add">memoria.add</MenuItem>
           <MenuItem value="memoria.query">memoria.query</MenuItem>
-          <MenuItem value="memoria.aggregate">memoria.aggregate</MenuItem>
 
           <ListSubheader>Codex</ListSubheader>
           <MenuItem value="codex.invoke">codex.invoke</MenuItem>
