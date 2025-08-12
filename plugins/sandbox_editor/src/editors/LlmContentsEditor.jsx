@@ -88,13 +88,29 @@ export function LlmContentsEditor({ contents, onContentsChange }) {
     const [items, setItems] = useState([]);
     const [anchorEl, setAnchorEl] = useState(null);
 
-    // Add unique IDs for DND compatibility
+    // --- [修复] 修改 useEffect 逻辑以稳定 _internal_id ---
     useEffect(() => {
-        setItems((contents || []).map((item, index) => ({
-            ...item,
-            _internal_id: `${Date.now()}_${index}`
-        })));
-    }, [contents]);
+        setItems(prevItems => {
+            // 创建一个映射，用于快速查找现有项的 _internal_id
+            const idMap = new Map(prevItems.map(item => [JSON.stringify({type: item.type, role: item.role, content: item.content, source: item.source}), item._internal_id]));
+
+            const newItems = (contents || []).map((item, index) => {
+                // 如果是新添加的项（长度变化），或者在旧项中找不到，则生成新的 ID
+                if (prevItems.length !== contents.length || !prevItems[index] || !prevItems[index]._internal_id) {
+                     return {
+                        ...item,
+                        _internal_id: `${item.type}_${Date.now()}_${index}`
+                    };
+                }
+                // 否则，保留旧的 ID
+                return {
+                    ...item,
+                    _internal_id: prevItems[index]._internal_id
+                };
+            });
+            return newItems;
+        });
+    }, [contents]); // 依赖仍然是 contents，但内部逻辑更智能了
 
     const sensors = useSensors(
         useSensor(PointerSensor),
@@ -102,6 +118,7 @@ export function LlmContentsEditor({ contents, onContentsChange }) {
     );
     
     const notifyParent = (newItems) => {
+        // 在通知父组件之前，移除内部使用的 _internal_id
         const cleanedItems = newItems.map(({ _internal_id, ...rest }) => rest);
         onContentsChange(cleanedItems);
     }
@@ -124,7 +141,8 @@ export function LlmContentsEditor({ contents, onContentsChange }) {
         } else {
             newItem = { type: 'INJECT_MESSAGES', source: '' };
         }
-        const updatedItems = [...items, { ...newItem, _internal_id: `${Date.now()}_${items.length}` }];
+        // 在添加时就生成稳定的 _internal_id
+        const updatedItems = [...items, { ...newItem, _internal_id: `${type}_${Date.now()}_${items.length}` }];
         setItems(updatedItems);
         notifyParent(updatedItems);
         handleCloseMenu();
@@ -132,7 +150,8 @@ export function LlmContentsEditor({ contents, onContentsChange }) {
 
     const handleUpdateItem = (index, updatedItem) => {
         const newItems = [...items];
-        newItems[index] = updatedItem;
+        // 确保更新时 _internal_id 不会丢失
+        newItems[index] = { ...updatedItem, _internal_id: items[index]._internal_id };
         setItems(newItems);
         notifyParent(newItems);
     };

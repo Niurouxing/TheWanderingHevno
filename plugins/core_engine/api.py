@@ -91,6 +91,7 @@ async def create_sandbox(
         "graphs": {
             "__hevno_type__": "hevno/graph_collection",
             "main": {
+                "__hevno_type__": "hevno/graph",
                 "nodes": [
                     {
                         "id": "record_user_input", 

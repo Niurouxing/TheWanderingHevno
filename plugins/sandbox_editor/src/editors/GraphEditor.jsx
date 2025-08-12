@@ -18,7 +18,12 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack 
     const newNodeFormRef = useRef(null);
 
     useEffect(() => {
-        setNodes(graphData.nodes || []);
+        // --- [修复 1/7] 在加载数据时，为每个节点添加一个稳定的内部ID ---
+        const nodesWithInternalIds = (graphData.nodes || []).map((node, index) => ({
+            ...node,
+            _internal_id: node.id + `_${Date.now()}_${index}`
+        }));
+        setNodes(nodesWithInternalIds);
     }, [graphData]);
 
     const sensors = useSensors(
@@ -26,29 +31,36 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack 
         useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
     );
 
-    const syncNodes = async (updatedNodes, optimisticState) => {
+    const syncNodes = async (nodesToSave, optimisticState) => {
         setErrorMessage('');
-        setNodes(optimisticState || updatedNodes); // 乐观更新
+        // 乐观更新UI，使用包含 _internal_id 的状态
+        setNodes(optimisticState);
         try {
             await mutate(sandboxId, [{
                 type: 'UPSERT',
                 path: `${basePath}/nodes`,
-                value: updatedNodes,
+                value: nodesToSave, // 只保存干净的数据到后端
             }]);
-            setNodes(updatedNodes); // 确认最终状态
+            // 确认最终状态
+            setNodes(optimisticState);
         } catch (e) {
             setErrorMessage(`Failed to save graph changes: ${e.message}`);
-            setNodes(nodes); // 回滚
+            // 如果失败，回滚到操作前的状态 (此处的 'nodes' 是闭包捕获的旧状态)
+            setNodes(nodes);
         }
     };
     
     const handleNodeDragEnd = async (event) => {
         const { active, over } = event;
         if (active.id !== over.id) {
-            const oldIndex = nodes.findIndex(n => n.id === active.id);
-            const newIndex = nodes.findIndex(n => n.id === over.id);
+            // --- [修复 2/7] 使用 _internal_id 来查找索引 ---
+            const oldIndex = nodes.findIndex(n => n._internal_id === active.id);
+            const newIndex = nodes.findIndex(n => n._internal_id === over.id);
+            if (oldIndex === -1 || newIndex === -1) return;
+
             const reorderedNodes = arrayMove(nodes, oldIndex, newIndex);
-            await syncNodes(reorderedNodes, reorderedNodes);
+            const nodesToSave = reorderedNodes.map(({_internal_id, ...rest}) => rest);
+            await syncNodes(nodesToSave, reorderedNodes);
         }
     };
     
@@ -65,20 +77,32 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack 
             }
             ids.add(node.id);
         }
-        await syncNodes(nodes);
+        const nodesToSave = nodes.map(({_internal_id, ...rest}) => rest);
+        await syncNodes(nodesToSave, nodes);
         alert('Graph saved!');
     };
     
-    const handleDeleteNode = async (idToDelete) => {
-        if (!window.confirm(`Are you sure you want to delete node "${idToDelete}"?`)) return;
-        const updatedNodes = nodes.filter(n => n.id !== idToDelete);
-        await syncNodes(updatedNodes, updatedNodes);
+    const handleDeleteNode = async (internalIdToDelete) => {
+        if (!window.confirm(`Are you sure you want to delete this node?`)) return;
+        // --- [修复 3/7] 使用 _internal_id 进行过滤 ---
+        const updatedNodes = nodes.filter(n => n._internal_id !== internalIdToDelete);
+        const nodesToSave = updatedNodes.map(({_internal_id, ...rest}) => rest);
+        await syncNodes(nodesToSave, updatedNodes);
     };
 
     const handleAddNode = () => {
-        const newNode = { id: `new_node_${Date.now()}`, depends_on: [], run: [], metadata: {} };
+        // --- [修复 4/7] 添加节点时，同时创建 _internal_id ---
+        const newInternalId = `new_node_internal_${Date.now()}`;
+        const newNode = { 
+            _internal_id: newInternalId,
+            id: `new_node_${Date.now()}`, 
+            depends_on: [], 
+            run: [], 
+            metadata: {} 
+        };
         setNodes(prev => [...prev, newNode]);
-        setExpandedNodes(prev => ({...prev, [newNode.id]: true}));
+        // 使用 _internal_id 作为 key 来展开
+        setExpandedNodes(prev => ({...prev, [newInternalId]: true}));
         setTimeout(() => {
              newNodeFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
         }, 100)
@@ -94,11 +118,11 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack 
         setNodes(updatedNodes);
     };
 
-    const toggleNodeExpand = (id) => {
-        setExpandedNodes(prev => ({ ...prev, [id]: !prev[id] }));
+    // --- [修复 5/7] 使用 _internal_id 来切换展开状态 ---
+    const toggleNodeExpand = (internalId) => {
+        setExpandedNodes(prev => ({ ...prev, [internalId]: !prev[internalId] }));
     };
 
-    // ---恢复渲染逻辑 ---
     const renderNodeForm = (node, index) => {
         return (
             <Box sx={{ pl: 9, pr: 2, pb: 2, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
@@ -132,18 +156,20 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack 
 
             <Box sx={{ flexGrow: 1, overflowY: 'auto' }}>
                 <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleNodeDragEnd}>
-                    <SortableContext items={nodes.map(n => n.id)} strategy={verticalListSortingStrategy}>
+                    {/* --- [修复 6/7] 使用 _internal_id 作为 dnd-kit 的 ID 来源 --- */}
+                    <SortableContext items={nodes.map(n => n._internal_id)} strategy={verticalListSortingStrategy}>
                         <List>
                             {nodes.map((node, index) => (
-                                <div key={node.id} ref={index === nodes.length -1 ? newNodeFormRef : null}>
+                                // --- [修复 7/7] 使用 _internal_id 作为 React key 和组件的唯一标识 ---
+                                <div key={node._internal_id} ref={index === nodes.length -1 ? newNodeFormRef : null}>
                                     <SortableNodeItem
-                                        id={node.id}
+                                        id={node._internal_id}
                                         node={node}
-                                        expanded={!!expandedNodes[node.id]}
-                                        onToggleExpand={() => toggleNodeExpand(node.id)}
-                                        onDelete={() => handleDeleteNode(node.id)}
+                                        expanded={!!expandedNodes[node._internal_id]}
+                                        onToggleExpand={() => toggleNodeExpand(node._internal_id)}
+                                        onDelete={() => handleDeleteNode(node._internal_id)}
                                     >
-                                        <Collapse in={!!expandedNodes[node.id]} timeout="auto" unmountOnExit>
+                                        <Collapse in={!!expandedNodes[node._internal_id]} timeout="auto" unmountOnExit>
                                             {renderNodeForm(node, index)}
                                         </Collapse>
                                     </SortableNodeItem>
