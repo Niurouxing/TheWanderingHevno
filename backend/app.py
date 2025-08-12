@@ -9,6 +9,10 @@ from backend.core.hooks import HookManager
 from backend.core.loader import PluginLoader
 from backend.core.tasks import BackgroundTaskManager
 
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pathlib import Path
+
 from plugins.core_remote_hooks.contracts import GlobalHookRegistryInterface
 
 @asynccontextmanager
@@ -96,5 +100,21 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    static_files_dir = Path("./dist")
+    
+    # 1. 挂载 /plugins 目录，用于服务插件的前端构建文件 (JS, CSS等)
+    # 这必须在挂载根目录之前
+    app.mount("/plugins", StaticFiles(directory="./plugins"), name="plugin-assets")
+
+    # 2. 挂载根目录 / 以服务主前端应用 (index.html, etc.)
+    if static_files_dir.is_dir():
+        app.mount("/", StaticFiles(directory=static_files_dir, html=True), name="static-app")
+
+        # 3. 添加一个404处理器，将所有未匹配的路径重定向到 index.html
+        # 这对于单页应用（SPA）的前端路由至关重要
+        @app.exception_handler(404)
+        async def not_found_exception_handler(request, exc):
+            return FileResponse(static_files_dir / "index.html")
 
     return app

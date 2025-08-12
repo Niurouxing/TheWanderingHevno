@@ -115,34 +115,34 @@ def main(paths, output_file="code_collection.md"):
     return save_to_markdown(content, output_file)
 
 if __name__ == "__main__":
-    paths = [
-        "./backend", 
-        "./plugins/core_engine",
-        "./plugins/core_api",
-        "./plugins/core_codex",
-        "./plugins/diagnostics",
-        "./plugins/core_memoria",
-        "./plugins/core_remote_hooks",
-        "./plugins/core_websocket",
-        "./plugins/core_llm",
-        # "./plugins/core_logging",
-        # "./plugins/core_persistence",
-        # "./plugins/core_diagnostics",
-        "./frontend",
-        "./plugins/core_layout",
-        # "./plugins/page_demo",
-        "./plugins/sandbox_editor",
-        "./plugins/sandbox_explorer",
-        "./plugins/core_runner_ui",
-        # "./hevno.json",
-        # "./cli.py",
-        "./frontend",
-        # "./tests/conftest.py",
-        # "./tests/conftest_data.py",
-        # "./conftest.py",
-        # "./plugins/core_memoria",
-        # "./",
-    ]
+    # paths = [
+    #     "./backend", 
+    #     "./plugins/core_engine",
+    #     "./plugins/core_api",
+    #     "./plugins/core_codex",
+    #     "./plugins/diagnostics",
+    #     "./plugins/core_memoria",
+    #     "./plugins/core_remote_hooks",
+    #     "./plugins/core_websocket",
+    #     "./plugins/core_llm",
+    #     # "./plugins/core_logging",
+    #     # "./plugins/core_persistence",
+    #     # "./plugins/core_diagnostics",
+    #     "./frontend",
+    #     "./plugins/core_layout",
+    #     # "./plugins/page_demo",
+    #     "./plugins/sandbox_editor",
+    #     "./plugins/sandbox_explorer",
+    #     "./plugins/core_runner_ui",
+    #     # "./hevno.json",
+    #     # "./cli.py",
+    #     "./frontend",
+    #     # "./tests/conftest.py",
+    #     # "./tests/conftest_data.py",
+    #     # "./conftest.py",
+    #     # "./plugins/core_memoria",
+    #     # "./",
+    # ]
 
     # paths = [
     #     "./frontend",
@@ -170,9 +170,9 @@ if __name__ == "__main__":
     #      "./vite.config.js",
     # ]
 
-    # paths = [  
-    #      "plugins/core_engine",
-    # ]
+    paths = [  
+         "./",
+    ]
     output_path = "code_collection.md"
     result = main(paths, output_path)
     print(result)

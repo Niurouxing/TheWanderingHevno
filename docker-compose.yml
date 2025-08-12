@@ -1,0 +1,22 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  hevno-engine:
+    # 从当前目录的 Dockerfile 构建镜像
+    build: .
+    # 为镜像命名
+    image: hevno-engine:latest
+    # 设置容器重启策略，除非手动停止，否则总是重启
+    restart: unless-stopped
+    # 映射端口：将用户电脑的 8000 端口映射到容器的 8000 端口
+    ports:
+      - "8000:8000"
+    # 挂载卷以实现数据持久化
+    # 将用户电脑上的 ./assets 目录映射到容器的 /app/assets 目录
+    # 这样用户的沙盒数据就会被保存在电脑上，即使容器被删除也不会丢失
+    volumes:
+      - ./assets:/app/assets
+    # 从 .env 文件加载环境变量，安全地传入 API 密钥
+    env_file:
+      - .env
