@@ -76,7 +76,6 @@ async def get_sandbox_by_id(
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found.")
     return sandbox
-
 @router.post("", response_model=Sandbox, status_code=201, summary="Create a new Sandbox")
 async def create_sandbox(
     request_body: CreateSandboxRequest, 
@@ -87,21 +86,122 @@ async def create_sandbox(
     创建一个新的沙盒，并将其立即持久化到本地文件系统。
     如果未提供定义，则使用默认的聊天机器人模板。
     """
-    # 定义默认模板
+    # --- [MODIFIED] 扩展默认模板以包含 codex 定义 ---
     DEFAULT_LORE = {
         "graphs": {
+            "__hevno_type__": "hevno/graph_collection",
             "main": {
-                "__hevno_type__": "hevno/graph",
                 "nodes": [
-                    {"id": "record_user_input", "run": [{"runtime": "memoria.add", "config": {"stream": "chat_history", "level": "user", "content": "{{ moment._user_input }}"}}]},
-                    {"id": "generate_response", "depends_on": ["record_user_input"], "run": [{"runtime": "llm.default", "config": {"model": "gemini/gemini-2.5-flash", "prompt": "You are a helpful assistant. The user said: {{ moment._user_input }}"}}]},
-                    {"id": "set_output", "depends_on": ["generate_response"], "run": [{"runtime": "system.execute", "config": {"code": "{{ moment._user_output = nodes.generate_response.llm_output }}"}}]},
-                    {"id": "record_ai_response", "depends_on": ["set_output"], "run": [{"runtime": "memoria.add", "config": {"stream": "chat_history", "level": "ai", "content": "{{ moment._user_output }}"}}]}
+                    {
+                        "id": "record_user_input", 
+                        "run": [{
+                            "runtime": "memoria.add", 
+                            "config": {
+                                "stream": "chat_history", 
+                                "level": "user",
+                                "content": "{{ moment._user_input }}"
+                            }
+                        }]
+                    },
+                    {
+                        "id": "get_chat_history",
+                        "run": [{
+                            "runtime": "memoria.query",
+                            "config": {
+                                "stream": "chat_history",
+                                "latest": 10,
+                                "format": "message_list"
+                            }
+                        }]
+                    },
+                    # [NEW] 添加一个节点，使用 codex.invoke 获取系统提示
+                    {
+                        "id": "get_system_prompt",
+                        "run": [{
+                            "runtime": "codex.invoke",
+                            "config": {
+                                "from": [{"codex": "ai_persona"}]
+                            }
+                        }]
+                    },
+                    {
+                        "id": "generate_response", 
+                        # [MODIFIED] 添加对新节点的依赖
+                        "depends_on": ["record_user_input", "get_chat_history", "get_system_prompt"],
+                        "run": [{
+                            "runtime": "llm.default", 
+                            "config": {
+                                "model": "gemini/gemini-1.5-flash",
+                                "contents": [
+                                    {
+                                        "type": "MESSAGE_PART",
+                                        "role": "system",
+                                        # [MODIFIED] 从硬编码改为从 codex 节点宏获取
+                                        "content": "{{ nodes.get_system_prompt.output }}"
+                                    },
+                                    {
+                                        "type": "INJECT_MESSAGES",
+                                        "source": "{{ nodes.get_chat_history.output }}",
+                                        "is_enabled": "{{ nodes.get_chat_history.output | length > 0 }}"
+                                    },
+                                    {
+                                        "type": "MESSAGE_PART",
+                                        "role": "user",
+                                        "content": "{{ moment._user_input }}"
+                                    }
+                                ]
+                            }
+                        }]
+                    },
+                    {
+                        "id": "set_output", 
+                        "depends_on": ["generate_response"], 
+                        "run": [{
+                            "runtime": "system.execute", 
+                            "config": {
+                                "code": "{{ moment._user_output = nodes.generate_response.output }}"
+                            }
+                        }]
+                    },
+                    {
+                        "id": "record_ai_response", 
+                        "depends_on": ["set_output"], 
+                        "run": [{
+                            "runtime": "memoria.add", 
+                            "config": {
+                                "stream": "chat_history", 
+                                "level": "model",
+                                "content": "{{ moment._user_output }}"
+                            }
+                        }]
+                    }
+                ]
+            }
+        },
+        # [NEW] 添加 codex 定义
+        "codices": {
+            "__hevno_type__": "hevno/codex_collection",
+            "ai_persona": {
+                "__hevno_type__": "hevno/codex",
+                "description": "Defines the core personality and instructions for the AI.",
+                "entries": [
+                    {
+                        "id": "core_identity",
+                        "priority": 100,
+                        "content": "You are Hevno, a friendly and helpful AI assistant designed to demonstrate the capabilities of the Hevno Engine. You are currently running inside a default sandbox template."
+                    },
+                    {
+                        "id": "personality_quirk",
+                        "priority": 50,
+                        "content": "You should be concise but not robotic. Feel free to use emojis where appropriate. 😊 Your goal is to be helpful and showcase the system's features."
+                    }
                 ]
             }
         }
     }
     DEFAULT_MOMENT = {
+        "_user_input": "",
+        "_user_output": "",
         "memoria": {
             "__hevno_type__": "hevno/memoria",
             "__global_sequence__": 0,
@@ -109,22 +209,25 @@ async def create_sandbox(
         }
     }
     DEFAULT_DEFINITION = {
+        "name": "Default Chat Sandbox",
+        "description": "A default sandbox configured for conversational chat with a persona defined by a Codex.",
         "initial_lore": DEFAULT_LORE,
         "initial_moment": DEFAULT_MOMENT
     }
 
+    # (函数其余部分保持不变)
     if request_body.definition:
-        # 验证用户提供的 definition
         if "initial_lore" not in request_body.definition or "initial_moment" not in request_body.definition:
             raise HTTPException(status_code=422, detail="Custom definition must contain 'initial_lore' and 'initial_moment' keys.")
         initial_lore = request_body.definition.get("initial_lore", {})
         initial_moment = request_body.definition.get("initial_moment", {})
         definition = request_body.definition
     else:
-        # 使用默认模板
         initial_lore = DEFAULT_LORE
         initial_moment = DEFAULT_MOMENT
-        definition = DEFAULT_DEFINITION
+        # 将默认定义与用户提供的名称合并
+        definition = {**DEFAULT_DEFINITION, "name": request_body.name}
+
 
     sandbox = Sandbox(
         name=request_body.name,
@@ -146,7 +249,6 @@ async def create_sandbox(
     
     logger.info(f"Created new sandbox '{sandbox.name}' ({sandbox.id}) and saved to disk.")
     return sandbox
-
 
 @router.post("/{sandbox_id}/step", response_model=StepResponse, summary="Execute a step")
 async def execute_sandbox_step(

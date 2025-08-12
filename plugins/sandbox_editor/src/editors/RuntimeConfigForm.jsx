@@ -2,19 +2,18 @@
 import React from 'react';
 import { Box, TextField, Select, MenuItem, FormControlLabel, Switch, Typography, FormControl, InputLabel } from '@mui/material';
 import { CodexInvokeEditor } from './CodexInvokeEditor.jsx';
+// [MODIFIED] Import the new editor for llm.default
+import { LlmContentsEditor } from './LlmContentsEditor.jsx';
 
 const RUNTIME_CONFIG_SPECS = {
     // LLM
-    'llm.default': [
-        { key: 'model', type: 'text', label: '模型 (如 provider/model_id)', required: true },
-        { key: 'prompt', type: 'text', label: '提示词', multiline: true, required: true },
-        { key: 'temperature', type: 'text', label: '温度 (可选)', multiline: false },
-    ],
+    // llm.default is now handled by a custom component, so it is removed from here.
     // Memoria
     'memoria.add': [
         { key: 'stream', type: 'text', label: '流名称', required: true },
         { key: 'content', type: 'text', label: '内容 (支持宏)', multiline: true, required: true },
-        { key: 'level', type: 'text', label: '级别 (如 event)', default: 'event' },
+        // [MODIFIED] Updated label to guide user
+        { key: 'level', type: 'text', label: '级别 (如 event, user, model)', default: 'event' },
         { key: 'tags', type: 'text', label: '标签 (逗号分隔)', },
     ],
     'memoria.query': [
@@ -23,6 +22,17 @@ const RUNTIME_CONFIG_SPECS = {
         { key: 'levels', type: 'text', label: '级别 (逗号分隔)' },
         { key: 'tags', type: 'text', label: '标签 (逗号分隔)' },
         { key: 'order', type: 'select', label: '排序', options: ['升序', '降序'], default: '升序' },
+        // [NEW] Add the new format field with user-friendly labels
+        { 
+            key: 'format', 
+            type: 'select', 
+            label: '返回格式', 
+            options: [
+                { value: 'raw_entries', label: '原始条目 (raw_entries)' },
+                { value: 'message_list', label: '消息列表 (message_list)' },
+            ], 
+            default: 'raw_entries' 
+        },
     ],
     // Codex
     'codex.invoke': [
@@ -85,8 +95,11 @@ export function RuntimeConfigForm({ runtimeType, config, onConfigChange }) {
   
   const hasGenericFields = spec.length > 0;
   const isCodexInvoke = runtimeType === 'codex.invoke';
+  // [NEW] Add a check for the llm.default runtime
+  const isLlmDefault = runtimeType === 'llm.default';
 
-  if (!hasGenericFields && !isCodexInvoke) {
+  // [MODIFIED] Adjust the condition to include the new custom editor
+  if (!hasGenericFields && !isCodexInvoke && !isLlmDefault) {
     return <Typography color="text.secondary" sx={{mt:2}}>该指令不需要额外配置</Typography>
   }
 
@@ -94,7 +107,14 @@ export function RuntimeConfigForm({ runtimeType, config, onConfigChange }) {
     <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
       <Typography variant="subtitle2">配置</Typography>
       
-      {/* --- [NEW] 为 'codex.invoke' 渲染自定义编辑器 --- */}
+      {/* [NEW] Render the custom contents editor for 'llm.default' */}
+      {isLlmDefault && (
+        <LlmContentsEditor 
+            contents={config.contents || []} 
+            onContentsChange={(newContents) => handleChange('contents', newContents)}
+        />
+      )}
+      
       {isCodexInvoke && (
         <CodexInvokeEditor
             value={config.from}
@@ -136,7 +156,12 @@ export function RuntimeConfigForm({ runtimeType, config, onConfigChange }) {
                     value={value}
                     onChange={(e) => handleChange(field.key, e.target.value)}
                 >
-                    {field.options.map(opt => <MenuItem key={opt} value={opt}>{opt}</MenuItem>)}
+                    {/* [MODIFIED] Handle both string arrays and object arrays for options */}
+                    {field.options.map(opt => {
+                      const optValue = typeof opt === 'object' ? opt.value : opt;
+                      const optLabel = typeof opt === 'object' ? opt.label : opt;
+                      return <MenuItem key={optValue} value={optValue}>{optLabel}</MenuItem>
+                    })}
                 </Select>
             </FormControl>
             );
