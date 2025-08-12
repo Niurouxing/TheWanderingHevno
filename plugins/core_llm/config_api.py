@@ -16,11 +16,9 @@ config_api_router = APIRouter(
     tags=["LLM Configuration API"]
 )
 
-# --- Pydantic Models for API ---
-
+# --- Pydantic Models (保持不变) ---
 class ApiKeyStatus(BaseModel):
-    """安全地表示一个 API 密钥的状态，不暴露完整密钥。"""
-    key_suffix: str = Field(..., description="密钥的最后4位。")
+    key_suffix: str
     status: str
     rate_limit_until: Optional[float] = None
 
@@ -28,18 +26,16 @@ class KeyConfigResponse(BaseModel):
     provider: str
     keys: List[ApiKeyStatus]
 
-class UpdateKeysRequest(BaseModel):
-    keys: List[str] = Field(..., description="要使用的新 API 密钥的完整列表。")
+# --- [新] Pydantic Model for Add Key ---
+class AddKeyRequest(BaseModel):
+    key: str = Field(..., min_length=10, description="要添加的完整 API 密钥。")
 
-# --- API Endpoints ---
+# --- API Endpoints (重构后) ---
 
-# --- [核心修复] ---
-# 我们需要告诉 FastAPI 如何为这个辅助函数提供 key_manager
 def get_key_pool(
     provider_name: str, 
-    key_manager: KeyPoolManager = Depends(Service("key_pool_manager")) # <-- 添加 Depends
+    key_manager: KeyPoolManager = Depends(Service("key_pool_manager"))
 ) -> ProviderKeyPool:
-    """FastAPI 依赖项，用于获取特定提供商的密钥池。"""
     pool = key_manager.get_pool(provider_name)
     if not pool:
         raise HTTPException(
@@ -53,9 +49,7 @@ async def get_key_configuration(
     provider_name: str,
     key_pool: ProviderKeyPool = Depends(get_key_pool)
 ):
-    """获取指定提供商的所有密钥及其当前状态。"""
     key_statuses = []
-    # key_pool._keys 是一个实现细节，但对于配置API是可接受的
     for key_info in key_pool._keys:
         key_statuses.append(ApiKeyStatus(
             key_suffix=f"...{key_info.key_string[-4:]}",
@@ -64,24 +58,36 @@ async def get_key_configuration(
         ))
     return KeyConfigResponse(provider=provider_name, keys=key_statuses)
 
-
-@config_api_router.put("/{provider_name}", status_code=200)
-async def update_provider_keys(
+@config_api_router.post("/{provider_name}/keys", status_code=201)
+async def add_provider_key(
     provider_name: str,
-    request: UpdateKeysRequest,
+    request: AddKeyRequest,
     key_manager: KeyPoolManager = Depends(Service("key_pool_manager"))
 ):
-    """
-    在内存中更新一个提供商的 API 密钥。
-    注意：这些更改在服务器重启后会丢失。
-    """
+    """向 .env 文件添加一个新的 API 密钥并重新加载。"""
     try:
-        # 我们需要在 KeyPoolManager 中添加一个方法来支持此操作
-        key_manager.update_provider_keys(provider_name, request.keys)
-        logger.info(f"In-memory keys for provider '{provider_name}' updated successfully.")
-        return {"message": f"Keys for provider '{provider_name}' have been updated in memory."}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        key_manager.add_key_to_provider(provider_name, request.key)
+        return {"message": "Key added successfully and pool reloaded."}
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception:
-        logger.exception(f"Failed to update keys for provider {provider_name}")
+        logger.exception(f"Failed to add key for provider {provider_name}")
+        raise HTTPException(status_code=500, detail="An internal server error occurred.")
+
+@config_api_router.delete("/{provider_name}/keys/{key_suffix}", status_code=200)
+async def remove_provider_key(
+    provider_name: str,
+    key_suffix: str,
+    key_manager: KeyPoolManager = Depends(Service("key_pool_manager"))
+):
+    """从 .env 文件中删除一个 API 密钥并重新加载。"""
+    if len(key_suffix) != 4:
+        raise HTTPException(status_code=400, detail="Key suffix must be exactly 4 characters long.")
+    try:
+        key_manager.remove_key_from_provider(provider_name, key_suffix)
+        return {"message": "Key removed successfully and pool reloaded."}
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        logger.exception(f"Failed to remove key for provider {provider_name}")
         raise HTTPException(status_code=500, detail="An internal server error occurred.")

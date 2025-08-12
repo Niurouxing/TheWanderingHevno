@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Dict, Optional, AsyncIterator
+from dotenv import find_dotenv, get_key, set_key, unset_key
 
 
 # --- Enums and Data Classes for Key State Management ---
@@ -150,56 +151,97 @@ class ProviderKeyPool:
 
 class KeyPoolManager:
     """
-    顶层管理器，聚合了所有提供商的密钥池。
-    这是上层服务（LLMService）与之交互的唯一入口。
+    顶层管理器，现在还负责协调对 .env 文件的读写。
     """
     def __init__(self, credential_manager: CredentialManager):
         self._pools: Dict[str, ProviderKeyPool] = {}
         self._cred_manager = credential_manager
+        self._provider_env_vars: Dict[str, str] = {}
+        # [新] 找到 .env 文件路径
+        self._dotenv_path = find_dotenv()
+        if not self._dotenv_path:
+            print("Warning: .env file not found. Key management will be in-memory only.")
 
     def register_provider(self, provider_name: str, env_variable: str):
-        """
-
-        从环境变量加载密钥，并为提供商创建一个密钥池。
-        :param provider_name: 提供商的名称 (e.g., 'gemini').
-        :param env_variable: 包含该提供商密钥的环境变量。
-        """
+        self._provider_env_vars[provider_name] = env_variable
         keys = self._cred_manager.load_keys_from_env(env_variable)
         if keys:
             self._pools[provider_name] = ProviderKeyPool(provider_name, keys)
             print(f"Registered provider '{provider_name}' with {len(keys)} keys from '{env_variable}'.")
 
-    def get_pool(self, provider_name: str) -> Optional[ProviderKeyPool]:
-        """获取指定提供商的密钥池。"""
-        return self._pools.get(provider_name)
-
-    def update_provider_keys(self, provider_name: str, new_keys: List[str]):
-        """
-        在运行时用一组新密钥重新初始化一个提供商的密钥池。
-        """
+    # --- [新] 重新加载指定提供商的密钥 ---
+    def reload_keys(self, provider_name: str):
+        """从 .env 文件重新加载指定提供商的密钥，并更新内存中的密钥池。"""
         if provider_name not in self._provider_env_vars:
             raise ValueError(f"Provider '{provider_name}' is not registered.")
         
-        if not new_keys:
-            # 如果提供了空列表，则移除密钥池
-            if provider_name in self._pools:
-                del self._pools[provider_name]
-                print(f"Key pool for provider '{provider_name}' has been cleared.")
+        env_var = self._provider_env_vars[provider_name]
+        # 强制从文件系统重新加载
+        keys = self._cred_manager.load_keys_from_env(env_var)
+        
+        if keys:
+            self._pools[provider_name] = ProviderKeyPool(provider_name, keys)
+            print(f"Reloaded provider '{provider_name}' with {len(keys)} keys from '{env_var}'.")
+        elif provider_name in self._pools:
+            # 如果 .env 中没有密钥了，则移除内存中的池
+            del self._pools[provider_name]
+            print(f"Key pool for provider '{provider_name}' has been cleared as its env var is empty.")
+
+    # --- [新] 添加一个密钥到 .env 文件 ---
+    def add_key_to_provider(self, provider_name: str, new_key: str):
+        if not self._dotenv_path:
+            raise RuntimeError(".env file not found, cannot persist key.")
+        if provider_name not in self._provider_env_vars:
+            raise ValueError(f"Provider '{provider_name}' is not registered.")
+        
+        env_var = self._provider_env_vars[provider_name]
+        current_keys_str = get_key(self._dotenv_path, env_var) or ""
+        keys = [k.strip() for k in current_keys_str.split(',') if k.strip()]
+
+        if new_key in keys:
+            print(f"Key already exists for provider '{provider_name}'. Skipping.")
             return
 
-        # 创建一个新的密钥池并替换旧的
-        self._pools[provider_name] = ProviderKeyPool(provider_name, new_keys)
-        print(f"Re-initialized provider '{provider_name}' with {len(new_keys)} new in-memory keys.")
+        keys.append(new_key)
+        set_key(self._dotenv_path, env_var, ",".join(keys))
+        self.reload_keys(provider_name) # 立即重载
 
+    # --- [新] 从 .env 文件中移除一个密钥 ---
+    def remove_key_from_provider(self, provider_name: str, key_suffix_to_remove: str):
+        if not self._dotenv_path:
+            raise RuntimeError(".env file not found, cannot persist changes.")
+        if provider_name not in self._provider_env_vars:
+            raise ValueError(f"Provider '{provider_name}' is not registered.")
 
+        env_var = self._provider_env_vars[provider_name]
+        current_keys_str = get_key(self._dotenv_path, env_var) or ""
+        keys = [k.strip() for k in current_keys_str.split(',') if k.strip()]
 
-    # 为了方便上层服务调用，我们将核心方法直接暴露在这里
-    
+        key_found = False
+        updated_keys = []
+        for key in keys:
+            if key.endswith(key_suffix_to_remove):
+                key_found = True
+            else:
+                updated_keys.append(key)
+        
+        if not key_found:
+            print(f"Key with suffix '...{key_suffix_to_remove}' not found for provider '{provider_name}'.")
+            return
+
+        if not updated_keys:
+            # 如果列表为空，我们移除这个环境变量
+            unset_key(self._dotenv_path, env_var)
+        else:
+            set_key(self._dotenv_path, env_var, ",".join(updated_keys))
+        
+        self.reload_keys(provider_name) # 立即重载
+
+    def get_pool(self, provider_name: str) -> Optional[ProviderKeyPool]:
+        return self._pools.get(provider_name)
+
     @asynccontextmanager
     async def acquire_key(self, provider_name: str) -> AsyncIterator[KeyInfo]:
-        """
-        从指定提供商的池中获取一个密钥。
-        """
         pool = self.get_pool(provider_name)
         if not pool:
             raise ValueError(f"No key pool registered for provider '{provider_name}'.")

@@ -1,24 +1,13 @@
 // plugins/core_llm_config/src/components/KeyStatusTable.jsx
 import React from 'react';
 import {
-    Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Chip, Typography, Box, Tooltip
+    Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Chip,
+    Typography, IconButton, Tooltip
 } from '@mui/material';
+import DeleteIcon from '@mui/icons-material/Delete';
+import { Countdown } from './Countdown'; // 我们将倒计时逻辑移到自己的组件中
 
-function Countdown({ until }) {
-    const [timeLeft, setTimeLeft] = React.useState(Math.round(until - Date.now() / 1000));
-
-    React.useEffect(() => {
-        if (timeLeft <= 0) return;
-        const timer = setInterval(() => {
-            setTimeLeft(prev => prev - 1);
-        }, 1000);
-        return () => clearInterval(timer);
-    }, [timeLeft]);
-
-    return timeLeft > 0 ? `${timeLeft}s` : 'Available';
-}
-
-export function KeyStatusTable({ keys }) {
+export function KeyStatusTable({ keys, onDelete, isDeleting }) {
     const getStatusChip = (key) => {
         switch (key.status) {
             case 'available':
@@ -40,12 +29,13 @@ export function KeyStatusTable({ keys }) {
                         <TableCell>密钥 (后4位)</TableCell>
                         <TableCell>状态</TableCell>
                         <TableCell>可用时间</TableCell>
+                        <TableCell align="right">操作</TableCell>
                     </TableRow>
                 </TableHead>
                 <TableBody>
                     {keys.length === 0 && (
                         <TableRow>
-                            <TableCell colSpan={3} align="center">
+                            <TableCell colSpan={4} align="center">
                                 <Typography color="text.secondary" sx={{ p: 2 }}>
                                     未找到为该提供商配置的密钥。
                                 </Typography>
@@ -64,6 +54,20 @@ export function KeyStatusTable({ keys }) {
                                 {key.status === 'rate_limited' && key.rate_limit_until ?
                                     <Countdown until={key.rate_limit_until} />
                                     : '—'}
+                            </TableCell>
+                            <TableCell align="right">
+                                <Tooltip title="从 .env 文件中删除此密钥">
+                                    <span>
+                                        <IconButton
+                                            size="small"
+                                            color="error"
+                                            onClick={() => onDelete(key.key_suffix)}
+                                            disabled={isDeleting}
+                                        >
+                                            <DeleteIcon fontSize="small" />
+                                        </IconButton>
+                                    </span>
+                                </Tooltip>
                             </TableCell>
                         </TableRow>
                     ))}
