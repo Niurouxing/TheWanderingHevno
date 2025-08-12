@@ -1,7 +1,7 @@
-# backend/llm/providers/base.py
+# plugins/core_llm/providers/base.py
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from ..contracts import LLMResponse, LLMError
 
@@ -22,7 +22,7 @@ class LLMProvider(ABC):
     async def generate(
         self,
         *,
-        prompt: str,
+        messages: List[Dict[str, Any]],
         model_name: str,
         api_key: str,
         **kwargs: Any
@@ -35,7 +35,7 @@ class LLMProvider(ABC):
         如果发生无法处理的硬性错误（如网络问题、认证失败），它应该抛出原始异常，
         以便上层服务可以捕获并使用 translate_error 进行处理。
 
-        :param prompt: 发送给模型的提示。
+        :param messages: 发送给模型的结构化消息列表。
         :param model_name: 要使用的具体模型名称 (e.g., 'gemini-1.5-pro-latest')。
         :param api_key: 用于本次请求的 API 密钥。
         :param kwargs: 其他特定于提供商的参数 (e.g., temperature, max_tokens)。

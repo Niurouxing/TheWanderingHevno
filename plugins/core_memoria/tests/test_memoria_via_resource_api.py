@@ -1,3 +1,4 @@
+# plugins/core_memoria/tests/test_memoria_via_resource_api.py
 import pytest
 from httpx import AsyncClient
 from uuid import UUID, uuid4

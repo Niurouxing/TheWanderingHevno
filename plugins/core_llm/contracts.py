@@ -3,7 +3,7 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from pydantic import BaseModel, Field
 
@@ -71,7 +71,7 @@ class LLMServiceInterface(ABC):
     async def request(
         self,
         model_name: str,
-        prompt: str,
+        messages: List[Dict[str, Any]],
         **kwargs: Any
     ) -> LLMResponse:
         """

@@ -3,7 +3,7 @@
 from __future__ import annotations
 import asyncio
 import logging
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 
 from tenacity import (
     retry,
@@ -51,7 +51,7 @@ class LLMService(LLMServiceInterface):
     async def request(
         self,
         model_name: str,
-        prompt: str,
+        messages: List[Dict[str, Any]],
         **kwargs
     ) -> LLMResponse:
         """
@@ -71,7 +71,7 @@ class LLMService(LLMServiceInterface):
             
         # 如果提供商不需要密钥，直接调用并返回
         if not provider.requires_api_key():
-            return await self._attempt_request_with_key(provider_name, actual_model_name, prompt, None, **kwargs)
+            return await self._attempt_request_with_key(provider_name, actual_model_name, messages, None, **kwargs)
 
         key_pool = self.key_manager.get_pool(provider_name)
         if not key_pool:
@@ -86,7 +86,7 @@ class LLMService(LLMServiceInterface):
                 async with self.key_manager.acquire_key(provider_name) as key_info:
                     # 使用此密钥进行请求（包含内部的 tenacity 重试）
                     return await self._attempt_request_with_key(
-                        provider_name, actual_model_name, prompt, key_info, **kwargs
+                        provider_name, actual_model_name, messages, key_info, **kwargs
                     )
             except LLMRequestFailedError as e:
                 # 检查失败的根本原因
@@ -115,7 +115,7 @@ class LLMService(LLMServiceInterface):
         self,
         provider_name: str,
         model_name: str,
-        prompt: str,
+        messages: List[Dict[str, Any]],
         key_info: Optional[KeyInfo],
         **kwargs
     ) -> LLMResponse:
@@ -128,7 +128,7 @@ class LLMService(LLMServiceInterface):
 
         try:
             response = await provider.generate(
-                prompt=prompt, model_name=model_name, api_key=api_key_str, **kwargs
+                messages=messages, model_name=model_name, api_key=api_key_str, **kwargs
             )
             
             if response.status in [LLMResponseStatus.ERROR, LLMResponseStatus.FILTERED] and response.error_details:

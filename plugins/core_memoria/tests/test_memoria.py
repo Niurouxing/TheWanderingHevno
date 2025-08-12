@@ -1,3 +1,5 @@
+# plugins/core_memoria/tests/test_memoria.py
+
 import asyncio
 import uuid
 from unittest.mock import MagicMock, AsyncMock
@@ -55,13 +57,6 @@ async def test_memoria_add_and_query(
     assert query_output[0]["content"] == "The player entered the village."
 
 
-# --- TEST REMOVED ---
-# async def test_memoria_aggregate_runtime(...):
-# This test has been removed because the 'memoria.aggregate' runtime has been deprecated
-# in favor of the more generic 'system.data.format' runtime from core_engine.
-# The functionality of formatting a list of dictionaries is now tested as part of
-# the core_engine plugin's tests.
-
 
 async def test_complex_query_with_tags_and_levels(
     test_engine_setup: Tuple[ExecutionEngineInterface, Container, HookManager],
@@ -98,6 +93,67 @@ async def test_complex_query_with_tags_and_levels(
     query_output = final_snapshot.run_output["query"]["output"]
     assert len(query_output) == 1
     assert query_output[0]["content"] == "C" # 只有 C 同时满足两个条件
+
+async def test_query_format_message_list(
+    test_engine_setup: Tuple[ExecutionEngineInterface, Container, HookManager],
+    sandbox_factory: callable
+):
+    """
+    Tests the new `format: "message_list"` option in memoria.query.
+    It should correctly filter and transform entries into the LLM message format.
+    """
+    engine, container, _ = test_engine_setup
+
+    sandbox = await sandbox_factory(
+        graph_collection=GraphCollection.model_validate({
+            "main": {
+                "nodes": [
+                    # Simulate a conversation history
+                    {"id": "add_user1", "run": [{"runtime": "memoria.add", "config": {"stream": "chat", "level": "user", "content": "Hello, who are you?"}}]},
+                    {"id": "add_model1", "depends_on": ["add_user1"], "run": [{"runtime": "memoria.add", "config": {"stream": "chat", "level": "model", "content": "I am an AI assistant."}}]},
+                    # Add an event that should be filtered out
+                    {"id": "add_event", "depends_on": ["add_model1"], "run": [{"runtime": "memoria.add", "config": {"stream": "chat", "level": "event", "content": "The system rebooted."}}]},
+                    {"id": "add_user2", "depends_on": ["add_event"], "run": [{"runtime": "memoria.add", "config": {"stream": "chat", "level": "user", "content": "What can you do?"}}]},
+                    # The actual query node to test
+                    {"id": "query_messages", "depends_on": ["add_user2"], "run": [{"runtime": "memoria.query", "config": {
+                        "stream": "chat",
+                        "latest": 4, # Should get all 4 entries before format
+                        "format": "message_list" # The feature under test
+                    }}]}
+                ]
+            }
+        })
+    )
+
+    final_sandbox = await engine.step(sandbox, {})
+    snapshot_store = container.resolve("snapshot_store")
+    final_snapshot = snapshot_store.get(final_sandbox.head_snapshot_id)
+    assert final_snapshot is not None
+    
+    # Assert
+    query_output = final_snapshot.run_output["query_messages"]["output"]
+    
+    # 1. The output should be a list of 3 messages, as the "event" level is filtered out.
+    assert isinstance(query_output, list)
+    assert len(query_output) == 3
+    
+    # 2. Check the content and structure of each message
+    expected_messages = [
+        {"role": "user", "content": "Hello, who are you?"},
+        {"role": "model", "content": "I am an AI assistant."},
+        {"role": "user", "content": "What can you do?"}
+    ]
+    
+    # The 'latest' filter works on sequence_id, and the format filter is applied after.
+    # So we get the last 4 entries, then filter to 3 messages.
+    # The order is ascending by default.
+    assert query_output[0] == expected_messages[0]
+    assert query_output[1] == expected_messages[1]
+    assert query_output[2] == expected_messages[2]
+
+    # 3. Let's double check the number of entries in the moment state, it should be 4
+    moment = final_snapshot.moment
+    assert len(moment["memoria"]["chat"]["entries"]) == 4
 
 
 async def test_synthesis_task_trigger_and_application(
@@ -203,6 +259,7 @@ async def test_run_synthesis_task_unit_test():
         entries_to_summarize_dicts=[{"content": "e1"}]
     )
 
+    # FIX: The keyword argument for the model is `model_name`, not `model`.
     llm_service_mock.request.assert_awaited_once_with(model_name="test", prompt="- e1")
     assert sandbox_id in event_queue
     assert len(event_queue[sandbox_id]) == 1

@@ -82,9 +82,11 @@ class MemoriaQueryRuntime(RuntimeInterface):
         if not stream_name:
             raise ValueError("MemoriaQueryRuntime requires a 'stream' name in its config.")
 
-        # 从 moment_state 中读取 memoria 数据
+        output_format = config.get("format", "raw_entries")
+        if output_format not in ["raw_entries", "message_list"]:
+             raise ValueError(f"Invalid 'format' value '{output_format}'. Must be 'raw_entries' or 'message_list'.")
+
         memoria_data = context.shared.moment_state.get("memoria", {})
-        # -------------------
 
         memoria = Memoria.model_validate(memoria_data)
         stream = memoria.get_stream(stream_name)
@@ -113,4 +115,15 @@ class MemoriaQueryRuntime(RuntimeInterface):
         reverse = (order == "descending")
         results.sort(key=lambda e: e.sequence_id, reverse=reverse)
 
-        return {"output": [entry.model_dump() for entry in results]}
+        # --- 格式化逻辑 ---
+        if output_format == "message_list":
+            message_list = []
+            for entry in results:
+                if entry.level in ["user", "model"]:
+                    message_list.append({
+                        "role": entry.level,
+                        "content": entry.content
+                    })
+            return {"output": message_list}
+        else: # "raw_entries"
+            return {"output": [entry.model_dump() for entry in results]}

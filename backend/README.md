@@ -469,7 +469,7 @@ plugins/
         {
           "runtime": "system.execute",
           "config": {
-            "code": "{{ services.llm_service.request(model='gemini/gemini-pro', prompt='你好！') }}"
+            "code": "{{ services.llm_service.request(model_name='gemini/gemini-pro', messages=[{'role': 'user', 'content': '你好！'}]) }}"
           }
         }
         ```
@@ -489,27 +489,35 @@ plugins/
 
 ##### 示例1：动态生成 NPC 对话
 
-根据玩家的声望 (`moment.player_reputation`)，NPC 会有不同的反应。
+根据玩家的声望 (`moment.player_reputation`)，NPC 会有不同的反应。这个例子展示了如何使用宏动态构建发送给 LLM 的指令，并利用 `contents` 列表来组织对话。
 
 ```json
 {
   "id": "npc_greeting",
-  "run": [
-    {
-      "runtime": "llm.default",
-      "config": {
-        "prompt": "{{
-          rep = moment.player_reputation
-          if rep > 50:
-              f'欢迎，尊敬的 {moment.player_name}！见到您真是我的荣幸。'
-          elif rep < -50:
-              '哼，你还敢出现在我面前？'
-          else:
-              '哦，是你啊。'
-        }}"
-      }
+  "run": [{
+    "runtime": "llm.default",
+    "config": {
+      "model": "gemini/gemini-1.5-pro",
+      "contents": [
+        {
+          "role": "system",
+          "content": "你是一名角色扮演游戏中的NPC。根据我提供的上下文，生成一句符合角色身份和当前情境的对话。"
+        },
+        {
+          "role": "user",
+          "content": "{{
+            rep = moment.player_reputation
+            if rep > 50:
+                f'上下文：你看到了一位声望显赫的英雄，玩家 {moment.player_name}。请生成一句充满敬意的欢迎语。'
+            elif rep < -50:
+                f'上下文：你看到了一个臭名昭著的恶棍，玩家 {moment.player_name}。请生成一句充满警惕和蔑视的话语。'
+            else:
+                f'上下文：你看到了一个你不怎么认识的普通冒险者，玩家 {moment.player_name}。请生成一句平淡而中立的问候。'
+          }}"
+        }
+      ]
     }
-  ]
+  }]
 }
 ```
 
@@ -615,20 +623,23 @@ Hevno 引擎的核心承诺是：**为所有基于 Python 基础数据类型（�
 {
   "runtime": "llm.default",
   "config": {
-    "prompt": "{{
-      # 使用 f-string 和单引号来构建最终的 prompt
-      # 这样 '{{...}}' 部分就会被当作普通文本
-      f'''
-      你是一个游戏助手。要将玩家的生命值设置为100，你应该返回：'{{ moment.player_hp = 100 }}'
-      
-      现在，请为我恢复玩家的能量。
-      '''
-    }}"
+    "model": "gemini/gemini-1.5-pro",
+    "contents": [{
+      "role": "user",
+      "content": "{{
+        # 使用 f-string 和单引号来构建最终的 content
+        # 这样 '{{...}}' 部分就会被当作普通文本
+        f'''
+        你是一个游戏助手。要将玩家的生命值设置为100，你应该返回：'{{ moment.player_hp = 100 }}'
+        
+        现在，请为我恢复玩家的能量。
+        '''
+      }}"
+    }]
   }
 }
 ```
-引擎在预处理此指令时，会执行 f-string，生成一个包含 `{{ moment.player_hp = 100 }}` **文本**的字符串，然后将其发送给 LLM。
-
+引擎在预处理此指令时，会执行 f-string，生成一个包含 `{{ moment.player_hp = 100 }}` **文本**的字符串，然后将其作为 `content` 组装进消息列表，最后发送给 LLM。
 **步骤 2: 执行 LLM 返回的指令**
 
 假设上一步的 LLM 返回了字符串 `"{{ moment.player_energy = 100 }}"`。这个字符串现在存储在 `pipe.llm_output` 中。它只是一个普通的字符串，不会自动执行。
@@ -1185,7 +1196,6 @@ Codex 是构建能感知环境、拥有深度背景的 AI 代理和动态世界�
  ```
  *关于统一资源API的详细信息，请参阅本文档的第6章。*
 
-
 ## `core_memoria` 插件文档
 
 ### 1. 简介：赋予世界记忆与反思的能力
@@ -1235,7 +1245,7 @@ Codex 是构建能感知环境、拥有深度背景的 AI 代理和动态世界�
 ```
 
 *   `sequence_id`：**这至关重要**。它是一个在**所有**记忆流中都单调递增的整数，精确地记录了事件在游戏世界内的**因果顺序**。它不受现实时间影响，确保了读档和回滚的确定性。
-*   `level`: 记忆的层级，如 `"event"`, `"dialogue"`, `"milestone"`, `"thought"`。用于分层检索。
+*   `level`: 记忆的层级，如 `"event"`, `"dialogue"`, `"milestone"`, `"thought"`。用于分层检索。 **当记录对话时，约定将角色（如 `"user"` 或 `"model"`）作为此字段的值**。
 *   `tags`: 一个关键词列表，用于实现强大的相关性检索。
 *   `content`: 记忆的文本内容。
 
@@ -1251,20 +1261,20 @@ Codex 是构建能感知环境、拥有深度背景的 AI 代理和动态世界�
 *   **配置参数**：
     *   `stream` (必需): `string` - 要添加到的记忆流的名称。
     *   `content` (必需): `any` - 记忆的内容。宏求值后会被转换为字符串。
-    *   `level` (可选): `string` - 该条目的层级，默认为 `"event"`。
+    *   `level` (可选): `string` - 该条目的层级，默认为 `"event"`。**约定**: 当记录对话时，推荐将角色（如 `"user"`, `"model"`）作为此字段的值，以便于后续的格式化查询。
     *   `tags` (可选): `List[string]` - 与该条目关联的标签列表。
 
 *   **示例**：
     ```json
     {
-      "id": "player_enters_cave",
+      "id": "record_user_chat",
       "run": [{
         "runtime": "memoria.add",
         "config": {
-          "stream": "main_story",
-          "level": "exploration_event",
-          "tags": ["dungeon", "cave", "danger"],
-          "content": "{{ f'玩家 {moment.player_name} 小心地进入了那个散发着恶臭的洞穴。' }}"
+          "stream": "chat_history",
+          "level": "user",
+          "tags": ["dialogue"],
+          "content": "{{ run.triggering_input.user_message }}"
         }
       }]
     }
@@ -1281,72 +1291,62 @@ Codex 是构建能感知环境、拥有深度背景的 AI 代理和动态世界�
     *   `levels` (可选): `List[string]` - 只返回 `level` 在此列表中的条目。
     *   `tags` (可选): `List[string]` - 返回至少包含**一个**指定标签的条目。
     *   `order` (可选): `"ascending"` 或 `"descending"` - 返回结果的排序顺序，基于 `sequence_id`。默认为 `"ascending"`。
+    *   `format` (可选): `"raw_entries"` 或 `"message_list"` - 定义输出格式。
+        *   `"raw_entries"` (默认): 返回完整的 `MemoryEntry` 对象列表。
+        *   `"message_list"`: **(新)** 将 `level` 为 `"user"` 或 `"model"` 的条目转换为 `{"role": ..., "content": ...}` 格式的消息列表，专为 `llm.default` 设计。
 
-*   **示例：为 LLM 获取最近的 3 个事件作为短期记忆**
-    ```json
-    {
-      "id": "gather_short_term_memory",
-      "run": [{
-        "runtime": "memoria.query",
-        "config": {
-          "stream": "main_story",
-          "latest": 3,
-          "order": "ascending"
-        }
-      }]
-    }
-    // 指令执行后，pipe.output 将会是一个包含最多3个记忆条目对象的列表
-    ```
+#### 3.3 为 LLM 提供对话历史 (协同示例)
 
-#### 3.3 将记忆格式化为文本：使用 `system.data.format`
+通过 `memoria.query` 新增的 `format: "message_list"` 模式，结合重构后的 `llm.default` 运行时，可以极其优雅地构建包含对话历史的 LLM 请求。这避免了在宏中手动拼接字符串的复杂操作。
 
-在将检索到的记忆提供给 LLM 或其他系统之前，通常需要将结构化的记忆条目列表格式化为一段连贯的文本。我们**推荐**使用 `core_engine` 插件提供的、更通用的 `system.data.format` 运行时来完成此任务。
-
-这个模式展示了 Hevno 引擎强大的可组合性：一个插件 (`core_memoria`) 负责获取数据，另一个插件 (`core_engine`) 负责呈现数据。
-
-**示例：将查询结果格式化为 LLM 的背景提要**
-
-这个例子展示了两个节点的标准协作流程：
-1.  `gather_short_term_memory` 节点使用 `memoria.query` 检索最新的3条记忆。
-2.  `format_memory_for_llm` 节点接收前一个节点的输出，并使用 `system.data.format` 将其格式化为字符串。
+以下是一个标准的“聊天机器人”图，展示了这两个插件如何协同工作：
 
 ```json
 [
     {
-      "id": "gather_short_term_memory",
+      "id": "get_chat_history",
       "run": [{
         "runtime": "memoria.query",
         "config": {
-          "stream": "main_story",
-          "latest": 3,
-          "order": "ascending"
+          "stream": "chat_history",
+          "latest": 10,
+          "format": "message_list" 
         }
       }]
     },
     {
-      "id": "format_memory_for_llm",
-      "depends_on": ["gather_short_term_memory"],
+      "id": "generate_response",
+      "depends_on": ["get_chat_history"],
       "run": [{
-        "runtime": "system.data.format",
+        "runtime": "llm.default",
         "config": {
-          "items": "{{ nodes.gather_short_term_memory.output }}",
-          "template": "- {content} (Tags: {tags})",
-          "joiner": "\\n"
+          "model": "gemini/gemini-1.5-pro",
+          "contents": [
+            {
+              "type": "MESSAGE_PART",
+              "role": "system",
+              "content": "你是一个乐于助人的AI助手。"
+            },
+            {
+              "type": "INJECT_MESSAGES",
+              "source": "{{ nodes.get_chat_history.output }}"
+            },
+            {
+              "type": "MESSAGE_PART",
+              "role": "user",
+              "content": "{{ run.triggering_input.user_message }}"
+            }
+          ]
         }
       }]
     }
 ]
 ```
-**执行后**:
-*   `gather_short_term_memory` 节点的输出 (`nodes.gather_short_term_memory.output`) 是一个记忆条目对象的列表。
-*   `format_memory_for_llm` 节点的输出 (`nodes.format_memory_for_llm.output`) 将是一段格式化好的文本，例如：
-    ```text
-    - 玩家进入了洞穴 (Tags: dungeon, cave)
-    - 玩家点燃了火把 (Tags: light, safety)
-    - 玩家听到了远处的滴水声 (Tags: ambient, sfx)
-    ```
-```
-
+**执行流程**:
+1.  `get_chat_history` 节点运行，`memoria.query` 检索最新的10条对话记忆，并直接将它们格式化为 `[{"role": "user", "content": "..."}, {"role": "model", "content": "..."}]` 形式的列表。
+2.  `generate_response` 节点运行，`llm.default` 运行时处理其 `contents` 列表。
+3.  `INJECT_MESSAGES` 指令将上一个节点的结果无缝地展开并注入到消息列表中。
+4.  最终，一个结构完整、包含系统提示、历史记录和当前用户消息的请求被发送给 LLM。
 
 ### 4. 自动化功能：记忆的自动综合
 
@@ -1376,7 +1376,7 @@ Codex 是构建能感知环境、拥有深度背景的 AI 代理和动态世界�
             'enabled': True,
             'trigger_count': 10,  // 每发生 10 次事件
             'level': 'milestone', // 就生成一个“里程碑”级别的总结
-            'model': 'gemini/gemini-2.5-flash',
+            'model': 'gemini/gemini-1.5-flash',
             'prompt': '''
 As a master storyteller, synthesize the following sequence of events into a single, cohesive paragraph that captures the key developments and overall tone.
 
@@ -1493,7 +1493,7 @@ POST /api/sandboxes/{sandbox_id}/resource:mutate
         "level": "event",
         "tags": ["manual_edit"],
         "content": "一个被手动插入的修复性事件。",
-        "created_at": "2025-08-11T12:00:00Z" 
+        "created_at": "2025-08-12T05:10:07Z" 
       },
       "mutation_mode": "DIRECT"
     },
@@ -1525,3 +1525,4 @@ POST /api/sandboxes/{sandbox_id}/resource:mutate
 }
 ```
 *   **风险**: 中。您需要精确知道要删除的条目的索引（在这个例子中是第6个条目，索引为5）。
+```
