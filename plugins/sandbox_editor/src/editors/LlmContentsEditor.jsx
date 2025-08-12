@@ -32,6 +32,15 @@ function SortableContentItem({ id, item, onUpdate, onDelete, allItems }) {
     };
 
     const renderHeader = () => {
+        // --- [修改] 如果条目有名称，则显示名称，否则回退到旧逻辑 ---
+        if (item.name) {
+             return <>
+                {item.type === 'MESSAGE_PART' ? <MessageIcon sx={{ mr: 1, color: 'text.secondary' }} /> : <DynamicFeedIcon sx={{ mr: 1, color: 'text.secondary' }} />}
+                <Typography sx={{ flexGrow: 1, fontStyle: 'italic' }}>{item.name}</Typography>
+             </>;
+        }
+        
+        // --- 旧的 fallback 逻辑 ---
         if (item.type === 'MESSAGE_PART') {
             return <>
                 <MessageIcon sx={{ mr: 1, color: 'text.secondary' }} />
@@ -60,6 +69,9 @@ function SortableContentItem({ id, item, onUpdate, onDelete, allItems }) {
             </Box>
             <Collapse in={isExpanded}>
                 <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {/* --- [新增] 为所有类型的条目添加名称输入框 --- */}
+                    <TextField label="条目名称 (仅供UI显示)" size="small" value={item.name || ''} onChange={(e) => handleFieldChange('name', e.target.value)} />
+                    
                     {item.type === 'MESSAGE_PART' && <>
                         <FormControl fullWidth size="small">
                             <InputLabel>角色</InputLabel>
@@ -88,21 +100,17 @@ export function LlmContentsEditor({ contents, onContentsChange }) {
     const [items, setItems] = useState([]);
     const [anchorEl, setAnchorEl] = useState(null);
 
-    // --- [修复] 修改 useEffect 逻辑以稳定 _internal_id ---
     useEffect(() => {
         setItems(prevItems => {
-            // 创建一个映射，用于快速查找现有项的 _internal_id
             const idMap = new Map(prevItems.map(item => [JSON.stringify({type: item.type, role: item.role, content: item.content, source: item.source}), item._internal_id]));
 
             const newItems = (contents || []).map((item, index) => {
-                // 如果是新添加的项（长度变化），或者在旧项中找不到，则生成新的 ID
                 if (prevItems.length !== contents.length || !prevItems[index] || !prevItems[index]._internal_id) {
                      return {
                         ...item,
                         _internal_id: `${item.type}_${Date.now()}_${index}`
                     };
                 }
-                // 否则，保留旧的 ID
                 return {
                     ...item,
                     _internal_id: prevItems[index]._internal_id
@@ -110,7 +118,7 @@ export function LlmContentsEditor({ contents, onContentsChange }) {
             });
             return newItems;
         });
-    }, [contents]); // 依赖仍然是 contents，但内部逻辑更智能了
+    }, [contents]); 
 
     const sensors = useSensors(
         useSensor(PointerSensor),
@@ -118,7 +126,6 @@ export function LlmContentsEditor({ contents, onContentsChange }) {
     );
     
     const notifyParent = (newItems) => {
-        // 在通知父组件之前，移除内部使用的 _internal_id
         const cleanedItems = newItems.map(({ _internal_id, ...rest }) => rest);
         onContentsChange(cleanedItems);
     }
@@ -137,11 +144,12 @@ export function LlmContentsEditor({ contents, onContentsChange }) {
     const handleAddItem = (type) => {
         let newItem;
         if (type === 'MESSAGE_PART') {
-            newItem = { type: 'MESSAGE_PART', role: 'user', content: '' };
+            // --- [修改] 添加默认名称 ---
+            newItem = { type: 'MESSAGE_PART', name: '新消息片段', role: 'user', content: '' };
         } else {
-            newItem = { type: 'INJECT_MESSAGES', source: '' };
+            // --- [修改] 添加默认名称 ---
+            newItem = { type: 'INJECT_MESSAGES', name: '新消息注入', source: '' };
         }
-        // 在添加时就生成稳定的 _internal_id
         const updatedItems = [...items, { ...newItem, _internal_id: `${type}_${Date.now()}_${items.length}` }];
         setItems(updatedItems);
         notifyParent(updatedItems);
@@ -150,7 +158,6 @@ export function LlmContentsEditor({ contents, onContentsChange }) {
 
     const handleUpdateItem = (index, updatedItem) => {
         const newItems = [...items];
-        // 确保更新时 _internal_id 不会丢失
         newItems[index] = { ...updatedItem, _internal_id: items[index]._internal_id };
         setItems(newItems);
         notifyParent(newItems);

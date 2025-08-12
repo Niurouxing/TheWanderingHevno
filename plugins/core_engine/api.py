@@ -115,7 +115,6 @@ async def create_sandbox(
                             }
                         }]
                     },
-                    # [NEW] 添加一个节点，使用 codex.invoke 获取系统提示
                     {
                         "id": "get_system_prompt",
                         "run": [{
@@ -127,7 +126,6 @@ async def create_sandbox(
                     },
                     {
                         "id": "generate_response", 
-                        # [MODIFIED] 添加对新节点的依赖
                         "depends_on": ["record_user_input", "get_chat_history", "get_system_prompt"],
                         "run": [{
                             "runtime": "llm.default", 
@@ -135,17 +133,19 @@ async def create_sandbox(
                                 "model": "gemini/gemini-1.5-flash",
                                 "contents": [
                                     {
+                                        "name": "系统提示",
                                         "type": "MESSAGE_PART",
                                         "role": "system",
-                                        # [MODIFIED] 从硬编码改为从 codex 节点宏获取
                                         "content": "{{ nodes.get_system_prompt.output }}"
                                     },
                                     {
+                                        "name": "注入聊天记录",
                                         "type": "INJECT_MESSAGES",
                                         "source": "{{ nodes.get_chat_history.output }}",
                                         "is_enabled": "{{ nodes.get_chat_history.output | length > 0 }}"
                                     },
                                     {
+                                        "name": "用户当前输入",
                                         "type": "MESSAGE_PART",
                                         "role": "user",
                                         "content": "{{ moment._user_input }}"
@@ -179,7 +179,6 @@ async def create_sandbox(
                 ]
             }
         },
-        # [NEW] 添加 codex 定义
         "codices": {
             "__hevno_type__": "hevno/codex_collection",
             "ai_persona": {
@@ -251,6 +250,7 @@ async def create_sandbox(
     logger.info(f"Created new sandbox '{sandbox.name}' ({sandbox.id}) and saved to disk.")
     return sandbox
 
+# ... (文件的其余部分保持不变) ...
 @router.post("/{sandbox_id}/step", response_model=StepResponse, summary="Execute a step")
 async def execute_sandbox_step(
     sandbox_id: UUID, 
