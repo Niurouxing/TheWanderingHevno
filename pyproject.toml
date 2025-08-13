@@ -36,6 +36,7 @@ dependencies = [
     "aiofiles",
     "cloudpickle",
     "typing-extensions",
+    "python-multipart",
 ]
 
 # --- 可选依赖 ---
