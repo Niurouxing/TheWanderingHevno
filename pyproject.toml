@@ -4,6 +4,9 @@
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+# --- 项目核心元数据 ---
+# 所有这些字段都必须在 [project] 表下面
+[project]
 name = "hevno-engine"
 version = "1.2.0"
 authors = [
@@ -35,20 +38,28 @@ dependencies = [
     "typing-extensions",
 ]
 
+# --- 可选依赖 ---
+# 必须使用 [project.optional-dependencies] 作为表名
 [project.optional-dependencies]
 dev = [ 
     "uvicorn[standard]",
     "typer[all]"
 ]
 
+# --- 命令行脚本 ---
+# 必须使用 [project.scripts] 作为表名
 [project.scripts]
 hevno = "cli:app"
 
+# --- 插件入口点 ---
+# 必须使用 [project.entry-points] 作为表名
 [project.entry-points."hevno.plugins"]
 # 这部分通常用于打包发布后的插件发现，对于本地开发可能不是必需的
 # 但保留它没有坏处
 core_logging = "plugins.core_logging"
 
+
+# --- Setuptools 工具特定配置 ---
 [tool.setuptools]
 include-package-data = true
 py-modules = ["cli"]
@@ -58,7 +69,7 @@ where = ["."]
 include = ["backend*", "plugins*"]
 
 
-# --- Pytest 配置 ---
+# --- Pytest 工具特定配置 ---
 [tool.pytest.ini_options]
 # 明确指定测试文件的搜索路径
 testpaths = [
