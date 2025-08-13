@@ -1,5 +1,5 @@
 // plugins/sandbox_explorer/src/SandboxExplorerPage.jsx
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Box, Grid, Typography, CircularProgress, Button } from '@mui/material';
 
 import { SandboxCard } from './components/SandboxCard';
@@ -46,7 +46,6 @@ const importSandboxFromJson = async (file) => {
   return response.json();
 }
 
-// --- 新增的 API 调用函数 ---
 const createEmptySandbox = async (name) => {
   const response = await fetch('/api/sandboxes', {
     method: 'POST',
@@ -59,6 +58,22 @@ const createEmptySandbox = async (name) => {
   }
   return response.json();
 };
+
+// --- [新增] 上传沙盒图标的API函数 ---
+const uploadSandboxIcon = async (sandboxId, file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await fetch(`/api/sandboxes/${sandboxId}/icon`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({ detail: "封面上传失败" }));
+    throw new Error(errData.detail || `Server error: ${response.status}`);
+  }
+  return response.json();
+};
+
 
 const triggerDownload = async (url, filename) => {
     const response = await fetch(url);
@@ -135,12 +150,12 @@ export function SandboxExplorerPage({ services }) {
   };
 
   const handleDelete = async (sandboxId) => {
-    if (window.confirm("Are you sure you want to delete this sandbox? This action cannot be undone.")) {
+    if (window.confirm("你确定要删除这个沙盒吗？此操作不可撤销。")) {
       try {
         await deleteSandbox(sandboxId);
         await loadData();
       } catch (e) {
-          alert(`Error deleting sandbox: ${e.message}`);
+          alert(`删除沙盒时出错: ${e.message}`);
           console.error(e);
       }
     }
@@ -154,14 +169,14 @@ export function SandboxExplorerPage({ services }) {
     try {
       await triggerDownload(url, filename);
     } catch (e) {
-      alert(`Error exporting sandbox: ${e.message}`);
+      alert(`导出沙盒时出错: ${e.message}`);
       console.error(e);
     }
   };
 
   const handleSelect = (sandboxId) => {
     hookManager.trigger('sandbox.selected', { sandboxId });
-    alert(`Sandbox ${sandboxId} selected! (Hook triggered)`);
+    alert(`已选择沙盒 ${sandboxId}！ (钩子已触发)`);
   };
 
   const handleEdit = (sandboxId) => {
@@ -173,6 +188,21 @@ export function SandboxExplorerPage({ services }) {
     setCurrentSandboxId(sandboxId);
     setActivePageId('runner_ui.main_view');
   };
+  
+  // ---  处理图标上传的函数 ---
+  const handleUploadIcon = async (sandboxId, file) => {
+    try {
+        // 调用新创建的API函数
+        await uploadSandboxIcon(sandboxId, file);
+        // 上传成功后，重新加载所有沙盒数据
+        // 这将获取到最新的 `icon_updated_at` 时间戳，从而使图片URL失效并强制浏览器重新加载新封面
+        await loadData();
+    } catch (e) {
+        alert(`上传封面失败: ${e.message}`);
+        console.error(e);
+    }
+  };
+
 
   if (loading) {
     return <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}><CircularProgress /></Box>;
@@ -207,6 +237,7 @@ export function SandboxExplorerPage({ services }) {
                 onDelete={handleDelete}
                 onExportPng={() => handleExport(sandbox.id, sandbox.name, 'png')}
                 onExportJson={() => handleExport(sandbox.id, sandbox.name, 'json')}
+                onUploadIcon={handleUploadIcon}
             />
           </Grid>
         ))}
