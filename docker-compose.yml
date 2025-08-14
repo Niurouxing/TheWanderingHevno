@@ -1,4 +1,4 @@
-# docker-compose.yml (供你自己开发和多平台构建使用)
+# docker-compose.yml 
 version: '3.8'
 
 services:
@@ -22,7 +22,7 @@ services:
       - ./cli.py:/app/cli.py
       - ./assets:/app/assets
       - ./entrypoint.sh:/app/entrypoint.sh
-      - ./.env:/app/.env.host 
+      - ./.env:/app/.env.host
     expose:
       - "8000"
     healthcheck:

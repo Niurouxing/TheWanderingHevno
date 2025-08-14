@@ -1,3 +1,4 @@
+# docker-compose.dist.yml
 version: '3.8'
 
 services:
@@ -10,7 +11,7 @@ services:
       - ./assets:/app/assets:delegated
       - ./hevno.json:/app/hevno.json
       - ./cli.py:/app/cli.py
-      - ./.env:/app/.env.host 
+      - ./.env:/app/.env.host
     expose:
       - "8000"
     healthcheck:
