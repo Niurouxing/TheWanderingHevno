@@ -1,5 +1,6 @@
 # plugins/core_persistence/service.py
 
+import os
 import io
 import json
 import logging
@@ -111,6 +112,22 @@ class PersistenceService(PersistenceServiceInterface):
         if snapshot_dir.is_dir():
             await asyncio.to_thread(shutil.rmtree, snapshot_dir)
             logger.debug(f"Deleted snapshot directory: {snapshot_dir}")
+
+    async def delete_snapshot(self, sandbox_id: UUID, snapshot_id: UUID) -> None:
+        """异步删除一个指定的快照文件。"""
+        file_path = self._get_sandbox_dir(sandbox_id) / "snapshots" / f"{snapshot_id}.json"
+        if file_path.is_file():
+            try:
+                # 使用 os.remove 比 shutil.rmtree 更适合删除文件
+                await asyncio.to_thread(os.remove, file_path)
+                logger.debug(f"Deleted snapshot file: {file_path}")
+            except FileNotFoundError:
+                # 如果在检查和删除之间文件消失了，这不是一个错误
+                pass
+            except Exception as e:
+                logger.error(f"Error deleting snapshot file {file_path}: {e}")
+                # 重新抛出，让上层知道操作失败
+                raise
         
     async def list_assets(self, asset_type: AssetType) -> List[str]:
         """Lists all assets of a given type by scanning the assets directory."""

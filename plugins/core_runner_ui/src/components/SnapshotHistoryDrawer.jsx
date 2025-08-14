@@ -6,7 +6,7 @@ import {
 } from '@mui/material';
 import RadioButtonCheckedIcon from '@mui/icons-material/RadioButtonChecked';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
-import HistoryToggleOffIcon from '@mui/icons-material/HistoryToggleOff';
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 
 const getSnapshotSummary = (snapshot) => {
     const input = snapshot.triggering_input?.text;
@@ -24,8 +24,7 @@ const getSnapshotSummary = (snapshot) => {
     return '初始状态';
 };
 
-// [FIX] Added the 'export' keyword to make the component importable
-export const SnapshotHistoryDrawer = ({ history, headSnapshotId, onRevert, isLoading, width, ...drawerProps }) => {
+export const SnapshotHistoryDrawer = ({ history, headSnapshotId, onRevert, onDelete, isLoading, width, ...drawerProps }) => {
     
     const reversedHistory = [...history].reverse();
 
@@ -58,18 +57,26 @@ export const SnapshotHistoryDrawer = ({ history, headSnapshotId, onRevert, isLoa
                             key={snapshot.id}
                             disablePadding
                             secondaryAction={
+                                // 只在非当前 head 的快照上显示删除按钮
                                 !isHead && (
-                                    <Tooltip title="切换到此状态">
-                                        <span> {/* Tooltip wrapper for disabled button */}
-                                            <IconButton edge="end" onClick={() => onRevert(snapshot.id)} disabled={isLoading}>
-                                                <HistoryToggleOffIcon />
+                                    <Tooltip title="永久删除此记录点">
+                                        <span>
+                                            <IconButton edge="end" onClick={() => onDelete(snapshot.id)} disabled={isLoading} sx={{ color: 'error.light' }}>
+                                                <DeleteForeverIcon />
                                             </IconButton>
                                         </span>
                                     </Tooltip>
                                 )
                             }
                         >
-                            <ListItemButton selected={isHead} dense>
+                            <ListItemButton 
+                                selected={isHead} 
+                                dense
+                                // 只有非当前 head 的快照才能被点击
+                                onClick={!isHead ? () => onRevert(snapshot.id) : undefined} 
+                                // 如果正在加载中，或者该项是当前 head，则禁用点击
+                                disabled={isLoading}
+                            >
                                 <ListItemIcon sx={{ minWidth: 32 }}>
                                     {isHead ? <RadioButtonCheckedIcon color="primary" fontSize="small" /> : <RadioButtonUncheckedIcon fontSize="small" />}
                                 </ListItemIcon>

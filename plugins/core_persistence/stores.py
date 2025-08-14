@@ -161,6 +161,22 @@ class PersistentSnapshotStore(SnapshotStoreInterface):
             self._cache.pop(sid, None)
             self._locks.pop(sid, None)
 
+    async def delete(self, snapshot_id: UUID) -> None:
+        """异步删除指定的快照，包括其持久化文件和缓存条目。"""
+        snapshot = self.get(snapshot_id)
+        if not snapshot:
+            # 如果快照不存在，静默返回，因为目标已经达成
+            return
+            
+        lock = self._get_lock(snapshot_id)
+        async with lock:
+            await self._persistence.delete_snapshot(snapshot.sandbox_id, snapshot.id)
+            # 从缓存和锁字典中移除
+            self._cache.pop(snapshot_id, None)
+            self._locks.pop(snapshot_id, None)
+            logger.info(f"Deleted snapshot {snapshot_id} from persistence and cache.")
+
+
     def clear(self) -> None:
         """此操作在持久化存储中无意义，记录警告并忽略。"""
         logger.warning("`clear` called on PersistentSnapshotStore, but it does nothing to disk state. Cache is NOT cleared.")

@@ -240,8 +240,12 @@ class SnapshotStoreInterface(ABC):
     async def find_by_sandbox(self, sandbox_id: UUID) -> List['StateSnapshot']:
         """异步查找并加载属于特定沙盒的所有快照。"""
         raise NotImplementedError
-    
-    # 添加缺失的方法以匹配实现
+
+    @abstractmethod
+    async def delete(self, snapshot_id: UUID) -> None:
+        """异步删除一个指定的快照。"""
+        raise NotImplementedError
+
     @abstractmethod
     async def delete_all_for_sandbox(self, sandbox_id: UUID) -> None:
         """异步删除属于特定沙盒的所有快照。"""

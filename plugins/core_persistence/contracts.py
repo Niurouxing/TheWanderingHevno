@@ -45,7 +45,6 @@ class PackageManifest(BaseModel):
 
 class PersistenceServiceInterface(ABC):
     """
-    【已重构】
     定义了核心持久化服务的文件系统I/O能力。
     注意：它不再知道 Sandbox 或 StateSnapshot 的具体模型，
     而是处理通用的字典数据，使得依赖关系更清晰。
@@ -110,4 +109,9 @@ class PersistenceServiceInterface(ABC):
     @property
     @abstractmethod
     def sandboxes_root_dir(self) -> Path:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def delete_snapshot(self, sandbox_id: UUID, snapshot_id: UUID) -> None:
+        """异步删除一个指定的快照文件。"""
         raise NotImplementedError

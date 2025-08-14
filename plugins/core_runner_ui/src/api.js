@@ -86,13 +86,44 @@ export async function getHistory(sandboxId) {
  */
 export async function revert(sandboxId, snapshotId) {
     const response = await fetch(`${BASE_URL}/${sandboxId}/revert`, {
-        method: 'PUT', // 注意: 你的后端可能是 POST 或 PUT，根据实际情况调整
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ snapshot_id: snapshotId }),
     });
 
     if (!response.ok) {
         const err = await response.json().catch(() => ({ detail: "Revert operation failed." }));
+        throw new Error(err.detail || `HTTP Error ${response.status}`);
+    }
+    return response.json();
+}
+
+/**
+ * [新增] 删除指定的快照
+ */
+export async function deleteSnapshot(sandboxId, snapshotId) {
+    const response = await fetch(`${BASE_URL}/${sandboxId}/snapshots/${snapshotId}`, {
+        method: 'DELETE',
+    });
+    // DELETE 成功时返回 204 No Content，response.ok 会是 true
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({ detail: "Delete snapshot operation failed." }));
+        throw new Error(err.detail || `HTTP Error ${response.status}`);
+    }
+    // 204 没有 body，所以直接返回
+}
+
+/**
+ * 重置沙盒历史，开启新会话
+ */
+export async function resetHistory(sandboxId) {
+    const response = await fetch(`${BASE_URL}/${sandboxId}/history:reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+    });
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({ detail: "Reset history operation failed." }));
         throw new Error(err.detail || `HTTP Error ${response.status}`);
     }
     return response.json();

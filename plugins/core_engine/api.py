@@ -324,6 +324,86 @@ async def revert_sandbox_to_snapshot(
     logger.info(f"Reverted sandbox '{sandbox.name}' ({sandbox.id}) to snapshot {snapshot_id} and saved.")
     return {"message": f"Sandbox '{sandbox.name}' successfully reverted to snapshot {snapshot_id}"}
 
+@router.delete("/{sandbox_id}/snapshots/{snapshot_id}", status_code=204, summary="Delete a Snapshot")
+async def delete_snapshot(
+    sandbox_id: UUID,
+    snapshot_id: UUID,
+    sandbox_store: SandboxStoreInterface = Depends(Service("sandbox_store")),
+    snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
+):
+    """
+    删除一个指定的历史快照。
+
+    **注意**: 为了保证沙盒的完整性，不允许删除当前作为 `head` 的快照。
+    如果需要删除 `head` 快照，请先将沙盒 `revert` 到另一个快照。
+    """
+    sandbox = sandbox_store.get(sandbox_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Sandbox not found.")
+
+    if sandbox.head_snapshot_id == snapshot_id:
+        raise HTTPException(
+            status_code=409,  # 409 Conflict 是一个合适的代码
+            detail="Cannot delete the head snapshot. Please revert to another snapshot first."
+        )
+
+    # 检查快照是否存在（可选，但更健壮）
+    snapshot = snapshot_store.get(snapshot_id)
+    if not snapshot or snapshot.sandbox_id != sandbox_id:
+        # 即使找不到，也返回成功，因为最终状态是“不存在”
+        return Response(status_code=204)
+
+    await snapshot_store.delete(snapshot_id)
+    
+    logger.info(f"Deleted snapshot '{snapshot_id}' for sandbox '{sandbox.name}' ({sandbox.id}).")
+    return Response(status_code=204)
+
+@router.post("/{sandbox_id}/history:reset", response_model=Sandbox, summary="Reset Sandbox History")
+async def reset_sandbox_history(
+    sandbox_id: UUID,
+    sandbox_store: SandboxStoreInterface = Depends(Service("sandbox_store")),
+    snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
+):
+    """
+    通过创建一个新的“创世”快照来重置沙盒的会话历史。
+
+    此操作会：
+    1. 读取沙盒 `definition` 中的 `initial_moment`。
+    2. 基于此 `initial_moment` 创建一个全新的 `StateSnapshot`。
+    3. 将沙盒的 `head_snapshot_id` 指向这个新快照。
+    4. 新快照没有父快照，有效开启一个全新的、干净的对话分支。
+    """
+    sandbox = sandbox_store.get(sandbox_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Sandbox not found.")
+
+    initial_moment = sandbox.definition.get("initial_moment")
+    if not isinstance(initial_moment, dict):
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot reset history: Sandbox 'definition' is missing a valid 'initial_moment' dictionary."
+        )
+
+    # 创建一个新的创世快照
+    new_genesis_snapshot = StateSnapshot(
+        sandbox_id=sandbox.id,
+        moment=initial_moment,
+        parent_snapshot_id=None # 关键：这开启了一个新分支
+    )
+    
+    # 保存新快照
+    await snapshot_store.save(new_genesis_snapshot)
+    
+    # 更新沙盒的头指针
+    sandbox.head_snapshot_id = new_genesis_snapshot.id
+    
+    # 保存更新后的沙盒
+    await sandbox_store.save(sandbox)
+    
+    logger.info(f"Reset history for sandbox '{sandbox.name}' ({sandbox.id}). New head snapshot is {new_genesis_snapshot.id}.")
+    
+    # 返回更新后的沙盒，让前端立即知道新状态
+    return sandbox
 
 # --- 其他端点 ---
 

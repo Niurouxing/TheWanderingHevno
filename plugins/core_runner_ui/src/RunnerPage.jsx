@@ -7,13 +7,14 @@ import {
 import { useLayout } from '../../core_layout/src/context/LayoutContext';
 import { ConversationStream } from './components/ConversationStream';
 import { UserInputBar } from './components/UserInputBar';
-import { SnapshotHistoryDrawer } from './components/SnapshotHistoryDrawer'; // 重命名为 Drawer
-import { getSandboxDetails, mutate, step, getHistory, revert } from './api';
+import { SnapshotHistoryDrawer } from './components/SnapshotHistoryDrawer';
+import { getSandboxDetails, mutate, step, getHistory, revert, deleteSnapshot, resetHistory } from './api';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import MenuIcon from '@mui/icons-material/Menu';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import AddCommentIcon from '@mui/icons-material/AddComment';
 
-const DRAWER_WIDTH = 320; // 定义侧边栏宽度
+const DRAWER_WIDTH = 320;
 
 export function RunnerPage() {
     const { currentSandboxId, setActivePageId, setCurrentSandboxId } = useLayout();
@@ -31,6 +32,8 @@ export function RunnerPage() {
     const [diagnosticsHeight, setDiagnosticsHeight] = useState(200);
     const resizeRef = useRef(null);
 
+    const [optimisticMessage, setOptimisticMessage] = useState(null);
+
     const handleResizeMouseDown = useCallback((e) => {
         e.preventDefault();
         resizeRef.current = {
@@ -45,9 +48,7 @@ export function RunnerPage() {
         if (!resizeRef.current) return;
         const { initialHeight, initialY } = resizeRef.current;
         const dy = e.clientY - initialY;
-        // 当把手在顶部时，向下拖动（dy > 0）应该减小高度，因此用减法
         const newHeight = initialHeight - dy;
-        // 设置最小和最大高度
         const clampedHeight = Math.max(50, Math.min(newHeight, 600));
         setDiagnosticsHeight(clampedHeight);
     }, []);
@@ -58,12 +59,10 @@ export function RunnerPage() {
         document.removeEventListener('mouseup', handleResizeMouseUp);
     }, []);
 
-    // 监听屏幕尺寸变化以调整侧边栏状态
     useEffect(() => {
         setHistoryDrawerOpen(isLargeScreen);
     }, [isLargeScreen]);
     
-    // 提取消息列表的 useMemo 逻辑保持不变
     const messages = useMemo(() => {
         const allMessages = [];
         const headPath = new Map();
@@ -85,10 +84,15 @@ export function RunnerPage() {
                 }
             }
         }
-        const uniqueMessages = Array.from(new Map(allMessages.map(item => [item.id, item])).values());
+        let uniqueMessages = Array.from(new Map(allMessages.map(item => [item.id, item])).values());
         uniqueMessages.sort((a, b) => a.sequence_id - b.sequence_id);
+
+        if (optimisticMessage) {
+            uniqueMessages.push(optimisticMessage);
+        }
+
         return uniqueMessages;
-    }, [snapshotHistory, headSnapshotId]);
+    }, [snapshotHistory, headSnapshotId, optimisticMessage]);
 
 
     const loadData = useCallback(async (showLoading = true) => {
@@ -120,7 +124,6 @@ export function RunnerPage() {
         if (currentSandboxId) {
             loadData();
         } else {
-            // 如果没有沙盒ID，清空所有状态
             setSandboxDetails(null);
             setSnapshotHistory([]);
             setHeadSnapshotId(null);
@@ -130,9 +133,19 @@ export function RunnerPage() {
     
     const handleUserSubmit = async (inputText) => {
         if (!currentSandboxId || isLoading) return;
+        
+        const tempMsg = {
+            id: `optimistic_${Date.now()}`,
+            content: inputText,
+            level: 'user',
+            sequence_id: (messages.length > 0 ? messages[messages.length - 1].sequence_id : 0) + 1,
+        };
+        setOptimisticMessage(tempMsg);
+        
         setIsLoading(true);
         setError('');
         setDiagnostics(null);
+        
         try {
             await mutate(currentSandboxId, [{ type: 'UPSERT', path: 'moment/_user_input', value: inputText }]);
             const stepResponse = await step(currentSandboxId, {});
@@ -143,6 +156,7 @@ export function RunnerPage() {
             setError(e.message);
             await loadData(false);
         } finally {
+            setOptimisticMessage(null);
             setIsLoading(false);
         }
     };
@@ -197,6 +211,39 @@ export function RunnerPage() {
             setIsLoading(false);
         }
     };
+    
+    const handleDeleteSnapshot = async (snapshotId) => {
+        if (!currentSandboxId || isLoading || snapshotId === headSnapshotId) return;
+        if (window.confirm("确定要永久删除这个历史记录点吗？")) {
+            setIsLoading(true);
+            setError('');
+            try {
+                await deleteSnapshot(currentSandboxId, snapshotId);
+                await loadData(false);
+            } catch (e) {
+                setError(`删除失败: ${e.message}`);
+            } finally {
+                setIsLoading(false);
+            }
+        }
+    };
+
+    const handleResetHistory = async () => {
+        if (!currentSandboxId || isLoading) return;
+        if (window.confirm("确定要开启一个新的会话吗？当前会话将成为历史记录。")) {
+            setIsLoading(true);
+            setError('');
+            try {
+                await resetHistory(currentSandboxId);
+                await loadData(false);
+            } catch (e) {
+                setError(`开启新会话失败: ${e.message}`);
+            } finally {
+                setIsLoading(false);
+            }
+        }
+    };
+
 
     const handleGoBackToExplorer = () => {
         setCurrentSandboxId(null);
@@ -218,7 +265,8 @@ export function RunnerPage() {
             <SnapshotHistoryDrawer 
                 history={snapshotHistory} 
                 headSnapshotId={headSnapshotId} 
-                onRevert={handleRevert} 
+                onRevert={handleRevert}
+                onDelete={handleDeleteSnapshot}
                 isLoading={isLoading}
                 open={isHistoryDrawerOpen}
                 onClose={() => setHistoryDrawerOpen(false)}
@@ -237,8 +285,8 @@ export function RunnerPage() {
                         easing: theme.transitions.easing.sharp,
                         duration: theme.transitions.duration.leavingScreen,
                     }),
-                    marginLeft: `-${DRAWER_WIDTH}px`, // 默认隐藏
-                    ...(isHistoryDrawerOpen && { // 当打开时
+                    marginLeft: `-${DRAWER_WIDTH}px`,
+                    ...(isHistoryDrawerOpen && {
                         transition: theme.transitions.create('margin', {
                             easing: theme.transitions.easing.easeOut,
                             duration: theme.transitions.duration.enteringScreen,
@@ -250,31 +298,28 @@ export function RunnerPage() {
                 <AppBar position="static" color="default" sx={{ boxShadow: 'none', borderBottom: 1, borderColor: 'divider' }}>
                     <Toolbar>
                         <Tooltip title="切换历史记录">
-                            <IconButton
-                                color="inherit"
-                                aria-label="open drawer"
-                                onClick={() => setHistoryDrawerOpen(!isHistoryDrawerOpen)}
-                                edge="start"
-                                sx={{ mr: 2 }}
-                            >
+                            <IconButton color="inherit" aria-label="open drawer" onClick={() => setHistoryDrawerOpen(!isHistoryDrawerOpen)} edge="start" sx={{ mr: 2 }}>
                                 <MenuIcon />
                             </IconButton>
                         </Tooltip>
                         <Tooltip title="返回沙盒列表">
-                             <IconButton
-                                color="inherit"
-                                onClick={handleGoBackToExplorer}
-                                edge="start"
-                            >
+                             <IconButton color="inherit" onClick={handleGoBackToExplorer} edge="start">
                                 <ArrowBackIcon />
                             </IconButton>
                         </Tooltip>
                         <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1, ml: 1 }}>
                             {sandboxDetails?.name || 'Loading...'}
                         </Typography>
+                        
+                        <Tooltip title="新建会话">
+                            <IconButton size="small" onClick={handleResetHistory} disabled={isLoading}>
+                                <AddCommentIcon />
+                            </IconButton>
+                        </Tooltip>
+
                         {diagnostics && (
                             <Tooltip title="显示/隐藏诊断信息">
-                                <IconButton size="small" onClick={() => setShowDiagnostics(s => !s)}>
+                                <IconButton size="small" onClick={() => setShowDiagnostics(s => !s)} sx={{ ml: 1 }}>
                                     <BugReportIcon color={showDiagnostics ? "primary" : "inherit"} />
                                 </IconButton>
                             </Tooltip>
@@ -283,7 +328,7 @@ export function RunnerPage() {
                 </AppBar>
 
                 <Box sx={{ flexGrow: 1, overflowY: 'auto' }}>
-                    {isLoading && snapshotHistory.length === 0 ? (
+                    {isLoading && messages.length === 0 && !optimisticMessage ? (
                         <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>
                     ) : (
                         <ConversationStream 
@@ -299,35 +344,9 @@ export function RunnerPage() {
                     <Collapse in={showDiagnostics}>
                         <Paper 
                             variant="outlined" 
-                            sx={{ 
-                                p: 2, 
-                                pt: 3, // 为顶部的把手增加内边距
-                                mb: 1.5, 
-                                height: diagnosticsHeight, 
-                                overflow: 'hidden', 
-                                bgcolor: 'background.default',
-                                position: 'relative',
-                                display: 'flex',
-                                flexDirection: 'column'
-                            }}
+                            sx={{ p: 2, pt: 3, mb: 1.5, height: diagnosticsHeight, overflow: 'hidden', bgcolor: 'background.default', position: 'relative', display: 'flex', flexDirection: 'column' }}
                         >
-                            <Box
-                                onMouseDown={handleResizeMouseDown}
-                                sx={{
-                                    position: 'absolute',
-                                    top: 0, // 移动到顶部
-                                    left: 0,
-                                    right: 0,
-                                    height: '10px',
-                                    cursor: 'ns-resize',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    '&:hover div': {
-                                        backgroundColor: theme.palette.action.active,
-                                    }
-                                }}
-                            >
+                            <Box onMouseDown={handleResizeMouseDown} sx={{ position: 'absolute', top: 0, left: 0, right: 0, height: '10px', cursor: 'ns-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', '&:hover div': { backgroundColor: theme.palette.action.active, }}}>
                                  <Box sx={{ width: '40px', height: '4px', backgroundColor: theme.palette.divider, borderRadius: '2px', transition: 'background-color 0.2s' }} />
                             </Box>
                             <Typography variant="subtitle2" sx={{ flexShrink: 0 }}>诊断信息</Typography>
@@ -336,6 +355,7 @@ export function RunnerPage() {
                             </pre>
                         </Paper>
                     </Collapse>
+                    {/* [修复] 恢复正确的 isLoading 逻辑 */}
                     <UserInputBar onSendMessage={handleUserSubmit} isLoading={isLoading} />
                 </Box>
             </Box>
