@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   backend:
-    image: niurouxing/hevno-engine-backend:latest # <-- 已更新
+    image: niurouxing/hevno-engine-backend:latest 
     container_name: hevno_backend
     volumes:
       - ./backend:/app/backend:delegated
@@ -10,7 +10,7 @@ services:
       - ./assets:/app/assets:delegated
       - ./hevno.json:/app/hevno.json
       - ./cli.py:/app/cli.py
-      - ./.env:/app/.env
+      - ./.env:/app/.env.host 
     expose:
       - "8000"
     healthcheck:
@@ -22,7 +22,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    image: niurouxing/hevno-engine-frontend:latest # <-- 已更新
+    image: niurouxing/hevno-engine-frontend:latest
     container_name: hevno_frontend
     ports:
       - "5173:5173"
