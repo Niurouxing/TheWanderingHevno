@@ -1,11 +1,19 @@
-# docker-compose.yml (开发模式)
+# docker-compose.yml (供你自己开发和多平台构建使用)
 version: '3.8'
 
 services:
   backend:
+    # build 部分现在包含了多平台构建的配置
     build:
       context: .
       dockerfile: backend.Dockerfile
+      platforms:
+        - "linux/amd64" # 为 Windows/Intel-Linux 用户构建
+        - "linux/arm64" # 为 Apple Silicon/ARM-Linux 用户构建
+    
+    # image 字段是 buildx 推送的目标，也是本地运行时镜像的名称
+    image: niurouxing/hevno-engine-backend:latest
+    
     container_name: hevno_backend
     volumes:
       - ./backend:/app/backend
@@ -13,13 +21,10 @@ services:
       - ./hevno.json:/app/hevno.json
       - ./cli.py:/app/cli.py
       - ./assets:/app/assets
-      # [关键] 挂载新创建的入口脚本
       - ./entrypoint.sh:/app/entrypoint.sh
       - ./.env:/app/.env
-    # 将后端的 8000 端口暴露给内部网络
     expose:
       - "8000"
-    # 添加一个健康检查，让前端可以等待后端真正就绪
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
       interval: 10s
@@ -28,9 +33,17 @@ services:
       start_period: 30s
 
   frontend:
+    # build 部分同样配置为多平台
     build:
       context: .
       dockerfile: frontend.Dockerfile
+      platforms:
+        - "linux/amd64"
+        - "linux/arm64"
+        
+    # image 字段是 buildx 推送的目标，也是本地运行时镜像的名称
+    image: niurouxing/hevno-engine-frontend:latest
+    
     container_name: hevno_frontend
     ports:
       - "5173:5173"
@@ -42,10 +55,8 @@ services:
       - ./package.json:/app/package.json
       - ./package-lock.json:/app/package-lock.json
       - node_modules_volume:/app/node_modules:delegated
-    # [关键] 添加环境变量以告知前端后端的地址
     environment:
       - VITE_API_URL=http://backend:8000
-    # [关键] depends_on 现在使用更健壮的 service_healthy 条件
     depends_on:
       backend:
         condition: service_healthy
