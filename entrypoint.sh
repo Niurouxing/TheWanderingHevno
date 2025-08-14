@@ -1,14 +1,13 @@
 #!/bin/sh
-# entrypoint.sh
-
-# 确保脚本在遇到错误时会退出
 set -e
 
-echo "🔌 [Entrypoint] Running plugin synchronization..."
-# 使用 pip 安装的 hevno 命令来同步插件
-hevno plugins sync
+# 如果 hevno.json 存在，则运行插件同步
+if [ -f "hevno.json" ]; then
+  echo "🔌 [Entrypoint] hevno.json found. Running plugin synchronization..."
+  hevno plugins sync
+else
+  echo "ℹ️ [Entrypoint] hevno.json not found. Skipping plugin synchronization."
+fi
 
-echo "🚀 [Entrypoint] Synchronization complete. Starting main process..."
-
-# 执行传递给容器的 CMD (例如 uvicorn ...)
+echo "🚀 [Entrypoint] Starting main process..."
 exec "$@"

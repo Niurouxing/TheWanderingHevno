@@ -1,0 +1,47 @@
+# docker-compose.dist.yml (提供给用户下载)
+version: '3.8'
+
+services:
+  backend:
+    # [关键] 使用 image 指令，而不是 build
+    image: niurouxing/hevno-engine-backend:latest # <-- 替换成你的镜像名
+    container_name: hevno_backend
+    volumes:
+      - ./backend:/app/backend:delegated
+      - ./plugins:/app/plugins:delegated
+      - ./assets:/app/assets:delegated
+      - ./hevno.json:/app/hevno.json
+      - ./cli.py:/app/cli.py
+      - ./.env:/app/.env
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  frontend:
+    # [关键] 使用 image 指令，而不是 build
+    image: your-dockerhub-username/hevno-engine-frontend:latest # <-- 替换成你的镜像名
+    container_name: hevno_frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app/frontend:delegated
+      - ./plugins:/app/plugins:delegated
+      - ./index.html:/app/index.html:delegated
+      - ./vite.config.js:/app/vite.config.js:delegated
+      - ./package.json:/app/package.json:delegated
+      - node_modules_volume:/app/node_modules:delegated
+    environment:
+      - VITE_API_URL=http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  node_modules_volume:
