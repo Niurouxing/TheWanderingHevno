@@ -1,0 +1,31 @@
+# .dockerignore
+
+# 忽略所有 node_modules 目录，这是最重要的规则
+**/node_modules
+
+# 忽略 Python 缓存和构建产物
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+
+# 忽略 Git 目录
+.git
+.gitignore
+
+# 忽略 Docker 相关文件，它们不需要进入构建上下文
+.dockerignore
+docker-compose.yml
+backend.Dockerfile
+frontend.Dockerfile
+
+
+# 忽略 IDE 和操作系统特定的文件
+.idea
+.vscode
+.DS_Store
+
+# 忽略 npm 日志
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

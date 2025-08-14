@@ -10,6 +10,11 @@
     "core_websocket": { "source": "local" },
     "core_remote_hooks": { "source": "local" },
     "core_layout": { "source": "local" },
-    "core_diagnostics": { "source": "local" }
-  }
+    "core_diagnostics": { "source": "local" },
+    "page_demo": { "source": "local" },
+    "sandbox_explorer": { "source": "local" },
+    "sandbox_editor": { "source": "local" },
+    "core_llm_config": { "source": "local" },
+    "core_runner_ui": { "source": "local" }
+    }
 }

@@ -76,6 +76,7 @@ class FrontendLoader {
           const pluginModule = await import(entryPointUrl);
           
           if (pluginModule.registerPlugin) {
+            const pluginModule = await import(/* @vite-ignore */ entryPointUrl);
             console.log(`-> 正在注册插件: ${manifest.id} (priority: ${manifest.frontend?.priority || 0})`);
             await Promise.resolve(pluginModule.registerPlugin(this.services));
           }
