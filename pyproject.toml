@@ -151,3 +151,9 @@ asyncio_mode = "auto"
 markers = [
     "e2e: marks tests as end-to-end, which may require network access and secrets."
 ]
+
+[tool.uvicorn]
+reload = true
+reload_dirs = ["backend", "plugins"]
+reload_excludes = [".env"]
+log_level = "debug"

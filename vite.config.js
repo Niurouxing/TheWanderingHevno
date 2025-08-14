@@ -2,6 +2,8 @@
 
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import { resolve } from 'path';
+
 
 export default defineConfig(({ mode }) => {
   // 加载 .env 文件中的环境变量
@@ -31,6 +33,12 @@ export default defineConfig(({ mode }) => {
           ws: true,
         },
       },
+      watch: {
+      // 明确告诉 Vite 忽略对项目根目录下任何 .env 文件的修改
+      ignored: [
+        resolve(__dirname, '.env'),
+      ],
+    },
     },
   };
 });
