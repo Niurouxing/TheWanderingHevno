@@ -5,6 +5,7 @@ import logging
 import json
 import time
 import uuid
+import copy
 from typing import Dict, Any, List, Optional
 from uuid import UUID
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -405,7 +406,59 @@ async def reset_sandbox_history(
     # 返回更新后的沙盒，让前端立即知道新状态
     return sandbox
 
-# --- 其他端点 ---
+@router.post(
+    "/{sandbox_id}/apply_definition", 
+    response_model=Sandbox, 
+    summary="Apply Definition to State"
+)
+async def apply_definition_to_sandbox(
+    sandbox_id: UUID,
+    sandbox_store: SandboxStoreInterface = Depends(Service("sandbox_store")),
+    snapshot_store: SnapshotStoreInterface = Depends(Service("snapshot_store")),
+):
+    """
+    使用沙盒 `definition` 中的 `initial_lore` 和 `initial_moment` 
+    来完全重置当前的 lore 和 moment 状态。
+    这是一个破坏性操作，会开启一个全新的历史分支。
+    """
+    sandbox = sandbox_store.get(sandbox_id)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Sandbox not found.")
+
+    # 1. 验证并获取定义
+    initial_lore = sandbox.definition.get("initial_lore")
+    initial_moment = sandbox.definition.get("initial_moment")
+
+    if not isinstance(initial_lore, dict) or not isinstance(initial_moment, dict):
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot apply definition: 'initial_lore' or 'initial_moment' is missing or not a dictionary in the definition."
+        )
+
+    # 2. 重置 Lore
+    # 使用深拷贝以避免任何意外的引用问题
+    sandbox.lore = copy.deepcopy(initial_lore)
+    logger.info(f"Applied initial_lore to sandbox '{sandbox.name}' ({sandbox.id}).")
+
+    # 3. 重置 Moment (通过创建一个新的创世快照)
+    new_genesis_snapshot = StateSnapshot(
+        sandbox_id=sandbox.id,
+        moment=copy.deepcopy(initial_moment),
+        parent_snapshot_id=None # 关键: 这开启了一个新的、干净的历史分支
+    )
+    await snapshot_store.save(new_genesis_snapshot)
+    
+    # 4. 更新沙盒的头指针
+    sandbox.head_snapshot_id = new_genesis_snapshot.id
+    
+    # 5. 持久化更新后的沙盒 (包含新的 lore 和 head_snapshot_id)
+    await sandbox_store.save(sandbox)
+    
+    logger.info(f"Reset history for sandbox '{sandbox.name}' based on definition. New head is {new_genesis_snapshot.id}.")
+    
+    # 6. 返回更新后的沙盒对象
+    return sandbox
+
 
 @router.get("/{sandbox_id}/history", response_model=List[StateSnapshot], summary="Get history")
 async def get_sandbox_history(

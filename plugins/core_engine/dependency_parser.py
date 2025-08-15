@@ -5,7 +5,7 @@ import asyncio
 
 from plugins.core_engine.registry import RuntimeRegistry
 
-NODE_DEP_REGEX = re.compile(r'nodes\.([a-zA-Z0-9_]+)')
+NODE_DEP_REGEX = re.compile(r'nodes\.([^.]+)')
 
 def extract_dependencies_from_string(s: str) -> Set[str]:
     if not isinstance(s, str):

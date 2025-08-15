@@ -46,3 +46,24 @@ export async function query(sandboxId, paths) {
   const data = await response.json();
   return data.results;
 }
+
+
+/**
+ * 请求后端使用沙盒的 definition 来重置 lore 和 moment。
+ * @param {string} sandboxId - 目标沙盒的ID。
+ * @returns {Promise<object>} - 更新后的沙盒对象。
+ * @throws {Error} - 如果API调用失败。
+ */
+export async function applyDefinition(sandboxId) {
+  const response = await fetch(`${BASE_URL}/${sandboxId}/apply_definition`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: "Failed to apply definition." }));
+    throw new Error(err.detail || `HTTP Error ${response.status}`);
+  }
+
+  return response.json();
+}

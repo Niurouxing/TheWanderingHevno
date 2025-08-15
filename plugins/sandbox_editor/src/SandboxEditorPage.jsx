@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Box, Typography, Tabs, Tab, CircularProgress, Button } from '@mui/material';
+import { Box, Typography, Tabs, Tab, CircularProgress, Button, Alert } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import PublishedWithChangesIcon from '@mui/icons-material/PublishedWithChanges';
 import { useLayout } from '../../core_layout/src/context/LayoutContext';
 import { SCOPE_TABS } from './utils/constants';
 import { DataTree } from './components/DataTree';
 import { CodexEditor } from './editors/CodexEditor';
 import { GraphEditor } from './editors/GraphEditor';
 import { MemoriaEditor } from './editors/MemoriaEditor';
-import { query, mutate } from './utils/api';
+import { query, mutate, applyDefinition } from './utils/api';
 import { GenericEditorDialog } from './editors/GenericEditorDialog';
-// --- [修改 1/4] 导入新的 AddItemDialog ---
 import { AddItemDialog } from './editors/AddItemDialog';
 import { isObject } from './utils/constants';
 
@@ -23,8 +23,7 @@ export function SandboxEditorPage({ services }) {
     const [editingGraph, setEditingGraph] = useState(null);
     const [editingMemoria, setEditingMemoria] = useState(null);
     const [editingGeneric, setEditingGeneric] = useState(null);
-    // --- [修改 2/4] 添加管理添加对话框的状态 ---
-    const [addItemTarget, setAddItemTarget] = useState(null); // e.g., { path: 'lore.graphs', existingKeys: ['main'] }
+    const [addItemTarget, setAddItemTarget] = useState(null);
 
     const loadSandboxData = useCallback(async () => {
         
@@ -96,7 +95,6 @@ export function SandboxEditorPage({ services }) {
         }
     };
 
-    // --- [修改 3/4] 添加处理添加请求的函数 ---
     const handleOpenAddDialog = (path, existingKeys) => {
         setAddItemTarget({ path, existingKeys });
     };
@@ -113,11 +111,32 @@ export function SandboxEditorPage({ services }) {
         }
     };
 
+    const handleApplyDefinition = async () => {
+        if (!window.confirm(
+            "确定要应用这个蓝图吗？\n\n这将完全覆盖当前的 `lore` 和 `moment` 状态，并用 `definition` 中的初始值替换它们。\n\n当前的所有记忆和演化知识都将丢失，并开启一个全新的历史记录。此操作不可撤销。"
+        )) {
+            return;
+        }
+
+        setLoading(true);
+        setError('');
+        try {
+            await applyDefinition(currentSandboxId);
+            await loadSandboxData();
+            alert("蓝图已成功应用！");
+        } catch (e) {
+            setError(`应用蓝图失败: ${e.message}`);
+            console.error(e);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+
     // ... (加载和错误状态的渲染保持不变) ...
     if (!currentSandboxId) return <Box sx={{ p: 4, textAlign: 'center' }}><Typography variant="h6" color="error">未选择要编辑的沙盒</Typography></Box>;
     if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}><CircularProgress /></Box>;
-    if (error) return <Box sx={{ p: 4, textAlign: 'center' }}><Typography variant="h6" color="error">加载沙盒失败</Typography><Typography color="text.secondary">{error}</Typography><Button variant="outlined" sx={{ mt: 2 }} onClick={loadSandboxData}>重试</Button></Box>;
-
+    if (error) return <Box sx={{ p: 4, textAlign: 'center' }}><Alert severity="error" onClose={() => setError('')}>{error}</Alert><Button variant="outlined" sx={{ mt: 2 }} onClick={loadSandboxData}>重试</Button></Box>;
     const currentScopeData = sandboxData[SCOPE_TABS[activeScope]];
 
     if (editingCodex) return <CodexEditor sandboxId={currentSandboxId} basePath={editingCodex.basePath} codexName={editingCodex.name} codexData={editingCodex.data} onBack={handleBackToOverview} />;
@@ -129,13 +148,23 @@ export function SandboxEditorPage({ services }) {
     return (
         <Box sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, flexShrink: 0 }}>
-                {/* ... (头部UI保持不变) ... */}
                 <Button variant="outlined" startIcon={<ArrowBackIcon />} onClick={handleGoBackToExplorer} sx={{ mr: 2 }}>
                     返回沙盒列表
                 </Button>
                 <Typography variant="h4" component="h1" noWrap sx={{ flexGrow: 1 }}>
                     正在编辑: {sandboxName}
                 </Typography>
+                {SCOPE_TABS[activeScope] === 'definition' && (
+                    <Button 
+                        variant="contained" 
+                        color="secondary"
+                        startIcon={<PublishedWithChangesIcon />} 
+                        onClick={handleApplyDefinition}
+                        disabled={loading}
+                    >
+                        应用蓝图
+                    </Button>
+                )}
             </Box>
 
             <Tabs value={activeScope} onChange={handleScopeChange} aria-label="sandbox scopes" sx={{ flexShrink: 0, borderBottom: 1, borderColor: 'divider' }}>
@@ -145,7 +174,6 @@ export function SandboxEditorPage({ services }) {
             </Tabs>
             <Box sx={{ mt: 2, flexGrow: 1, overflowY: 'auto' }}>
                 {currentScopeData ? (
-                    // --- [修改 4/4] 将 onAdd 处理器传递给 DataTree ---
                     <DataTree data={currentScopeData} path={SCOPE_TABS[activeScope]} onEdit={handleEdit} onAdd={handleOpenAddDialog} />
                 ) : (
                     <Typography color="text.secondary">该范围内没有可用数据</Typography>

@@ -12,41 +12,35 @@ export function CodexInvokeEditor({ value, onChange }) {
         let parsedData = null;
         let isValid = false;
 
-        // 优雅地处理空值、null或undefined
-        if (!value) {
+        // 1. 优先处理已经是数组的情况 (最常见)
+        if (Array.isArray(value)) {
+            isValid = true;
+            parsedData = value;
+        } 
+        // 2. 处理空值 (null, undefined, '')
+        else if (!value) {
             isValid = true;
             parsedData = [];
         } 
-        // 处理数据已经是JavaScript数组的情况
-        else if (Array.isArray(value)) {
-            isValid = true;
-            parsedData = value;
-        }
-        // 处理数据是JSON字符串的情况
+        // 3. 最后尝试处理字符串
         else if (typeof value === 'string') {
-            // 避免解析空字符串导致错误
-            if (value.trim() === '') {
-                isValid = true;
-                parsedData = [];
-            } else {
-                try {
-                    const parsed = JSON.parse(value);
-                    if (Array.isArray(parsed)) {
-                        isValid = true;
-                        parsedData = parsed;
-                    }
-                } catch (e) {
-                    // 如果解析失败，isValid 保持 false
+            try {
+                const parsed = JSON.parse(value);
+                if (Array.isArray(parsed)) {
+                    isValid = true;
+                    parsedData = parsed;
                 }
+            } catch (e) {
+                // 解析失败，isValid 保持 false
             }
         }
         
         if (isValid) {
-            // 清理数据，确保数组中的每一项都是有效对象
+            // 清理数据，确保数组中的每一项都是具有所需键的有效对象
             const sanitized = parsedData.map(item => 
                 (typeof item === 'object' && item !== null && !Array.isArray(item))
                     ? { codex: item.codex || '', source: item.source || '' }
-                    : { codex: '', source: '' }
+                    : { codex: '', source: '' } // 如果项格式不正确，则重置
             );
             setSources(sanitized);
             setIsInvalidFormat(false);
@@ -54,25 +48,18 @@ export function CodexInvokeEditor({ value, onChange }) {
             setSources([]);
             setIsInvalidFormat(true);
         }
-        // --- [FIX END] ---
-
     }, [value]);
 
     const notifyChange = (newSources) => {
-        try {
-            // 始终将字符串化的JSON数组向上传递，以保持数据一致性
-            const newValueString = JSON.stringify(newSources);
-            onChange(newValueString);
-        } catch (e) {
-            console.error("Failed to stringify sources:", e);
-        }
+        // [核心修复] 直接传递原生数组，而不是JSON字符串
+        onChange(newSources);
     };
 
     const handleItemChange = (index, field, fieldValue) => {
         const newSources = [...sources];
         newSources[index] = { ...newSources[index], [field]: fieldValue };
-        setSources(newSources); // 立即更新本地UI
-        notifyChange(newSources); // 将更改向上传播
+        setSources(newSources);
+        notifyChange(newSources);
     };
 
     const handleAddItem = () => {
