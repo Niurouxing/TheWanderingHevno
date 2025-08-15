@@ -113,7 +113,7 @@ export function CodexInvokeEditor({ value, onChange }) {
                             placeholder='例如, "npc_status"'
                         />
                         <TextField
-                            label="来源 (宏)"
+                            label="激活源 (宏)"
                             value={item.source || ''}
                             onChange={(e) => handleItemChange(index, 'source', e.target.value)}
                             size="small"

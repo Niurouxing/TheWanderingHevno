@@ -355,7 +355,9 @@ class ExecutionEngine(SubGraphRunner):
             try:
                 eval_context = build_evaluation_context(context, pipe_vars=pipeline_state)
                 
+
                 config_to_process = instruction.config.copy()
+                as_key = config_to_process.pop("as", None)
 
                 config_to_process = await self.hook_manager.filter(
                     "before_config_evaluation",
@@ -401,7 +403,13 @@ class ExecutionEngine(SubGraphRunner):
                 if not isinstance(output, dict):
                     error_message = f"Runtime '{runtime_name}' did not return a dictionary. Got: {type(output).__name__}"
                     return {"error": error_message, "failed_step": i, "runtime": runtime_name}
-                pipeline_state.update(output)
+                
+                if as_key and isinstance(as_key, str):
+                    # 如果 as_key 存在，将整个输出字典嵌套在它下面
+                    pipeline_state[as_key] = output
+                else:
+                    # 如果 as_key 不存在，行为和以前一样，直接合并
+                    pipeline_state.update(output)
             except Exception as e:
                 import traceback
                 traceback.print_exc()

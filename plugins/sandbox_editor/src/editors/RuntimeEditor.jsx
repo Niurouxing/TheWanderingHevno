@@ -1,6 +1,6 @@
 // plugins/sandbox_editor/src/editors/RuntimeEditor.jsx
 import React, { useState, useEffect } from 'react';
-import { Box, List, Collapse, IconButton, Button, Select, MenuItem, Typography, Paper, ListSubheader } from '@mui/material'; // --- [MODIFIED] Import ListSubheader
+import { Box, List, Collapse, IconButton, Button, Select, MenuItem, Typography, Paper, ListSubheader, TextField } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -145,6 +145,26 @@ export function RuntimeEditor({ runList, onRunListChange }) {
           <ListSubheader>System Advanced</ListSubheader>
           <MenuItem value="system.execute">system.execute</MenuItem>
         </Select>
+
+        {draftData.runtime && (
+          <TextField
+            label="as (可选命名空间)"
+            value={draftData.config?.as || ''}
+            onChange={(e) => {
+              const newConfig = { ...draftData.config, as: e.target.value };
+              // 如果值为空，则从 config 对象中删除 'as' 键以保持数据清洁
+              if (!e.target.value) {
+                delete newConfig.as;
+              }
+              handleDraftChange('config', newConfig);
+            }}
+            fullWidth
+            size="small"
+            sx={{ mb: 2 }}
+            helperText="为该指令的输出指定一个名称，以便后续指令引用。"
+          />
+        )}
+        
         {draftData.runtime && (
           <RuntimeConfigForm
             runtimeType={draftData.runtime}
