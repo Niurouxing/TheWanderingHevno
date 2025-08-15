@@ -21,7 +21,7 @@ def linear_collection() -> GraphCollection:
             "model": "mock/model",
             "contents": [{
                 "role": "user",
-                "content": "{{ nodes.B.llm_output }}"
+                "content": "{{ nodes.B.output }}"
             }]
         }}]}
     ]}})

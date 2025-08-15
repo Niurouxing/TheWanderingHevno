@@ -104,7 +104,7 @@ class LLMRuntime(RuntimeInterface):
 
             if response.error_details:
                 return {"error": response.error_details.message, "error_type": response.error_details.error_type.value, "details": response.error_details.model_dump()}
-            return {"llm_output": response.content, "usage": response.usage, "model_name": response.model_name}
+            return {"output": response.content, "usage": response.usage, "model_name": response.model_name}
         
         except LLMRequestFailedError as e:
             # --- 在异常情况下也记录日志 ---

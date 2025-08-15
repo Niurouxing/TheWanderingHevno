@@ -159,7 +159,7 @@ async def create_sandbox(
                         "run": [{
                             "runtime": "system.execute", 
                             "config": {
-                                "code": "{{ moment._user_output = nodes.generate_response.llm_output }}"
+                                "code": "{{ moment._user_output = nodes.generate_response.output }}"
                             }
                         }]
                     },

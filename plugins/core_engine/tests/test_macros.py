@@ -109,10 +109,10 @@ class TestAdvancedMacrosAndRuntimes:
         engine, container, _ = test_engine_setup
         
         # Arrange
-        llm_output = '{"result": "success", "value": 42}'
+        output = '{"result": "success", "value": 42}'
         graph = GraphCollection.model_validate({"main": {"nodes": [
             {"id": "parser", "run": [{"runtime": "system.data.parse", "config": {
-                "text": llm_output,
+                "text": output,
                 "format": "json"
             }}]}
         ]}})

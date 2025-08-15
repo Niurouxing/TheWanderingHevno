@@ -40,8 +40,8 @@ class TestEngineCoreFlows:
         
         # 从最终快照的 run_output 中验证节点结果。
         output = final_snapshot.run_output
-        assert "C" in output and "llm_output" in output["C"]
-        assert "The story is: a story about a cat" in output["B"]["llm_output"]
+        assert "C" in output and "output" in output["C"]
+        assert "The story is: a story about a cat" in output["B"]["output"]
 
     async def test_parallel_flow(
         self, 
@@ -83,7 +83,7 @@ class TestEngineCoreFlows:
         
         # Assert (Output): 验证节点内的第二个指令正确地消费了第三个指令的输入 (`pipe` 对象)。
         expected_prompt = "Tell a story about Sir Reginald. He just received this message: A secret message"
-        assert expected_prompt in final_snapshot.run_output["A"]["llm_output"]
+        assert expected_prompt in final_snapshot.run_output["A"]["output"]
         
     async def test_handles_failure_and_skips_downstream(
         self, 
