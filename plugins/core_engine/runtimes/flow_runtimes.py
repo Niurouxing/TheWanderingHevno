@@ -12,17 +12,24 @@ class ExecuteRuntime(RuntimeInterface):
     system.execute: 对一个字符串形式的宏代码进行二次求值和执行。
     作为宏系统的终极“逃生舱口”。
     """
-    async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
+    # 1. 修改方法签名以接收 pipeline_state
+    async def execute(
+        self, 
+        config: Dict[str, Any], 
+        context: ExecutionContext, 
+        pipeline_state: Optional[Dict[str, Any]] = None, 
+        **kwargs
+    ) -> Dict[str, Any]:
         code_to_execute = config.get("code")
 
         if not isinstance(code_to_execute, str):
             return {"output": code_to_execute}
 
-        eval_context = build_evaluation_context(context)
+        # 2. 将接收到的 pipeline_state 传递给 build_evaluation_context
+        eval_context = build_evaluation_context(context, pipe_vars=pipeline_state)
         lock = context.shared.global_write_lock
         result = await evaluate_expression(code_to_execute, eval_context, lock)
         return {"output": result}
-
 
 class CallRuntime(RuntimeInterface):
     """
