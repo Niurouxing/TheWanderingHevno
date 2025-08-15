@@ -27,7 +27,7 @@ class RemoteHookEmitter(RemoteHookEmitterInterface):
                 "hook_name": hook_name,
                 "data": data
             }
-            message = json.dumps(payload)
+            message = json.dumps(payload, ensure_ascii=False)
             logger.debug(f"Emitting remote hook to frontend: '{hook_name}'")
             await self._manager.broadcast(message)
         except TypeError as e:

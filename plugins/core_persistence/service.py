@@ -46,7 +46,7 @@ class PersistenceService(PersistenceServiceInterface):
         file_path = sandbox_dir / "sandbox.json"
         
         # 不再需要 `default` 参数，因为传入的 `data` 已经是完全 JSON 兼容的了
-        json_string = json.dumps(data, indent=2)
+        json_string = json.dumps(data, indent=2, ensure_ascii=False)
 
         async with aiofiles.open(file_path, mode='w', encoding='utf-8') as f:
             await f.write(json_string)
@@ -77,7 +77,7 @@ class PersistenceService(PersistenceServiceInterface):
         snapshot_dir.mkdir(parents=True, exist_ok=True)
         file_path = snapshot_dir / f"{snapshot_id}.json"
         
-        json_string = json.dumps(data, indent=2)
+        json_string = json.dumps(data, indent=2, ensure_ascii=False)
         
         async with aiofiles.open(file_path, mode='w', encoding='utf-8') as f:
             await f.write(json_string)
@@ -185,8 +185,11 @@ class PersistenceService(PersistenceServiceInterface):
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr('manifest.json', manifest.model_dump_json(indent=2))
                 for filename, model_instance in data_files.items():
-                    if isinstance(model_instance, BaseModel): file_content = model_instance.model_dump_json(indent=2)
-                    else: file_content = json.dumps(model_instance, indent=2)
+                    if isinstance(model_instance, BaseModel): 
+                        model_dict = model_instance.model_dump(mode='json')
+                        file_content = json.dumps(model_dict, indent=2, ensure_ascii=False)
+                    else: 
+                        file_content = json.dumps(model_instance, indent=2, ensure_ascii=False)
                     zf.writestr(f'data/{filename}', file_content)
             return zip_buffer.getvalue()
         zip_bytes = await asyncio.to_thread(_sync_zip)

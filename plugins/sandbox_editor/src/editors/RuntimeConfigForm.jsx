@@ -2,7 +2,6 @@
 import React from 'react';
 import { Box, TextField, Select, MenuItem, FormControlLabel, Switch, Typography, FormControl, InputLabel } from '@mui/material';
 import { CodexInvokeEditor } from './CodexInvokeEditor.jsx';
-// [MODIFIED] Import the new editor for llm.default
 import { LlmContentsEditor } from './LlmContentsEditor.jsx';
 
 const RUNTIME_CONFIG_SPECS = {
@@ -12,7 +11,6 @@ const RUNTIME_CONFIG_SPECS = {
     'memoria.add': [
         { key: 'stream', type: 'text', label: '流名称', required: true },
         { key: 'content', type: 'text', label: '内容 (支持宏)', multiline: true, required: true },
-        // [MODIFIED] Updated label to guide user
         { key: 'level', type: 'text', label: '级别 (如 event, user, model)', default: 'event' },
         { key: 'tags', type: 'text', label: '标签 (逗号分隔)', },
     ],
@@ -21,8 +19,7 @@ const RUNTIME_CONFIG_SPECS = {
         { key: 'latest', type: 'text', label: '最新N条 (数字)' },
         { key: 'levels', type: 'text', label: '级别 (逗号分隔)' },
         { key: 'tags', type: 'text', label: '标签 (逗号分隔)' },
-        { key: 'order', type: 'select', label: '排序', options: ['升序', '降序'], default: '升序' },
-        // [NEW] Add the new format field with user-friendly labels
+        { key: 'order', type: 'select', label: '排序', options: [{value: 'ascending', label: '升序'}, {value: 'descending', label: '降序'}], default: 'ascending' },
         { 
             key: 'format', 
             type: 'select', 
@@ -45,7 +42,7 @@ const RUNTIME_CONFIG_SPECS = {
     ],
     'system.io.log': [
         { key: 'message', type: 'text', label: '消息', multiline: true, required: true },
-        { key: 'level', type: 'select', label: '级别', options: ['调试', '信息', '警告', '错误', '严重'], default: '信息' },
+        { key: 'level', type: 'select', label: '级别', options: ['debug', 'info', 'warning', 'error', 'critical'], default: 'info' },
     ],
     // System Data
     'system.data.format': [
@@ -62,7 +59,7 @@ const RUNTIME_CONFIG_SPECS = {
     'system.data.regex': [
         { key: 'text', type: 'text', label: '文本 (宏)', multiline: true, required: true },
         { key: 'pattern', type: 'text', label: '正则表达式 (如 (?P<name>...))', multiline: false, required: true },
-        { key: 'mode', type: 'select', label: '模式', options: ['查找', '全部查找'], default: '查找' },
+        { key: 'mode', type: 'select', label: '模式', options: [{value: 'search', label: '查找'}, {value: 'find_all', label: '全部查找'}], default: 'search' },
     ],
     // System Flow
     'system.flow.call': [
@@ -95,10 +92,8 @@ export function RuntimeConfigForm({ runtimeType, config, onConfigChange }) {
   
   const hasGenericFields = spec.length > 0;
   const isCodexInvoke = runtimeType === 'codex.invoke';
-  // [NEW] Add a check for the llm.default runtime
   const isLlmDefault = runtimeType === 'llm.default';
 
-  // [MODIFIED] Adjust the condition to include the new custom editor
   if (!hasGenericFields && !isCodexInvoke && !isLlmDefault) {
     return <Typography color="text.secondary" sx={{mt:2}}>该指令不需要额外配置</Typography>
   }
@@ -107,12 +102,28 @@ export function RuntimeConfigForm({ runtimeType, config, onConfigChange }) {
     <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
       <Typography variant="subtitle2">配置</Typography>
       
-      {/* [NEW] Render the custom contents editor for 'llm.default' */}
+      {/* --- 核心修复 --- */}
       {isLlmDefault && (
-        <LlmContentsEditor 
-            contents={config.contents || []} 
-            onContentsChange={(newContents) => handleChange('contents', newContents)}
-        />
+        <>
+            {/* 1. 添加模型名称输入框 */}
+            <TextField
+              key="model"
+              label="模型名称"
+              required={true}
+              value={config.model || ''}
+              onChange={(e) => handleChange('model', e.target.value)}
+              fullWidth
+              variant="outlined"
+              size="small"
+              placeholder="例如, gemini/gemini-1.5-pro"
+              helperText="格式为 '提供商/模型ID'"
+            />
+            {/* 2. 渲染原有的 contents 编辑器 */}
+            <LlmContentsEditor 
+                contents={config.contents || []} 
+                onContentsChange={(newContents) => handleChange('contents', newContents)}
+            />
+        </>
       )}
       
       {isCodexInvoke && (
@@ -156,7 +167,6 @@ export function RuntimeConfigForm({ runtimeType, config, onConfigChange }) {
                     value={value}
                     onChange={(e) => handleChange(field.key, e.target.value)}
                 >
-                    {/* [MODIFIED] Handle both string arrays and object arrays for options */}
                     {field.options.map(opt => {
                       const optValue = typeof opt === 'object' ? opt.value : opt;
                       const optLabel = typeof opt === 'object' ? opt.label : opt;
