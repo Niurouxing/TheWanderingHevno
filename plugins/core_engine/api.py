@@ -6,6 +6,7 @@ import json
 import time
 import uuid
 import copy
+import aiofiles
 from typing import Dict, Any, List, Optional
 from uuid import UUID
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -17,6 +18,7 @@ from fastapi.responses import Response, FileResponse, JSONResponse
 
 # 导入核心依赖解析器和所有必要的接口与数据模型（契约）
 from backend.core.dependencies import Service
+from backend.core.serialization import pickle_fallback_encoder, custom_json_decoder_object_hook
 from plugins.core_engine.contracts import (
     Sandbox, 
     StateSnapshot, 
@@ -628,7 +630,7 @@ async def import_sandbox_json(
 
     try:
         content = await file.read()
-        data = json.loads(content)
+        data = json.loads(content, object_hook=custom_json_decoder_object_hook)
         archive = SandboxArchiveJSON.model_validate(data)
     except (json.JSONDecodeError, ValidationError) as e:
         raise HTTPException(status_code=422, detail=f"Invalid sandbox archive format: {e}")
@@ -686,14 +688,17 @@ async def export_sandbox(
         metadata={"sandbox_name": sandbox.name}
     )
     
-    # 准备导出的沙盒数据，兼容旧版
-    export_sandbox_data = sandbox.model_dump()
-    export_sandbox_data['graph_collection'] = sandbox.lore.get('graphs', {})
+    # 使用与持久化存储相同的序列化机制，确保UUID等类型被正确处理
+    export_sandbox_data = sandbox.model_dump(mode='json', fallback=pickle_fallback_encoder)
+    
+    # 为了兼容旧版，手动添加 graph_collection (如果 lore.graphs 存在)
+    if sandbox.lore and 'graphs' in sandbox.lore:
+        export_sandbox_data['graph_collection'] = sandbox.lore['graphs']
 
-    # 注意：这里传递的是字典，而不是Pydantic模型，因为model_dump已经处理过了
     data_files: Dict[str, Any] = {"sandbox.json": export_sandbox_data}
     for snap in snapshots:
-        data_files[f"snapshots/{snap.id}.json"] = snap.model_dump()
+        # 对每个快照也使用相同的序列化机制
+        data_files[f"snapshots/{snap.id}.json"] = snap.model_dump(mode='json', fallback=pickle_fallback_encoder)
 
     base_image_bytes = None
     icon_path = persistence_service.get_sandbox_icon_path(str(sandbox.id))
@@ -718,7 +723,6 @@ async def export_sandbox(
     filename = f"hevno_sandbox_{sandbox.name.replace(' ', '_')}_{sandbox_id}.png"
     return Response(content=png_bytes, media_type="image/png", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
-
 @router.post(":import", response_model=Sandbox, summary="Import a Sandbox from PNG")
 async def import_sandbox(
     file: UploadFile = File(...),
@@ -732,7 +736,6 @@ async def import_sandbox(
     package_bytes = await file.read()
     
     try:
-        # 添加 await 调用异步方法
         manifest, data_files, png_bytes = await persistence_service.import_package(package_bytes)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid package: {e}")
@@ -745,18 +748,36 @@ async def import_sandbox(
         if not sandbox_data_str:
             raise ValueError(f"Entry point file '{manifest.entry_point}' not found in package.")
         
-        old_sandbox_data = json.loads(sandbox_data_str)
+        old_sandbox_data = json.loads(sandbox_data_str, object_hook=custom_json_decoder_object_hook)
         
-        initial_lore = {"graphs": old_sandbox_data.get("graph_collection", {})}
-        initial_moment = {}
-        definition = {"initial_lore": initial_lore, "initial_moment": initial_moment}
+        # --- [修复开始] ---
+        # 1. 直接从导入的数据中获取完整的 `lore` 和 `definition`。
+        imported_lore = old_sandbox_data.get('lore')
+        imported_definition = old_sandbox_data.get('definition')
+
+        # 2. 添加对旧格式的向后兼容支持。
+        #    如果 `lore` 不存在，但旧的 `graph_collection` 存在，则用它来构建 lore。
+        if not imported_lore and 'graph_collection' in old_sandbox_data:
+            imported_lore = {"graphs": old_sandbox_data.get("graph_collection", {})}
         
+        # 3. 如果 `definition` 不存在（非常旧的格式），则根据已有的 lore 和空的 moment 构建一个。
+        if not imported_definition:
+             imported_definition = {
+                 "initial_lore": imported_lore or {},
+                 "initial_moment": {}
+             }
+
+        if not imported_lore or not imported_definition:
+            raise ValueError("Imported sandbox data is missing 'lore' or 'definition' fields.")
+        # --- [修复结束] ---
+
         new_id = uuid.uuid4()
+        # 使用修复后的、完整的数据来创建新的 Sandbox 对象
         new_sandbox = Sandbox(
             id=new_id,
             name=old_sandbox_data.get('name', 'Imported Sandbox'),
-            definition=definition,
-            lore=initial_lore,
+            definition=imported_definition, # 使用完整的 definition
+            lore=imported_lore,             # 使用完整的 lore
             created_at=datetime.now(timezone.utc)
         )
         
@@ -772,7 +793,7 @@ async def import_sandbox(
 
         for filename, content_str in data_files.items():
             if filename.startswith("snapshots/"):
-                old_snapshot_data = json.loads(content_str)
+                old_snapshot_data = json.loads(content_str, object_hook=custom_json_decoder_object_hook)
                 old_id = UUID(old_snapshot_data.get('id'))
                 old_parent_id = old_snapshot_data.get('parent_snapshot_id')
                 old_parent_id_uuid = UUID(old_parent_id) if old_parent_id else None
@@ -790,17 +811,29 @@ async def import_sandbox(
                 recovered_snapshots.append(new_snapshot)
         
         if not recovered_snapshots:
-            raise ValueError("No snapshots found in the package.")
+            # [修改] 如果没有快照，我们应该基于 definition 创建一个创世快照，而不是报错。
+            initial_moment = new_sandbox.definition.get("initial_moment", {})
+            genesis_snapshot = StateSnapshot(
+                id=uuid.uuid4(),
+                sandbox_id=new_sandbox.id,
+                moment=initial_moment
+            )
+            recovered_snapshots.append(genesis_snapshot)
+            # 将 head 指向这个唯一的快照
+            new_sandbox.head_snapshot_id = genesis_snapshot.id
+
 
         for snapshot in recovered_snapshots:
             await snapshot_store.save(snapshot)
         
-        old_head_id = old_sandbox_data.get('head_snapshot_id')
-        if old_head_id:
-            new_sandbox.head_snapshot_id = old_to_new_snap_id.get(UUID(old_head_id))
+        # [修改] 如果 head_snapshot_id 还没有被设置（例如上面创建了创世快照的情况），
+        # 则需要从导入的数据中设置它。
+        if not new_sandbox.head_snapshot_id:
+            old_head_id = old_sandbox_data.get('head_snapshot_id')
+            if old_head_id:
+                new_sandbox.head_snapshot_id = old_to_new_snap_id.get(UUID(old_head_id))
 
         try:
-            # 添加 await 调用异步方法
             await persistence_service.save_sandbox_icon(str(new_sandbox.id), png_bytes)
             new_sandbox.icon_updated_at = datetime.now(timezone.utc)
         except Exception as e:

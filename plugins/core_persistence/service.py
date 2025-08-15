@@ -184,14 +184,11 @@ class PersistenceService(PersistenceServiceInterface):
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr('manifest.json', manifest.model_dump_json(indent=2))
-                for filename, model_instance in data_files.items():
-                    if isinstance(model_instance, BaseModel): 
-                        model_dict = model_instance.model_dump(mode='json')
-                        file_content = json.dumps(model_dict, indent=2, ensure_ascii=False)
-                    else: 
-                        file_content = json.dumps(model_instance, indent=2, ensure_ascii=False)
+                for filename, data_dict in data_files.items():
+                    file_content = json.dumps(data_dict, indent=2, ensure_ascii=False)
                     zf.writestr(f'data/{filename}', file_content)
             return zip_buffer.getvalue()
+        
         zip_bytes = await asyncio.to_thread(_sync_zip)
         return await self._embed_zip_in_png(zip_bytes, base_image_bytes)
 
