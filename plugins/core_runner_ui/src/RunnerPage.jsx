@@ -134,6 +134,7 @@ export function RunnerPage() {
     const handleUserSubmit = async (inputText) => {
         if (!currentSandboxId || isLoading) return;
         
+        // 乐观更新的逻辑保持不变
         const tempMsg = {
             id: `optimistic_${Date.now()}`,
             content: inputText,
@@ -147,8 +148,17 @@ export function RunnerPage() {
         setDiagnostics(null);
         
         try {
-            await mutate(currentSandboxId, [{ type: 'UPSERT', path: 'moment/_user_input', value: inputText }]);
-            const stepResponse = await step(currentSandboxId, {});
+            // --- 核心改动 ---
+            // 1. 定义一个清晰的 payload，这就是将要注入到 `run.triggering_input` 的内容
+            const payload = {
+                user_message: inputText
+            };
+
+            // 2. 直接调用 step API 并将 payload 作为请求体
+            //    不再需要之前的 mutate 调用！
+            const stepResponse = await step(currentSandboxId, payload);
+            // --- 核心改动结束 ---
+
             if (stepResponse.status === 'ERROR') throw new Error(stepResponse.error_message);
             if (stepResponse.diagnostics) setDiagnostics(stepResponse.diagnostics);
             await loadData(false); 

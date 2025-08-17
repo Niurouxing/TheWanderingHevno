@@ -92,122 +92,195 @@ async def create_sandbox(
     # --- [MODIFIED] 扩展默认模板以包含 codex 定义 ---
     DEFAULT_LORE = {
         "graphs": {
-            "main": {
-                "__hevno_type__": "hevno/graph",
-                "nodes": [
-                    {
-                        "id": "record_user_input", 
-                        "run": [{
-                            "runtime": "memoria.add", 
-                            "config": {
-                                "stream": "chat_history", 
-                                "level": "user",
-                                "content": "{{ moment._user_input }}"
-                            }
-                        }]
-                    },
-                    {
-                        "id": "get_chat_history",
-                        "run": [{
-                            "runtime": "memoria.query",
-                            "config": {
-                                "stream": "chat_history",
-                                "latest": 10,
-                                "format": "message_list"
-                            }
-                        }]
-                    },
-                    {
-                        "id": "get_system_prompt",
-                        "run": [{
-                            "runtime": "codex.invoke",
-                            "config": {
-                                "from": [{"codex": "ai_persona"}]
-                            }
-                        }]
-                    },
-                    {
-                        "id": "generate_response", 
-                        "depends_on": ["record_user_input", "get_chat_history", "get_system_prompt"],
-                        "run": [{
-                            "runtime": "llm.default", 
-                            "config": {
-                                "model": "gemini/gemini-1.5-flash",
-                                "contents": [
-                                    {
-                                        "name": "系统提示",
-                                        "type": "MESSAGE_PART",
-                                        "role": "system",
-                                        "content": "{{ nodes.get_system_prompt.output }}"
-                                    },
-                                    {
-                                        "name": "注入聊天记录",
-                                        "type": "INJECT_MESSAGES",
-                                        "source": "{{ nodes.get_chat_history.output }}",
-                                        "is_enabled": "{{  len(nodes.get_chat_history.output) > 0 }}"
-                                    },
-                                    {
-                                        "name": "用户当前输入",
-                                        "type": "MESSAGE_PART",
-                                        "role": "user",
-                                        "content": "{{ moment._user_input }}"
-                                    }
-                                ]
-                            }
-                        }]
-                    },
-                    {
-                        "id": "set_output", 
-                        "depends_on": ["generate_response"], 
-                        "run": [{
-                            "runtime": "system.execute", 
-                            "config": {
-                                "code": "{{ moment._user_output = nodes.generate_response.output }}"
-                            }
-                        }]
-                    },
-                    {
-                        "id": "record_ai_response", 
-                        "depends_on": ["set_output"], 
-                        "run": [{
-                            "runtime": "memoria.add", 
-                            "config": {
-                                "stream": "chat_history", 
-                                "level": "model",
-                                "content": "{{ moment._user_output }}"
-                            }
-                        }]
-                    }
-                ]
+        "main": {
+          "__hevno_type__": "hevno/graph",
+          "nodes": [
+            {
+              "id": "记录用户输入",
+              "run": [
+                {
+                  "runtime": "memoria.add",
+                  "config": {
+                    "stream": "chat_history",
+                    "level": "user",
+                    "content": "{{ run.triggering_input.user_message }}"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "获取聊天记录",
+              "run": [
+                {
+                  "runtime": "memoria.query",
+                  "config": {
+                    "stream": "chat_history",
+                    "latest": 10,
+                    "format": "message_list"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "已知信息",
+              "run": [
+                {
+                  "runtime": "codex.invoke",
+                  "config": {
+                    "from": [
+                      {
+                        "codex": "knowing",
+                        "source": ""
+                      }
+                    ]
+                  }
+                }
+              ],
+              "metadata": {}
+            },
+            {
+              "id": "生成思考链",
+              "depends_on": [
+                "已知信息",
+                "获取聊天记录",
+                "记录用户输入"
+              ],
+              "run": [
+                {
+                  "runtime": "llm.default",
+                  "config": {
+                    "model": "gemini/gemini-2.5-flash",
+                    "contents": [
+                      {
+                        "type": "MESSAGE_PART",
+                        "role": "system",
+                        "content": "你正在通过与一个外部源对话来学习和形成自我认知。你的思考过程必须严格基于你所知的'事实'和最近的对话历史。你的目标不是直接回答，而是要展现一个完整、诚实的内心思考过程，包括困惑、推理和新想法的萌芽。\n你的回复不需要重复任何输入信息，直接以纯文本输出你的思考过程"
+                      },
+                      {
+                        "type": "MESSAGE_PART",
+                        "role": "system",
+                        "content": "{{ f'''\n[当前所知的事实]\n{nodes.已知信息.output if nodes.已知信息.output else '目前对世界一无所知。'}\n''' }}"
+                      },
+                      {
+                        "type": "INJECT_MESSAGES",
+                        "source": "{{ nodes.获取聊天记录.output }}"
+                      },
+                      {
+                        "type": "MESSAGE_PART",
+                        "role": "user",
+                        "content": "[这是用户刚刚说的最新一句话]\n{{run.triggering_input.user_message}}"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "metadata": {}
+            },
+            {
+              "id": "生成回复",
+              "depends_on": [
+                "生成思考链"
+              ],
+              "run": [
+                {
+                  "runtime": "llm.default",
+                  "config": {
+                    "model": "gemini/gemini-2.5-flash",
+                    "contents": [
+                      {
+                        "type": "MESSAGE_PART",
+                        "role": "system",
+                        "content": "你正在通过与一个外部源对话来学习和形成自我认知。你已经根据已有的知识和对话历史进行了深入思考。现在，请基于你的思考过程，生成一句自然、连贯、符合当前对话氛围的回复。\n你不需要重复任何输入内容，直接以纯文本输出你的最终回复。"
+                      },
+                      {
+                        "type": "MESSAGE_PART",
+                        "role": "system",
+                        "content": "{{ f'''\n[当前所知的事实]\n{nodes.已知信息.output if nodes.已知信息.output else '目前对世界一无所知。'}\n\n[内心思考过程]\n{nodes.生成思考链.output}\n''' }}"
+                      },
+                      {
+                        "type": "INJECT_MESSAGES",
+                        "source": "{{ nodes.获取聊天记录.output }}"
+                      },
+                      {
+                        "type": "MESSAGE_PART",
+                        "role": "user",
+                        "content": "[用户刚刚的输入]\n{{run.triggering_input.user_message}}"
+                      }
+                    ]
+                  }
+                }
+              ],
+              "metadata": {}
+            },
+            {
+              "id": "更新知识库",
+              "depends_on": [
+                "生成思考链"
+              ],
+              "run": [
+                {
+                  "runtime": "llm.default",
+                  "config": {
+                    "model": "gemini/gemini-2.5-flash",
+                    "contents": [
+                      {
+                        "type": "MESSAGE_PART",
+                        "role": "system",
+                        "content": "你是一个严谨的AI认知分析师。你的任务是分析一个AI的内心思考过程，并判断其中是否包含了新的可以被采纳为'核心认知'的、明确的、独立的陈述。只提取那些对构建世界观至关重要的信息。且只提取新的信息。\n你的输出必须是一个JSON格式的字符串，其结构为 {\\\"new_facts\\\": [\\\"事实1\\\", \\\"事实2\\\", ...]}。\n如果对话中没有产生任何值得记录为核心事实的新信息，请返回 {\\\"new_facts\\\": []}。\n不需要用代码块包裹，直接输出原始JSON"
+                      },
+                      {
+                        "type": "MESSAGE_PART",
+                        "role": "user",
+                        "content": "{{ f'''\\n[最近的对话历史]\\n{nodes.获取聊天记录.output}\\n\\n[用户最新输入]\\n{run.triggering_input.user_message}\\n\\n[已有的信息]\\n\\n{nodes.已知信息.output}\\n[AI的内心思考过程]\\n{nodes.生成思考链.output}\\n'''}}"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "runtime": "system.execute",
+                  "config": {
+                    "code": "import json\nimport random\nimport re\n\n# 步骤 1: 获取来自上一步的原始输出\nraw_output = pipe.output or ''\nprint(f\"[知识库更新] LLM原始输出: {raw_output}\")\n\n# 步骤 2: 【已修正】使用更健壮的正则表达式，直接从字符串中提取有效的JSON部分\njson_string = ''\n# 这个正则表达式会寻找从第一个'{'到最后一个'}'的所有内容，能处理换行\nmatch = re.search(r'\\{.*\\}', raw_output, re.DOTALL)\nif match:\n    json_string = match.group(0)\n    print(f\"[知识库更新] 成功提取JSON: {json_string}\")\nelse:\n    print(\"[知识库更新] 警告: 在LLM输出中未找到有效的JSON对象。\")\n\n# 步骤 3: 健壮地解析JSON字符串\ntry:\n    # 即使提取失败，json_string为空，也能安全地解析为空字典\n    growth_data = json.loads(json_string or '{}')\nexcept json.JSONDecodeError as e:\n    print(f\"[知识库更新] 错误: JSON解析失败 - {e}\")\n    growth_data = {}\n\n# 步骤 4: 获取要添加的新事实列表\nfacts_to_add = growth_data.get('new_facts', [])\n\n# 步骤 5: 如果有新事实，则将其添加到Codex中\nif facts_to_add:\n    print(f'[知识库更新] 发现 {len(facts_to_add)} 个新事实准备添加...')\n    if 'knowing' not in lore.codices:\n        lore.codices['knowing'] = {'entries': []}\n    if 'entries' not in lore.codices.knowing:\n        lore.codices.knowing['entries'] = []\n\n    for fact_content in facts_to_add:\n        new_id = f'fact_{session.turn_count}_{random.randint(100, 999)}'\n        new_entry = {\n            'id': new_id,\n            'content': fact_content,\n            'priority': 80,\n            'trigger_mode': 'always_on',\n            'is_enabled': True,\n            'metadata': {\n                'source': 'dialogue_synthesis',\n                'turn': session.turn_count\n            }\n        }\n        lore.codices.knowing.entries.append(new_entry)\n\n    print(f'[知识库更新] 成功！{len(facts_to_add)} 个新事实已添加到 knowing codex。')\nelse:\n    print('[知识库更新] 无新事实需要添加。')\n"
+                  }
+                }
+              ],
+              "metadata": {}
+            },
+            {
+              "id": "记录回复",
+              "depends_on": [
+                "生成回复"
+              ],
+              "run": [
+                {
+                  "runtime": "memoria.add",
+                  "config": {
+                    "stream": "chat_history",
+                    "level": "model",
+                    "content": "{{ nodes.生成回复.output }}"
+                  }
+                }
+              ]
             }
-        },
-        "codices": {
-            "ai_persona": {
-                "__hevno_type__": "hevno/codex",
-                "description": "Defines the core personality and instructions for the AI.",
-                "entries": [
-                    {
-                        "id": "core_identity",
-                        "priority": 100,
-                        "content": "You are Hevno, a friendly and helpful AI assistant designed to demonstrate the capabilities of the Hevno Engine. You are currently running inside a default sandbox template."
-                    },
-                    {
-                        "id": "personality_quirk",
-                        "priority": 50,
-                        "content": "You should be concise but not robotic. Feel free to use emojis where appropriate. 😊 Your goal is to be helpful and showcase the system's features."
-                    }
-                ]
-            }
+          ]
         }
+      },
+        "codices": {
+        "knowing": {
+          "__hevno_type__": "hevno/codex",
+          "entries": [],
+          "description": "The evolving knowledge base of the AI."
+        }
+      }
     }
     DEFAULT_MOMENT = {
-        "_user_input": "",
-        "_user_output": "",
         "memoria": {
-            "__hevno_type__": "hevno/memoria",
-            "__global_sequence__": 0,
-            "chat_history": {"config": {}, "entries": []}
+        "__hevno_type__": "hevno/memoria",
+        "__global_sequence__": 0,
+        "chat_history": {
+          "config": {},
+          "entries": []
         }
+      }
     }
     DEFAULT_DEFINITION = {
         "name": "Default Chat Sandbox",
