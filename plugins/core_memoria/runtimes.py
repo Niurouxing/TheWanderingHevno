@@ -106,13 +106,17 @@ class MemoriaQueryRuntime(RuntimeInterface):
             tags_set = set(tags_to_get)
             results = [entry for entry in results if tags_set.intersection(entry.tags)]
 
+        # 只有当 latest 是一个大于0的整数时，才截取最新的N条记录。
+        # 如果 latest 是 0 或 None，则跳过此步骤，返回所有符合条件的记录。
         latest_n = config.get("latest")
-        if isinstance(latest_n, int):
+        if isinstance(latest_n, int) and latest_n > 0:
+            # 在截取前，必须按 sequence_id 升序排序，以确保我们得到的是真正的“最新”记录
             results.sort(key=lambda e: e.sequence_id)
             results = results[-latest_n:]
             
         order = config.get("order", "ascending")
         reverse = (order == "descending")
+        # 最终的排序在所有过滤和截取操作之后进行
         results.sort(key=lambda e: e.sequence_id, reverse=reverse)
 
         # --- 格式化逻辑 ---
