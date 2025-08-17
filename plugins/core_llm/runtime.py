@@ -2,7 +2,8 @@
 
 import logging
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Literal, Union, Type, Optional
+from pydantic import BaseModel, Field, field_validator
 
 from plugins.core_engine.contracts import ExecutionContext, RuntimeInterface, MacroEvaluationServiceInterface
 from .contracts import LLMResponse, LLMRequestFailedError
@@ -11,77 +12,82 @@ logger = logging.getLogger(__name__)
 
 class LLMRuntime(RuntimeInterface):
     """
-    一个强大的运行时，它通过“列表展开”机制编排一个结构化的消息列表，
+    一个强大的运行时，它通过"列表展开"机制编排一个结构化的消息列表，
     然后通过 Hevno LLM Gateway 发起调用。
     """
-    async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
-        model_name = config.get("model")
-        if not model_name:
-            raise ValueError("LLMRuntime requires a 'model' field in its config (e.g., 'gemini/gemini-2.5-flash').")
+    
+    class MessagePart(BaseModel):
+        type: Literal["MESSAGE_PART"] = "MESSAGE_PART"
+        role: str = Field(..., description="消息的角色 (例如 'system', 'user', 'model').")
+        content: Any = Field(..., description="消息的内容，支持宏。")
+        is_enabled: Any = Field(default=True, description="一个布尔值或宏，用于条件性地包含此部分。")
 
-        if "prompt" in config:
-            logger.warning("The 'prompt' field in 'llm.default' is deprecated and will be ignored. Please use the 'contents' list instead.")
-        
-        contents_config = config.get("contents")
-        if not isinstance(contents_config, list):
-            raise ValueError("LLMRuntime requires a 'contents' field in its config, which must be a list of message parts or injection directives.")
+    class InjectMessages(BaseModel):
+        type: Literal["INJECT_MESSAGES"] = "INJECT_MESSAGES"
+        source: Any = Field(..., description="一个宏，其求值结果必须是一个消息列表 (例如来自 memoria.query 的输出)。")
+        is_enabled: Any = Field(default=True, description="一个布尔值或宏，用于条件性地包含此部分。")
+
+    class ConfigModel(BaseModel):
+        model: str = Field(..., description="要使用的模型名称，格式为 'provider/model_id' (例如, 'gemini/gemini-1.5-pro')。")
+        contents: List[Union["LLMRuntime.MessagePart", "LLMRuntime.InjectMessages"]] = Field(
+            ..., 
+            description="一个定义消息结构的列表，支持静态部分和动态注入。"
+        )
+        temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0, description="控制生成文本的随机性。")
+        max_tokens: Optional[int] = Field(default=None, gt=0, description="限制生成的最大 token 数量。")
+        top_p: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="控制 nucleus sampling。")
+        top_k: Optional[int] = Field(default=None, gt=0, description="控制 top-k sampling。")
+
+        # 兼容旧的 'prompt' 字段，但标记为已弃用
+        prompt: Optional[str] = Field(default=None, description="[已弃用] 请改用 'contents' 列表。")
+
+        @field_validator('contents')
+        def check_contents_not_empty(cls, v):
+            if not v:
+                raise ValueError("'contents' list cannot be empty.")
+            return v
             
+    @classmethod
+    def get_config_model(cls) -> Type[BaseModel]:
+        return cls.ConfigModel
+
+    async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
+        try:
+            validated_config = self.ConfigModel.model_validate(config)
+        except Exception as e:
+            return {"error": f"Invalid configuration for llm.default: {e}"}
+
         macro_service: MacroEvaluationServiceInterface = context.shared.services.macro_evaluation_service
         lock = context.shared.global_write_lock
         
         final_messages: List[Dict[str, Any]] = []
-        for item in contents_config:
-            if not isinstance(item, dict):
-                logger.warning(f"Skipping invalid item in 'contents' list: {item}. Must be a dictionary.")
-                continue
-
-            is_enabled_macro = item.get("is_enabled", True)
+        for item_model in validated_config.contents:
             eval_context = macro_service.build_context(context)
-            if not await macro_service.evaluate(is_enabled_macro, eval_context, lock):
+            if not await macro_service.evaluate(item_model.is_enabled, eval_context, lock):
                 continue
                 
-            item_type = item.get("type", "MESSAGE_PART")
+            if isinstance(item_model, self.MessagePart):
+                evaluated_content = await macro_service.evaluate(item_model.content, eval_context, lock)
+                final_messages.append({"role": item_model.role, "content": str(evaluated_content)})
 
-            if item_type == "MESSAGE_PART":
-                role = item.get("role")
-                content_macro = item.get("content")
-                if not role or content_macro is None:
-                    logger.warning(f"Skipping MESSAGE_PART with missing 'role' or 'content': {item}")
-                    continue
-                
-                evaluated_content = await macro_service.evaluate(content_macro, eval_context, lock)
-                final_messages.append({"role": role, "content": str(evaluated_content)})
-
-            elif item_type == "INJECT_MESSAGES":
-                source_macro = item.get("source")
-                if not source_macro:
-                    logger.warning(f"Skipping INJECT_MESSAGES with missing 'source': {item}")
-                    continue
-                
-                injected_messages = await macro_service.evaluate(source_macro, eval_context, lock)
-                
+            elif isinstance(item_model, self.InjectMessages):
+                injected_messages = await macro_service.evaluate(item_model.source, eval_context, lock)
                 if isinstance(injected_messages, list):
                     for msg in injected_messages:
-                        # --- FIX: Loosen validation and convert to plain dict ---
                         if msg and "role" in msg and "content" in msg:
-                            # Append a new plain dict to ensure compatibility
                             final_messages.append({"role": msg["role"], "content": msg["content"]})
                         else:
                             logger.warning(f"Skipping invalid item in injected message list: {msg}")
                 elif injected_messages is not None:
                      logger.warning(f"Macro for INJECT_MESSAGES 'source' did not evaluate to a list. Got {type(injected_messages).__name__}. Ignoring.")
-            
-            else:
-                logger.warning(f"Unknown item type '{item_type}' in 'contents' list. Skipping.")
 
-        llm_params = {k: v for k, v in config.items() if k not in ["model", "prompt", "contents"]}
+        # 从验证过的配置中提取参数
+        llm_params = validated_config.model_dump(exclude={"model", "contents", "prompt"}, exclude_none=True)
         llm_service = context.shared.services.llm_service
-
         node = kwargs.get("node")
         
-        # 准备要发送的请求体
         request_payload = {
-            "model_name": model_name,
+            "model_name": validated_config.model,
             "messages": final_messages,
             **llm_params
         }
@@ -90,14 +96,12 @@ class LLMRuntime(RuntimeInterface):
         try:
             response = await llm_service.request(**request_payload)
             
-            # --- 无论成功与否，都记录日志 ---
             if "diagnostics_log" in context.run_vars:
                 diagnostic_entry = {
                     "timestamp": datetime.now().isoformat(),
                     "node_id": node.id if node else 'unknown',
                     "runtime": "llm.default",
                     "request": request_payload,
-                    # 使用 model_dump 确保 Pydantic 模型被正确序列化
                     "response": response.model_dump(mode='json') if response else None 
                 }
                 context.run_vars["diagnostics_log"].append(diagnostic_entry)
@@ -107,7 +111,6 @@ class LLMRuntime(RuntimeInterface):
             return {"output": response.content, "usage": response.usage, "model_name": response.model_name}
         
         except LLMRequestFailedError as e:
-            # --- 在异常情况下也记录日志 ---
             if "diagnostics_log" in context.run_vars:
                 diagnostic_entry = {
                     "timestamp": datetime.now().isoformat(),

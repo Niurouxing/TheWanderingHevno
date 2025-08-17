@@ -3,7 +3,7 @@
 from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set, Callable
+from typing import Any, Dict, List, Optional, Set, Callable, Type
 from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, RootModel, ConfigDict, field_validator
 from abc import ABC, abstractmethod
@@ -133,13 +133,26 @@ class SubGraphRunner(ABC):
 
 class RuntimeInterface(ABC):
     """定义所有运行时必须实现的接口。"""
+    @classmethod
+    @abstractmethod
+    def get_config_model(cls) -> Type[BaseModel]:
+        """
+        返回一个 Pydantic 模型，该模型定义了此运行时 'config' 字段的结构。
+        这将用于自动生成前端编辑器 UI 和进行配置验证。
+        """
+        # 为没有配置的运行时提供一个安全的默认实现
+        class EmptyConfig(BaseModel):
+            pass
+        return EmptyConfig
+
     @abstractmethod
     async def execute(
         self,
         config: Dict[str, Any],
         context: ExecutionContext,
         subgraph_runner: Optional[SubGraphRunner] = None,
-        pipeline_state: Optional[Dict[str, Any]] = None
+        pipeline_state: Optional[Dict[str, Any]] = None,
+        node: Optional[GenericNode] = None
     ) -> Dict[str, Any]:
         pass
 
