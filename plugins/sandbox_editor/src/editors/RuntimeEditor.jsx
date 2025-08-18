@@ -1,5 +1,6 @@
 // plugins/sandbox_editor/src/editors/RuntimeEditor.jsx
-import React, { useState, useEffect } from 'react';
+
+import React, { useState, useEffect, useMemo } from 'react';
 import { Box, List, Collapse, IconButton, Button, Select, MenuItem, Typography, Paper, ListSubheader, TextField } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
@@ -22,8 +23,9 @@ import {
 } from '@dnd-kit/sortable';
 import { SortableRuntimeItem } from '../components/SortableRuntimeItem';
 import { RuntimeConfigForm } from './RuntimeConfigForm';
-// [新增] 导入 schema 管理器
-import { getSchemaForRuntime } from '../utils/schemaManager';
+
+// 导入 schema 管理器中的 getAllSchemas 和 getSchemaForRuntime
+import { getSchemaForRuntime, getAllSchemas } from '../utils/schemaManager';
 
 const NEW_RUNTIME_SYMBOL = Symbol('new_runtime');
 
@@ -31,15 +33,36 @@ export function RuntimeEditor({ runList, onRunListChange }) {
   const [runs, setRuns] = useState(runList || []);
   const [editingRun, setEditingRun] = useState(null);
   const [draftData, setDraftData] = useState(null);
-  
-  // [新增] 用于存储当前选中运行时的 schema
   const [currentSchema, setCurrentSchema] = useState(null);
+
+  // 使用 useMemo 从 schema 管理器动态生成和缓存运行时列表
+  // 这个列表只会在 schemas 加载完成后计算一次，非常高效。
+  const availableRuntimes = useMemo(() => {
+    const schemas = getAllSchemas();
+    // 如果 schemas 还没加载好，返回空结构
+    if (!schemas) {
+        return { groups: {} };
+    }
+    
+    // 按名称对所有可用的运行时进行排序和分组
+    const runtimeList = Object.keys(schemas).sort();
+    const groups = runtimeList.reduce((acc, name) => {
+        // 根据第一个 '.' 前的部分进行分组 (e.g., 'system', 'llm', 'memoria')
+        const groupName = name.split('.')[0]; 
+        if (!acc[groupName]) {
+            acc[groupName] = [];
+        }
+        acc[groupName].push(name);
+        return acc;
+    }, {});
+
+    return { groups };
+  }, []); // 空依赖数组意味着它只在组件挂载时运行一次
 
   useEffect(() => {
     setRuns(runList || []);
   }, [runList]);
   
-  // [新增] 当 draftData 或其 runtime 类型变化时，更新 schema
   useEffect(() => {
       if (draftData && draftData.runtime) {
           const schema = getSchemaForRuntime(draftData.runtime);
@@ -134,31 +157,24 @@ export function RuntimeEditor({ runList, onRunListChange }) {
         >
           <MenuItem value="" disabled><em>选择指令类型</em></MenuItem>
 
-          <ListSubheader>LLM</ListSubheader>
-          <MenuItem value="llm.default">llm.default</MenuItem>
-
-          <ListSubheader>Memoria</ListSubheader>
-          <MenuItem value="memoria.add">memoria.add</MenuItem>
-          <MenuItem value="memoria.query">memoria.query</MenuItem>
-
-          <ListSubheader>Codex</ListSubheader>
-          <MenuItem value="codex.invoke">codex.invoke</MenuItem>
-
-          <ListSubheader>System IO</ListSubheader>
-          <MenuItem value="system.io.input">system.io.input</MenuItem>
-          <MenuItem value="system.io.log">system.io.log</MenuItem>
-
-          <ListSubheader>System Data</ListSubheader>
-          <MenuItem value="system.data.format">system.data.format</MenuItem>
-          <MenuItem value="system.data.parse">system.data.parse</MenuItem>
-          <MenuItem value="system.data.regex">system.data.regex</MenuItem>
-          
-          <ListSubheader>System Flow</ListSubheader>
-          <MenuItem value="system.flow.call">system.flow.call</MenuItem>
-          <MenuItem value="system.flow.map">system.flow.map</MenuItem>
-
-          <ListSubheader>System Advanced</ListSubheader>
-          <MenuItem value="system.execute">system.execute</MenuItem>
+          {Object.entries(availableRuntimes.groups)
+            // 对分组进行排序，确保 'system' 总是靠后
+            .sort(([groupA], [groupB]) => {
+                if (groupA === 'system') return 1;
+                if (groupB === 'system') return -1;
+                return groupA.localeCompare(groupB);
+            })
+            .map(([groupName, runtimes]) => ([
+                // 为每个分组渲染一个子标题
+                <ListSubheader key={groupName}>
+                    {groupName.charAt(0).toUpperCase() + groupName.slice(1)}
+                </ListSubheader>,
+                // 渲染该分组下的所有运行时
+                runtimes.map(runtimeName => (
+                    <MenuItem key={runtimeName} value={runtimeName}>{runtimeName}</MenuItem>
+                ))
+            ]))
+          }
         </Select>
 
         {draftData.runtime && (
@@ -167,7 +183,6 @@ export function RuntimeEditor({ runList, onRunListChange }) {
             value={draftData.config?.as || ''}
             onChange={(e) => {
               const newConfig = { ...draftData.config, as: e.target.value };
-              // 如果值为空，则从 config 对象中删除 'as' 键以保持数据清洁
               if (!e.target.value) {
                 delete newConfig.as;
               }
@@ -180,7 +195,6 @@ export function RuntimeEditor({ runList, onRunListChange }) {
           />
         )}
         
-        {/* [修改] 传递 runtimeType 和 schema 给 RuntimeConfigForm */}
         {draftData.runtime && (
           <RuntimeConfigForm
             runtimeType={draftData.runtime}

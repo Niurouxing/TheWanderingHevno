@@ -39,9 +39,6 @@ export class RemoteHookProxy {
         this.localHookManager.addImplementation('websocket.connected', () => {});
         this.localHookManager.trigger('websocket.connected');
       }
-
-      // 【已移除】不再在此处同步钩子。
-      // this.syncFrontendHooks(); 
     };
     
     this.ws.onmessage = (event) => this.handleIncoming(event);
