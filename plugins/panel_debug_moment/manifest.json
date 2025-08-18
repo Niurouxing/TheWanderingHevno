@@ -1,0 +1,23 @@
+{
+    "id": "panel_debug_moment",
+    "name": "Moment State Inspector Panel",
+    "version": "1.0.0",
+    "description": "A simple panel that displays the content of the 'moment' state for debugging.",
+    "author": "Hevno Team",
+    "frontend": {
+        "type": "cockpit-panel",
+        "priority": 200,
+        "entryPoint": "dist/main.js",
+        "srcEntryPoint": "src/MomentInspectorPanel.jsx",
+        "contributions": {
+            "cockpit.panels": [
+                {
+                    "id": "panel_debug_moment.main",
+                    "name": "状态监视器 (Moment)",
+                    "componentExportName": "MomentInspectorPanel",
+                    "defaultLayout": { "w": 4, "h": 8, "x": 8, "y": 0 }
+                }
+            ]
+        }
+    }
+}

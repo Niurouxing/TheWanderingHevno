@@ -1,0 +1,17 @@
+{
+  "name": "hevno-plugin-panel-debug-moment",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "@mui/material": ">=5.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "latest",
+    "vite": "latest"
+  }
+}
