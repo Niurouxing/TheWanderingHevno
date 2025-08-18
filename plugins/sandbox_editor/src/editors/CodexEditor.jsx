@@ -10,7 +10,7 @@ import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSo
 import { SortableEntryItem } from '../components/SortableEntryItem';
 import { mutate } from '../utils/api';
 
-export function CodexEditor({ sandboxId, basePath, codexName, codexData, onBack }) {
+export function CodexEditor({ sandboxId, basePath, codexName, codexData, onBack, confirmationService }) {
   const [entries, setEntries] = useState([]);
   const [expanded, setExpanded] = useState({});
   const [errorMessage, setErrorMessage] = useState('');
@@ -67,7 +67,17 @@ export function CodexEditor({ sandboxId, basePath, codexName, codexData, onBack 
   };
 
   const handleDelete = async (internalIdToDelete) => {
-    if (!window.confirm(`Are you sure you want to delete this entry?`)) return;
+    if (!confirmationService) {
+      console.error('ConfirmationService not available');
+      return;
+    }
+    
+    const confirmed = await confirmationService.confirm({
+      title: '删除条目确认',
+      message: '你确定要删除这个条目吗？',
+    });
+    if (!confirmed) return;
+    
     // --- [修复 3/7] 使用 _internal_id 进行过滤 ---
     const updatedEntries = entries.filter(e => e._internal_id !== internalIdToDelete);
     const entriesToSave = updatedEntries.map(({_internal_id, ...rest}) => rest);

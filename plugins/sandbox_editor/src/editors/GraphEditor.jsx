@@ -14,7 +14,7 @@ import { RuntimeEditor } from './RuntimeEditor';
 import { mutate } from '../utils/api';
 import { exportAsJson, importFromJson } from '../utils/fileUtils';
 
-export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack }) {
+export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack, confirmationService }) {
     const [nodes, setNodes] = useState([]);
     const [expandedNodes, setExpandedNodes] = useState({});
     const [errorMessage, setErrorMessage] = useState('');
@@ -83,7 +83,17 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack 
     };
     
     const handleDeleteNode = async (internalIdToDelete) => {
-        if (!window.confirm(`Are you sure you want to delete this node?`)) return;
+        if (!confirmationService) {
+            console.error('ConfirmationService not available');
+            return;
+        }
+        
+        const confirmed = await confirmationService.confirm({
+            title: '删除节点确认',
+            message: '你确定要删除这个节点吗？',
+        });
+        if (!confirmed) return;
+        
         const updatedNodes = nodes.filter(n => n._internal_id !== internalIdToDelete);
         const nodesToSave = updatedNodes.map(({_internal_id, ...rest}) => rest);
         await syncNodes(nodesToSave, updatedNodes);

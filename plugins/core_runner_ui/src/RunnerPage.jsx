@@ -16,7 +16,7 @@ import AddCommentIcon from '@mui/icons-material/AddComment';
 
 const DRAWER_WIDTH = 320;
 
-export function RunnerPage() {
+export function RunnerPage({ services }) {
     const { currentSandboxId, setActivePageId, setCurrentSandboxId } = useLayout();
     const theme = useTheme();
     const isLargeScreen = useMediaQuery(theme.breakpoints.up('md'));
@@ -33,6 +33,8 @@ export function RunnerPage() {
     const resizeRef = useRef(null);
 
     const [optimisticMessage, setOptimisticMessage] = useState(null);
+
+    const confirmationService = services?.get('confirmationService');
 
     const handleResizeMouseDown = useCallback((e) => {
         e.preventDefault();
@@ -224,33 +226,53 @@ export function RunnerPage() {
     
     const handleDeleteSnapshot = async (snapshotId) => {
         if (!currentSandboxId || isLoading || snapshotId === headSnapshotId) return;
-        if (window.confirm("确定要永久删除这个历史记录点吗？")) {
-            setIsLoading(true);
-            setError('');
-            try {
-                await deleteSnapshot(currentSandboxId, snapshotId);
-                await loadData(false);
-            } catch (e) {
-                setError(`删除失败: ${e.message}`);
-            } finally {
-                setIsLoading(false);
-            }
+        
+        if (!confirmationService) {
+            console.error('ConfirmationService not available');
+            return;
+        }
+        
+        const confirmed = await confirmationService.confirm({
+            title: '删除历史记录确认',
+            message: '确定要永久删除这个历史记录点吗？',
+        });
+        if (!confirmed) return;
+        
+        setIsLoading(true);
+        setError('');
+        try {
+            await deleteSnapshot(currentSandboxId, snapshotId);
+            await loadData(false);
+        } catch (e) {
+            setError(`删除失败: ${e.message}`);
+        } finally {
+            setIsLoading(false);
         }
     };
 
     const handleResetHistory = async () => {
         if (!currentSandboxId || isLoading) return;
-        if (window.confirm("确定要开启一个新的会话吗？当前会话将成为历史记录。")) {
-            setIsLoading(true);
-            setError('');
-            try {
-                await resetHistory(currentSandboxId);
-                await loadData(false);
-            } catch (e) {
-                setError(`开启新会话失败: ${e.message}`);
-            } finally {
-                setIsLoading(false);
-            }
+        
+        if (!confirmationService) {
+            console.error('ConfirmationService not available');
+            return;
+        }
+        
+        const confirmed = await confirmationService.confirm({
+            title: '重置历史记录确认',
+            message: '确定要开启一个新的会话吗？当前会话将成为历史记录。',
+        });
+        if (!confirmed) return;
+        
+        setIsLoading(true);
+        setError('');
+        try {
+            await resetHistory(currentSandboxId);
+            await loadData(false);
+        } catch (e) {
+            setError(`开启新会话失败: ${e.message}`);
+        } finally {
+            setIsLoading(false);
         }
     };
 

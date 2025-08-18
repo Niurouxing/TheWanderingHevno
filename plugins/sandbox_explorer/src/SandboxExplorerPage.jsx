@@ -111,6 +111,7 @@ export function SandboxExplorerPage({ services }) {
   const { setActivePageId, setCurrentSandboxId } = useLayout();
   
   const hookManager = services.get('hookManager');
+  const confirmationService = services?.get('confirmationService');
 
   const loadData = useCallback(async () => {
     if (sandboxes.length === 0) {
@@ -150,14 +151,23 @@ export function SandboxExplorerPage({ services }) {
   };
 
   const handleDelete = async (sandboxId) => {
-    if (window.confirm("你确定要删除这个沙盒吗？此操作不可撤销。")) {
-      try {
-        await deleteSandbox(sandboxId);
-        await loadData();
-      } catch (e) {
-          alert(`删除沙盒时出错: ${e.message}`);
-          console.error(e);
-      }
+    if (!confirmationService) {
+      console.error('ConfirmationService not available');
+      return;
+    }
+    
+    const confirmed = await confirmationService.confirm({
+      title: '删除沙盒确认',
+      message: '你确定要删除这个沙盒吗？此操作不可撤销。',
+    });
+    if (!confirmed) return;
+    
+    try {
+      await deleteSandbox(sandboxId);
+      await loadData();
+    } catch (e) {
+        alert(`删除沙盒时出错: ${e.message}`);
+        console.error(e);
     }
   };
   

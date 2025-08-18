@@ -12,7 +12,7 @@ import { arrayMove, SortableContext, verticalListSortingStrategy } from '@dnd-ki
 import { SortableMemoryEntryItem } from '../components/SortableMemoryEntryItem';
 import { mutate } from '../utils/api';
 
-export function MemoriaEditor({ sandboxId, basePath, memoriaData, onBack }) {
+export function MemoriaEditor({ sandboxId, basePath, memoriaData, onBack, confirmationService }) {
   const [streams, setStreams] = useState({});
   const [globalSequence, setGlobalSequence] = useState(0);
   const [expandedStreams, setExpandedStreams] = useState({});
@@ -80,8 +80,18 @@ export function MemoriaEditor({ sandboxId, basePath, memoriaData, onBack }) {
     setExpandedStreams(prev => ({ ...prev, [name]: true })); // Automatically expand new stream
   };
 
-  const handleDeleteStream = (streamName) => {
-    if (!window.confirm(`Are you sure you want to delete the stream "${streamName}"? This cannot be undone until you save.`)) return;
+  const handleDeleteStream = async (streamName) => {
+    if (!confirmationService) {
+      console.error('ConfirmationService not available');
+      return;
+    }
+    
+    const confirmed = await confirmationService.confirm({
+      title: '删除流确认',
+      message: `你确定要删除流 "${streamName}" 吗？在保存之前此操作无法撤销。`,
+    });
+    if (!confirmed) return;
+    
     setStreams(prev => {
       const newStreams = { ...prev };
       delete newStreams[streamName];

@@ -9,13 +9,16 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import { KeyStatusTable } from './components/KeyStatusTable';
 import { fetchKeyConfig, addKey, deleteKey } from './utils/api';
 
-export function LLMConfigPage() {
+export function LLMConfigPage({ services }) {
     const [config, setConfig] = useState(null);
     const [loading, setLoading] = useState(true);
     const [actionInProgress, setActionInProgress] = useState(false); // 通用加载状态
     const [error, setError] = useState('');
     const [provider, setProvider] = useState('gemini');
     const [newKey, setNewKey] = useState('');
+
+    // 获取确认服务
+    const confirmationService = services?.get('confirmationService');
 
     const loadData = useCallback(async () => {
         setLoading(true);
@@ -52,7 +55,17 @@ export function LLMConfigPage() {
     };
     
     const handleDelete = async (keySuffix) => {
-        if (!window.confirm(`确定要从 .env 文件中永久删除密钥 "${keySuffix}" 吗？`)) return;
+        if (!confirmationService) {
+            console.error('ConfirmationService not available');
+            return;
+        }
+        
+        const confirmed = await confirmationService.confirm({
+            title: '删除密钥确认',
+            message: `确定要从 .env 文件中永久删除密钥 "${keySuffix}" 吗？`,
+        });
+        if (!confirmed) return;
+        
         setActionInProgress(true);
         setError('');
         try {

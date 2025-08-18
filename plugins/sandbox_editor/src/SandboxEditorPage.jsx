@@ -32,6 +32,9 @@ export function SandboxEditorPage({ services }) {
     // ---用于重命名对话框的状态 ---
     const [renameItemTarget, setRenameItemTarget] = useState(null);
 
+    // --- 1. 从 props 获取服务实例 ---
+    const confirmationService = services.get('confirmationService');
+
     const loadSandboxData = useCallback(async () => {
         if (!currentSandboxId) return;
         try {
@@ -144,9 +147,13 @@ export function SandboxEditorPage({ services }) {
     };
 
     const handleApplyDefinition = async () => {
-        if (!window.confirm(
-            "确定要应用这个蓝图吗？\n\n这将完全覆盖当前的 `lore` 和 `moment` 状态，并用 `definition` 中的初始值替换它们。\n\n当前的所有记忆和演化知识都将丢失，并开启一个全新的历史记录。此操作不可撤销。"
-        )) {
+        // --- 2. 直接调用服务的 confirm 方法 ---
+        const confirmed = await confirmationService.confirm({
+            title: '应用蓝图确认',
+            message: '确定要应用这个蓝图吗？\n\n这将完全覆盖当前的 `lore` 和 `moment` 状态，并用 `definition` 中的初始值替换它们。\n\n当前的所有记忆和演化知识都将丢失，并开启一个全新的历史记录。此操作不可撤销。',
+        });
+
+        if (!confirmed) {
             return;
         }
 
@@ -167,9 +174,18 @@ export function SandboxEditorPage({ services }) {
     // ---处理删除操作的函数 ---
     const handleDeleteItem = async (path) => {
         const itemName = path.split('/').pop();
-        if (!window.confirm(`你确定要删除 "${itemName}" 吗？\n此操作无法撤销。`)) {
+
+        // --- 2. 直接调用服务的 confirm 方法 ---
+        const confirmed = await confirmationService.confirm({
+            title: '删除确认',
+            message: `你确定要删除 "${itemName}" 吗？此操作无法撤销。`,
+        });
+
+        if (!confirmed) {
             return;
         }
+
+        // --- 3. 执行原有逻辑 ---
         try {
             await mutate(currentSandboxId, [{ type: 'DELETE', path }]);
             await loadSandboxData(); // 成功后刷新数据
@@ -210,9 +226,9 @@ export function SandboxEditorPage({ services }) {
     if (error) return <Box sx={{ p: 4, textAlign: 'center' }}><Alert severity="error" onClose={() => setError('')}>{error}</Alert><Button variant="outlined" sx={{ mt: 2 }} onClick={loadAllEditorData}>重试</Button></Box>;
     const currentScopeData = sandboxData[SCOPE_TABS[activeScope]];
 
-    if (editingCodex) return <CodexEditor sandboxId={currentSandboxId} basePath={editingCodex.basePath} codexName={editingCodex.name} codexData={editingCodex.data} onBack={handleBackToOverview} />;
-    if (editingGraph) return <GraphEditor sandboxId={currentSandboxId} basePath={editingGraph.basePath} graphName={editingGraph.name} graphData={editingGraph.data} onBack={handleBackToOverview} />;
-    if (editingMemoria) return <MemoriaEditor sandboxId={currentSandboxId} basePath={editingMemoria.path} memoriaData={editingMemoria.data} onBack={handleBackToOverview} />;
+    if (editingCodex) return <CodexEditor sandboxId={currentSandboxId} basePath={editingCodex.basePath} codexName={editingCodex.name} codexData={editingCodex.data} onBack={handleBackToOverview} confirmationService={confirmationService} />;
+    if (editingGraph) return <GraphEditor sandboxId={currentSandboxId} basePath={editingGraph.basePath} graphName={editingGraph.name} graphData={editingGraph.data} onBack={handleBackToOverview} confirmationService={confirmationService} />;
+    if (editingMemoria) return <MemoriaEditor sandboxId={currentSandboxId} basePath={editingMemoria.path} memoriaData={editingMemoria.data} onBack={handleBackToOverview} confirmationService={confirmationService} />;
 
     const sandboxName = (sandboxData.definition?.name || sandboxData.lore?.name || 'Sandbox');
 

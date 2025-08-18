@@ -3,6 +3,8 @@ import React from 'react';
 import { LayoutProvider } from './context/LayoutContext';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
+// --- 1. 导入 ConfirmationService ---
+import { ConfirmationService } from './services/ConfirmationService';
 
 // 全局标志位，防止开发模式下的热重载重复执行
 if (typeof window.hevnoCoreLayoutInitialized === 'undefined') {
@@ -25,6 +27,10 @@ export function registerPlugin(context) {
     console.error('[core_layout] CRITICAL: HookManager service not found!');
     return;
   }
+
+  // --- 2. 创建服务实例并注册到全局服务容器 ---
+  const confirmationService = new ConfirmationService();
+  context.register('confirmationService', confirmationService, 'core_layout');
 
   // 监听内核加载器发出的“就绪”信号
   // 这是我们接管UI的最佳时机
