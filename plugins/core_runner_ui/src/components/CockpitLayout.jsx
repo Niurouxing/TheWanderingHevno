@@ -103,6 +103,7 @@ export function CockpitLayout() {
                 rowHeight={30}
                 onLayoutChange={handleLayoutChange}
                 draggableHandle=".drag-handle"
+                compactType={null} 
             >
                 {activePanels.map(panelId => {
                     const panelInfo = panelMap.get(panelId);
