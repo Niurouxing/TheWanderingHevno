@@ -10,7 +10,7 @@
         "entryPoint": "dist/main.js",
         "srcEntryPoint": "src/LLMConfigPage.jsx",
         "contributions": {
-            "pageComponents": [
+            "core_layout.pages": [
                 {
                     "id": "llm_config.main_view",
                     "componentExportName": "LLMConfigPage",

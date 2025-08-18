@@ -10,7 +10,7 @@
         "entryPoint": "dist/main.js",
         "srcEntryPoint": "src/DemoPage.jsx",
         "contributions": {
-            "pageComponents": [
+            "core_layout.pages": [
                 {
                     "id": "page_demo.main_view",
                     "componentExportName": "DemoPage",

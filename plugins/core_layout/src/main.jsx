@@ -3,22 +3,51 @@ import React from 'react';
 import { LayoutProvider } from './context/LayoutContext';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
-// --- 1. 导入 ConfirmationService ---
 import { ConfirmationService } from './services/ConfirmationService';
 
-// 全局标志位，防止开发模式下的热重载重复执行
 if (typeof window.hevnoCoreLayoutInitialized === 'undefined') {
   window.hevnoCoreLayoutInitialized = false;
 }
 
 /**
- * Hevno 插件系统的入口函数。
- * 由前端加载器在加载此插件时调用。
+ * 新的应用宿主初始化函数。
+ * 由前端加载器在找到 'frontend.host' 贡献点后调用。
+ * @param {import('../../../../frontend/ServiceContainer').ServiceContainer} context - 平台服务容器
+ */
+export function initializeUI(context) {
+  if (window.hevnoCoreLayoutInitialized) return;
+  window.hevnoCoreLayoutInitialized = true;
+
+  console.log('[core_layout] Received "initializeUI" call. Initializing React application host...');
+
+  const appContainer = document.getElementById('app');
+  if (!appContainer) {
+    console.error('[core_layout] CRITICAL: #app container not found in DOM!');
+    return;
+  }
+
+  appContainer.innerHTML = '';
+
+  const root = createRoot(appContainer);
+  root.render(
+    <React.StrictMode>
+      <LayoutProvider services={context}> 
+        <App />
+      </LayoutProvider>
+    </React.StrictMode>
+  );
+
+  console.log('[core_layout] React host mounted successfully.');
+}
+
+/**
+ * Hevno 插件系统的服务注册入口。
+ * 由前端加载器在加载此插件时调用，仅用于注册服务。
  * @param {import('../../../../frontend/ServiceContainer').ServiceContainer} context - 平台服务容器
  */
 export function registerPlugin(context) {
   if (window.hevnoCoreLayoutInitialized) {
-    console.warn('[core_layout] Attempted to re-register. Aborting.');
+    console.warn('[core_layout] Attempted to re-register services. Aborting.');
     return;
   }
   
@@ -28,43 +57,9 @@ export function registerPlugin(context) {
     return;
   }
 
-  // --- 2. 创建服务实例并注册到全局服务容器 ---
+  // 注册此插件提供的服务
   const confirmationService = new ConfirmationService();
   context.register('confirmationService', confirmationService, 'core_layout');
 
-  // 监听内核加载器发出的“就绪”信号
-  // 这是我们接管UI的最佳时机
-  hookManager.addImplementation('loader.ready', () => {
-    // 双重检查
-    if (window.hevnoCoreLayoutInitialized) return;
-    window.hevnoCoreLayoutInitialized = true;
-
-    console.log('[core_layout] Received "loader.ready". Initializing React application host...');
-
-    // 1. 找到根DOM容器
-    const appContainer = document.getElementById('app');
-    if (!appContainer) {
-      console.error('[core_layout] CRITICAL: #app container not found in DOM!');
-      return;
-    }
-
-    // 2. 清空容器，为React应用做准备
-    appContainer.innerHTML = '';
-
-    // 3. 创建并渲染React应用
-    const root = createRoot(appContainer);
-    root.render(
-    <React.StrictMode>
-        {/* 将平台服务注入到 React 世界 */}
-        <LayoutProvider services={context}> 
-        <App />
-        </LayoutProvider>
-    </React.StrictMode>
-    );
-
-    console.log('[core_layout] React host mounted successfully.');
-
-    // 4. (未来) 在这里可以触发一个新的钩子，比如 'host.ready'
-    // hookManager.trigger('host.ready');
-  });
+    // 注意：不再监听 'loader.ready' 钩子
 }

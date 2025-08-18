@@ -10,7 +10,7 @@
         "entryPoint": "dist/main.js",
         "srcEntryPoint": "src/RunnerPage.jsx",
         "contributions": {
-            "pageComponents": [
+            "core_layout.pages": [
                 {
                     "id": "runner_ui.main_view",
                     "componentExportName": "RunnerPage"

@@ -7,8 +7,9 @@ const LayoutContext = createContext(null);
 export function LayoutProvider({ children, services }) {
   // 使用 useMemo 确保 registry 只被实例化一次
   const contributionRegistry = useMemo(() => {
-    const manifestProvider = services.get('manifestProvider');
-    return new ContributionRegistry(manifestProvider);
+    // [核心修改] 从全局服务容器获取 contributionService
+    const contributionService = services.get('contributionService');
+    return new ContributionRegistry(contributionService);
   }, [services]);
 
   const [pages] = useState(() => contributionRegistry.getPageComponents());

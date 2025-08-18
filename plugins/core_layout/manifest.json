@@ -8,6 +8,14 @@
         "type": "host",
         "priority": 100,
         "entryPoint": "dist/main.js",
-        "srcEntryPoint": "src/main.jsx" 
+        "srcEntryPoint": "src/main.jsx",
+        "contributions": {
+            "frontend.host": [
+                {
+                    "id": "core_layout.host.provider",
+                    "initializerExportName": "initializeUI"
+                }
+            ]
+        }
     }
 }
