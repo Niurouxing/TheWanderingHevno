@@ -13,6 +13,8 @@ import { query, mutate, applyDefinition } from './utils/api';
 import { loadSchemas } from './utils/schemaManager';
 import { GenericEditorDialog } from './editors/GenericEditorDialog';
 import { AddItemDialog } from './editors/AddItemDialog';
+// --- [新增] 导入新的 Rename 对话框 ---
+import { RenameItemDialog } from './components/RenameItemDialog';
 import { isObject } from './utils/constants';
 
 export function SandboxEditorPage({ services }) {
@@ -26,6 +28,8 @@ export function SandboxEditorPage({ services }) {
     const [editingMemoria, setEditingMemoria] = useState(null);
     const [editingGeneric, setEditingGeneric] = useState(null);
     const [addItemTarget, setAddItemTarget] = useState(null);
+    // --- [新增] 用于重命名对话框的状态 ---
+    const [renameItemTarget, setRenameItemTarget] = useState(null);
 
     const loadSandboxData = useCallback(async () => {
         if (!currentSandboxId) return;
@@ -148,6 +152,46 @@ export function SandboxEditorPage({ services }) {
         }
     };
 
+    // --- [新增] 处理删除操作的函数 ---
+    const handleDeleteItem = async (path) => {
+        const itemName = path.split('/').pop();
+        if (!window.confirm(`你确定要删除 "${itemName}" 吗？\n此操作无法撤销。`)) {
+            return;
+        }
+        try {
+            await mutate(currentSandboxId, [{ type: 'DELETE', path }]);
+            await loadSandboxData(); // 成功后刷新数据
+        } catch (e) {
+            setError(`删除失败: ${e.message}`);
+            console.error(`删除路径 "${path}" 失败:`, e);
+        }
+    };
+
+    // --- [新增] 打开重命名对话框的函数 ---
+    const handleRenameRequest = (path, value, existingKeys) => {
+        const oldKey = path.split('/').pop();
+        // 过滤掉当前正在重命名的键
+        const otherKeys = existingKeys.filter(k => k !== oldKey);
+        setRenameItemTarget({ path, value, existingKeys: otherKeys });
+    };
+
+    // --- [新增] 执行重命名操作的函数 ---
+    const handleRenameConfirm = async (oldPath, newKey) => {
+        const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/'));
+        const newPath = `${parentPath}/${newKey}`;
+        const itemValue = renameItemTarget.value;
+
+        // 重命名通过 "删除旧的" + "插入新的" 两个操作原子化完成
+        await mutate(currentSandboxId, [
+            { type: 'DELETE', path: oldPath },
+            { type: 'UPSERT', path: newPath, value: itemValue }
+        ]);
+
+        // 成功后关闭对话框并刷新数据
+        setRenameItemTarget(null);
+        await loadSandboxData();
+    };
+
 
     if (!currentSandboxId) return <Box sx={{ p: 4, textAlign: 'center' }}><Typography variant="h6" color="error">未选择要编辑的沙盒</Typography></Box>;
     if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}><CircularProgress /></Box>;
@@ -189,7 +233,15 @@ export function SandboxEditorPage({ services }) {
             </Tabs>
             <Box sx={{ mt: 2, flexGrow: 1, overflowY: 'auto' }}>
                 {currentScopeData ? (
-                    <DataTree data={currentScopeData} path={SCOPE_TABS[activeScope]} onEdit={handleEdit} onAdd={handleOpenAddDialog} />
+                    // --- [修改] 将新的处理器传递给 DataTree ---
+                    <DataTree 
+                        data={currentScopeData} 
+                        path={SCOPE_TABS[activeScope]} 
+                        onEdit={handleEdit} 
+                        onAdd={handleOpenAddDialog}
+                        onRename={handleRenameRequest}
+                        onDelete={handleDeleteItem}
+                    />
                 ) : (
                     <Typography color="text.secondary">该范围内没有可用数据</Typography>
                 )}
@@ -203,6 +255,15 @@ export function SandboxEditorPage({ services }) {
                 onAdd={handleAddItem}
                 parentPath={addItemTarget?.path}
                 existingKeys={addItemTarget?.existingKeys}
+            />
+            
+            {/* --- [新增] 渲染 Rename 对话框 --- */}
+            <RenameItemDialog
+                open={!!renameItemTarget}
+                onClose={() => setRenameItemTarget(null)}
+                onRename={handleRenameConfirm}
+                item={renameItemTarget}
+                existingKeys={renameItemTarget?.existingKeys}
             />
         </Box>
     );

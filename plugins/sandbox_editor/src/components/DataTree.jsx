@@ -5,24 +5,31 @@ import DescriptionIcon from '@mui/icons-material/Description';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import EditIcon from '@mui/icons-material/Edit';
-import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline'; 
+import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import AutoStoriesIcon from '@mui/icons-material/AutoStories';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import HistoryIcon from '@mui/icons-material/History';
+// --- [新增] 导入新图标 ---
+import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
+
 import { isObject, isArray } from '../utils/constants';
 
 const HEVNO_TYPE_EDITORS = {
-  'hevno/codex': { icon: <AutoStoriesIcon />, tooltip: 'Edit Codex' },
-  'hevno/graph': { icon: <AccountTreeIcon />, tooltip: 'Edit Graph' },
-  'hevno/memoria': { icon: <HistoryIcon />, tooltip: 'Edit Memoria' },
+  'hevno/codex': { icon: <AutoStoriesIcon />, tooltip: '编辑 Codex' },
+  'hevno/graph': { icon: <AccountTreeIcon />, tooltip: '编辑 Graph' },
+  'hevno/memoria': { icon: <HistoryIcon />, tooltip: '编辑 Memoria' },
 };
 
-// --- 添加 onAdd prop ---
-export function DataTree({ data, path = '', onEdit, onAdd }) {
+// --- [修改] 添加 onRename 和 onDelete props ---
+export function DataTree({ data, path = '', onEdit, onAdd, onRename, onDelete }) {
   const [expanded, setExpanded] = useState({});
   const toggleExpand = (key) => { setExpanded((prev) => ({ ...prev, [key]: !prev[key] })); };
 
   if (!data) return null;
+
+  // --- [新增] 获取当前层级的所有键，用于重命名时的冲突检查 ---
+  const siblingKeys = Object.keys(data);
 
   return (
     <List disablePadding sx={{ pl: path.split('/').length > 1 ? 2 : 0 }}>
@@ -37,6 +44,8 @@ export function DataTree({ data, path = '', onEdit, onAdd }) {
 
         // --- 定义是否显示通用添加按钮的条件 ---
         const showAddButton = isObject(value) && !isArray(value) && !hevnoType;
+        // --- [新增] 仅当父级是对象时（即有path），才允许重命名和删除 ---
+        const allowModify = path !== '';
 
         return (
           <React.Fragment key={currentPath}>
@@ -45,13 +54,24 @@ export function DataTree({ data, path = '', onEdit, onAdd }) {
               secondaryAction={
                 <Box sx={{ display: 'flex', alignItems: 'center' }}>
                   {showAddButton && (
-                    <IconButton edge="end" onClick={() => onAdd(currentPath, Object.keys(value))} title="Add item to this object">
+                    <IconButton edge="end" onClick={() => onAdd(currentPath, Object.keys(value))} title="在此对象中添加项">
                         <AddCircleOutlineIcon fontSize="small" />
                     </IconButton>
                   )}
-                  <IconButton edge="end" onClick={() => onEdit(currentPath, value)} title={editorInfo ? editorInfo.tooltip : 'Edit value'}>
+                  {/* --- [修改] 添加重命名和删除按钮 --- */}
+                  {allowModify && (
+                     <IconButton edge="end" onClick={() => onRename(currentPath, value, siblingKeys)} title="重命名">
+                        <DriveFileRenameOutlineIcon fontSize="small" />
+                    </IconButton>
+                  )}
+                  <IconButton edge="end" onClick={() => onEdit(currentPath, value)} title={editorInfo ? editorInfo.tooltip : '编辑值'}>
                     <EditIcon />
                   </IconButton>
+                   {allowModify && (
+                     <IconButton edge="end" onClick={() => onDelete(currentPath)} title="删除" sx={{color: 'error.main'}}>
+                        <DeleteForeverIcon fontSize="small" />
+                    </IconButton>
+                  )}
                 </Box>
               }
             >
@@ -78,7 +98,8 @@ export function DataTree({ data, path = '', onEdit, onAdd }) {
             </ListItem>
             {isExpandable && !editorInfo && (
               <Collapse in={expanded[currentPath]} timeout="auto" unmountOnExit>
-                <DataTree data={value} path={currentPath} onEdit={onEdit} onAdd={onAdd} />
+                {/* --- [修改] 递归传递新的 props --- */}
+                <DataTree data={value} path={currentPath} onEdit={onEdit} onAdd={onAdd} onRename={onRename} onDelete={onDelete} />
               </Collapse>
             )}
           </React.Fragment>
