@@ -692,6 +692,7 @@ Hevno 引擎通过 `core_engine` 插件提供了一套功能强大、职责清�
 *   **LLM的纯粹性**: 保持 `llm.default` 的核心职责——与LLM API交互。所有的数据预处理（如格式化）和后处理（如解析）都应由独立的 `system` 运行时完成。
 *   **通用性与可组合性**: 运行时被设计为通用的“瑞士军刀”，能够通过组合解决广泛的问题。
 *   **优先使用宏**: 对于简单的状态读写操作（如 `moment.player.hp` 的读取和修改），应鼓励直接使用宏。
+*   **Schema驱动的配置**: 所有运行时的配置 (`config`) 结构不再是隐性的约定，而是通过内嵌的Pydantic `ConfigModel` 类在Python代码中被明确地、强类型地定义。这些模型会自动被转换成JSON Schema，并通过API暴露给前端，以实现动态UI的生成。关于此机制的详细信息，请参阅 **第7章：动态编辑器支持**。
 
 ### 4.2. `system.io` (输入/输出)
 
@@ -968,7 +969,7 @@ uvicorn backend.main:app --reload
         # hook_manager.add_implementation("collect_runtimes", provide_my_runtime)
     ```
 
-通过这个系统，Hevno 的世界可以像乐高积木一样被无限组合和扩展。我们期待看到您创造的精彩插件！
+通过这个系统，Hevno 的世界可以像乐高积木一样被无限组合和扩展。当您开发包含新运行时的插件时，请务_务必_为其运行时类提供一个内嵌的 `ConfigModel` Pydantic模型，以确保您的运行时能够无缝集成到图形编辑器中。我们期待看到您创造的精彩插件！
 
 
 
@@ -1525,4 +1526,99 @@ POST /api/sandboxes/{sandbox_id}/resource:mutate
 }
 ```
 *   **风险**: 中。您需要精确知道要删除的条目的索引（在这个例子中是第6个条目，索引为5）。
+```
+
+---
+
+## 7. 动态编辑器支持：通过JSON Schema驱动UI
+
+Hevno Engine 采用"后端即真理之源"的原则来构建编辑器UI。我们摒弃了任何需要在前端硬编码节点配置的做法。取而代之的是，后端会自动将所有运行时的配置要求转换为标准的 **JSON Schema**，并通过一个专门的API端点提供给前端。
+
+这使得插件开发者可以完全在Python代码中定义其运行时的配置界面，而前端能够自动渲染出对应的表单，无需修改一行UI代码。
+
+### 7.1 插件开发者的职责：用 Pydantic 定义配置
+
+作为插件开发者，当您创建一个新的运行时，您**必须**通过一个内嵌的Pydantic `ConfigModel` 类来定义其配置。引擎会自动"反射"这个模型并生成对应的JSON Schema。
+
+Pydantic模型中的字段类型、描述、默认值和约束，会直接映射为UI表单中的元素。
+
+**示例：`system.io.log` 运行时的配置定义**
+
+```python
+# 在 system/io/log.py 文件中
+
+from pydantic import BaseModel, Field
+from typing import Literal
+
+# ... 其他代码 ...
+
+class LogRuntime(Runtime):
+    
+    class ConfigModel(BaseModel):
+        """
+        这个Pydantic模型定义了 `system.io.log` 在图编辑器中的配置表单。
+        """
+        message: str = Field(
+            ...,  # '...' 表示此字段是必需的
+            title="Message",
+            description="要记录的日志消息，支持宏。"
+        )
+        level: Literal["debug", "info", "warning", "error", "critical"] = Field(
+            default="info",
+            title="Level",
+            description="日志的级别。"
+        )
+
+    # ... execute 方法 ...
+```
+
+**关键映射关系：**
+*   `title`: 会成为表单字段的 **标签 (Label)**。
+*   `description`: 会成为字段下方的 **帮助文本或提示**。
+*   `default`: 定义了字段的 **默认值**。
+*   `str`, `int`, `bool`: 分别映射为文本框、数字输入框和开关。
+*   `Literal[...]`: 会被自动转换成一个 **下拉选择框 (enum)**。
+*   必需字段 (没有默认值的字段) 会在UI上被标记为必填。
+
+### 7.2 前端交互：获取所有UI Schema
+
+前端编辑器通过一个**唯一**的API端点来获取整个应用中所有已注册运行时的Schema。
+
+*   **端点**: `GET /api/editor/schemas`
+*   **功能**: 获取当前后端环境中所有已注册的运行时的配置Schema。
+*   **响应**: 一个JSON对象，其 `runtimes` 键包含了所有运行时的Schema。
+
+**响应示例 (`GET /api/editor/schemas`)**:
+
+```json
+{
+  "runtimes": {
+    "system.io.log": {
+      "title": "ConfigModel",
+      "type": "object",
+      "properties": {
+        "message": {
+          "title": "Message",
+          "description": "要记录的日志消息，支持宏。",
+          "type": "string"
+        },
+        "level": {
+          "title": "Level",
+          "description": "日志的级别。",
+          "default": "info",
+          "enum": [ "debug", "info", "warning", "error", "critical" ],
+          "type": "string"
+        }
+      },
+      "required": [ "message" ]
+    },
+    "llm.default": {
+      /* ... llm.default 的复杂 JSON Schema ... */
+    }
+    // ... 其他所有运行时的 Schema
+  }
+}
+```
+
+前端框架在启动时调用此端点一次，将结果缓存，然后根据用户在编辑器中选择的运行时，动态地渲染出对应的配置表单。
 ```
