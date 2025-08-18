@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Box, Typography, Tabs, Tab, CircularProgress, Button, Alert } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import PublishedWithChangesIcon from '@mui/icons-material/PublishedWithChanges';
+import AddIcon from '@mui/icons-material/Add';
 import { useLayout } from '../../core_layout/src/context/LayoutContext';
 import { SCOPE_TABS } from './utils/constants';
 import { DataTree } from './components/DataTree';
@@ -13,7 +14,7 @@ import { query, mutate, applyDefinition } from './utils/api';
 import { loadSchemas } from './utils/schemaManager';
 import { GenericEditorDialog } from './editors/GenericEditorDialog';
 import { AddItemDialog } from './editors/AddItemDialog';
-// --- [新增] 导入新的 Rename 对话框 ---
+// ---导入新的 Rename 对话框 ---
 import { RenameItemDialog } from './components/RenameItemDialog';
 import { isObject } from './utils/constants';
 
@@ -28,7 +29,7 @@ export function SandboxEditorPage({ services }) {
     const [editingMemoria, setEditingMemoria] = useState(null);
     const [editingGeneric, setEditingGeneric] = useState(null);
     const [addItemTarget, setAddItemTarget] = useState(null);
-    // --- [新增] 用于重命名对话框的状态 ---
+    // ---用于重命名对话框的状态 ---
     const [renameItemTarget, setRenameItemTarget] = useState(null);
 
     const loadSandboxData = useCallback(async () => {
@@ -131,6 +132,17 @@ export function SandboxEditorPage({ services }) {
         }
     };
 
+    //一个专门用于在根目录打开添加对话框的处理器
+    const handleOpenAddDialogAtRoot = () => {
+        const currentScopeName = SCOPE_TABS[activeScope];
+        const currentScopeData = sandboxData[currentScopeName];
+        if (currentScopeData) {
+            const existingKeys = Object.keys(currentScopeData);
+            // 调用已有的 handleOpenAddDialog，但路径是根路径
+            handleOpenAddDialog(currentScopeName, existingKeys);
+        }
+    };
+
     const handleApplyDefinition = async () => {
         if (!window.confirm(
             "确定要应用这个蓝图吗？\n\n这将完全覆盖当前的 `lore` 和 `moment` 状态，并用 `definition` 中的初始值替换它们。\n\n当前的所有记忆和演化知识都将丢失，并开启一个全新的历史记录。此操作不可撤销。"
@@ -152,7 +164,7 @@ export function SandboxEditorPage({ services }) {
         }
     };
 
-    // --- [新增] 处理删除操作的函数 ---
+    // ---处理删除操作的函数 ---
     const handleDeleteItem = async (path) => {
         const itemName = path.split('/').pop();
         if (!window.confirm(`你确定要删除 "${itemName}" 吗？\n此操作无法撤销。`)) {
@@ -167,7 +179,7 @@ export function SandboxEditorPage({ services }) {
         }
     };
 
-    // --- [新增] 打开重命名对话框的函数 ---
+    // ---打开重命名对话框的函数 ---
     const handleRenameRequest = (path, value, existingKeys) => {
         const oldKey = path.split('/').pop();
         // 过滤掉当前正在重命名的键
@@ -175,7 +187,7 @@ export function SandboxEditorPage({ services }) {
         setRenameItemTarget({ path, value, existingKeys: otherKeys });
     };
 
-    // --- [新增] 执行重命名操作的函数 ---
+    // ---执行重命名操作的函数 ---
     const handleRenameConfirm = async (oldPath, newKey) => {
         const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/'));
         const newPath = `${parentPath}/${newKey}`;
@@ -232,8 +244,19 @@ export function SandboxEditorPage({ services }) {
                 ))}
             </Tabs>
             <Box sx={{ mt: 2, flexGrow: 1, overflowY: 'auto' }}>
+                <Box sx={{ display: 'flex', justifyContent: 'flex-end', pr: 2, pb: 1 }}>
+                    <Button
+                        variant="outlined"
+                        size="small"
+                        startIcon={<AddIcon />}
+                        onClick={handleOpenAddDialogAtRoot}
+                        disabled={!currentScopeData} // 如果当前范围没有数据（是null），则禁用
+                    >
+                        在 "{SCOPE_TABS[activeScope]}" 中添加项
+                    </Button>
+                </Box>
                 {currentScopeData ? (
-                    // --- [修改] 将新的处理器传递给 DataTree ---
+                    // ---将新的处理器传递给 DataTree ---
                     <DataTree 
                         data={currentScopeData} 
                         path={SCOPE_TABS[activeScope]} 
@@ -243,7 +266,10 @@ export function SandboxEditorPage({ services }) {
                         onDelete={handleDeleteItem}
                     />
                 ) : (
-                    <Typography color="text.secondary">该范围内没有可用数据</Typography>
+                    <Typography color="text.secondary" sx={{ p: 2 }}>
+                        该范围内没有可用数据。
+                        <Button onClick={handleOpenAddDialogAtRoot} sx={{ml: 1}}>点击此处创建。</Button>
+                    </Typography>
                 )}
             </Box>
 
@@ -257,7 +283,7 @@ export function SandboxEditorPage({ services }) {
                 existingKeys={addItemTarget?.existingKeys}
             />
             
-            {/* --- [新增] 渲染 Rename 对话框 --- */}
+            {/* ---渲染 Rename 对话框 --- */}
             <RenameItemDialog
                 open={!!renameItemTarget}
                 onClose={() => setRenameItemTarget(null)}

@@ -99,7 +99,7 @@ export async function revert(sandboxId, snapshotId) {
 }
 
 /**
- * [新增] 删除指定的快照
+ *删除指定的快照
  */
 export async function deleteSnapshot(sandboxId, snapshotId) {
     const response = await fetch(`${BASE_URL}/${sandboxId}/snapshots/${snapshotId}`, {

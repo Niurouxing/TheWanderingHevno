@@ -7,16 +7,16 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ImageIcon from '@mui/icons-material/Image';
 import DataObjectIcon from '@mui/icons-material/DataObject';
-// --- [新增] 导入新图标 ---
+// ---导入新图标 ---
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
 
 const placeholderImage = 'data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%22286%22%20height%3D%22180%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20286%20180%22%20preserveAspectRatio%3D%22none%22%3E%3Cdefs%3E%3Cstyle%20type%3D%22text%2Fcss%22%3E%23holder_158bd1d6d70%20text%20%7B%20fill%3A%23AAAAAA%3Bfont-weight%3Anormal%3Bfont-family%3AHelvetica%2C%20monospace%3Bfont-size%3A14pt%20%7D%20%3C%2Fstyle%3E%3C%2Fdefs%3E%3Cg%20id%3D%22holder_158bd1d6d70%22%3E%3Crect%20width%3D%22286%22%20height%3D%22180%22%20fill%3D%22%23EEEEEE%22%3E%3C%2Frect%3E%3Cg%3E%3Ctext%20x%3D%22107.19140625%22%20y%3D%2296.3%22%3ENo%20Image%3C%2Ftext%3E%3C%2Fg%3E%3C%2Fg%3E%3C%2Fsvg%3E';
 
-// --- [修改] 接收 onUploadIcon prop ---
+// ---接收 onUploadIcon prop ---
 export function SandboxCard({ sandbox, onEdit, onRun, onDelete, onSelect, onExportPng, onExportJson, onUploadIcon }) {
   const [anchorEl, setAnchorEl] = React.useState(null);
   const open = Boolean(anchorEl);
-  // --- [新增] 为隐藏的文件输入框创建一个引用 ---
+  // ---为隐藏的文件输入框创建一个引用 ---
   const fileInputRef = useRef(null);
 
   const handleMenuClick = (event) => {
@@ -30,13 +30,13 @@ export function SandboxCard({ sandbox, onEdit, onRun, onDelete, onSelect, onExpo
     action();
   };
 
-  // --- [新增] 当“更换封面”菜单项被点击时，触发隐藏的文件输入框 ---
+  // ---当“更换封面”菜单项被点击时，触发隐藏的文件输入框 ---
   const handleUploadClick = () => {
     fileInputRef.current?.click();
     handleMenuClose();
   };
 
-  // --- [新增] 当用户选择文件后，此函数被调用 ---
+  // ---当用户选择文件后，此函数被调用 ---
   const handleFileSelect = async (event) => {
     const file = event.target.files?.[0];
     if (file) {

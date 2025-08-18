@@ -6,7 +6,7 @@ import { SchemaField } from '../components/SchemaField';
 import { CodexInvokeEditor } from './CodexInvokeEditor.jsx';
 import { LlmContentsEditor } from './LlmContentsEditor.jsx';
 
-// [修改] 接收新的 runtimeType prop
+//接收新的 runtimeType prop
 export function RuntimeConfigForm({ runtimeType, schema, config, onConfigChange }) {
   
   const handleChange = (key, value) => {

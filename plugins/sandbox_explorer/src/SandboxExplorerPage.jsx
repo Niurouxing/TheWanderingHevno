@@ -59,7 +59,7 @@ const createEmptySandbox = async (name) => {
   return response.json();
 };
 
-// --- [新增] 上传沙盒图标的API函数 ---
+// ---上传沙盒图标的API函数 ---
 const uploadSandboxIcon = async (sandboxId, file) => {
   const formData = new FormData();
   formData.append('file', file);

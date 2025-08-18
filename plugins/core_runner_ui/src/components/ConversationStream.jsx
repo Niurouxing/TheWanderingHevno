@@ -1,7 +1,7 @@
 // plugins/core_runner_ui/src/components/ConversationStream.jsx
 import React from 'react';
 import { Box } from '@mui/material';
-import { MessageBubble } from './MessageBubble'; // [修改] 导入新组件
+import { MessageBubble } from './MessageBubble'; //导入新组件
 
 export const ConversationStream = ({ messages, onRegenerate, onEditSubmit }) => {
     // 过滤掉那些没有内容的临时快照消息

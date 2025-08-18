@@ -884,7 +884,7 @@ async def import_sandbox(
                 recovered_snapshots.append(new_snapshot)
         
         if not recovered_snapshots:
-            # [修改] 如果没有快照，我们应该基于 definition 创建一个创世快照，而不是报错。
+            #如果没有快照，我们应该基于 definition 创建一个创世快照，而不是报错。
             initial_moment = new_sandbox.definition.get("initial_moment", {})
             genesis_snapshot = StateSnapshot(
                 id=uuid.uuid4(),
@@ -899,7 +899,7 @@ async def import_sandbox(
         for snapshot in recovered_snapshots:
             await snapshot_store.save(snapshot)
         
-        # [修改] 如果 head_snapshot_id 还没有被设置（例如上面创建了创世快照的情况），
+        #如果 head_snapshot_id 还没有被设置（例如上面创建了创世快照的情况），
         # 则需要从导入的数据中设置它。
         if not new_sandbox.head_snapshot_id:
             old_head_id = old_sandbox_data.get('head_snapshot_id')

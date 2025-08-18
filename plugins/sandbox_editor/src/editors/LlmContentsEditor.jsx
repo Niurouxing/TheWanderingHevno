@@ -32,7 +32,7 @@ function SortableContentItem({ id, item, onUpdate, onDelete, allItems }) {
     };
 
     const renderHeader = () => {
-        // --- [修改] 如果条目有名称，则显示名称，否则回退到旧逻辑 ---
+        // ---如果条目有名称，则显示名称，否则回退到旧逻辑 ---
         if (item.name) {
              return <>
                 {item.type === 'MESSAGE_PART' ? <MessageIcon sx={{ mr: 1, color: 'text.secondary' }} /> : <DynamicFeedIcon sx={{ mr: 1, color: 'text.secondary' }} />}
@@ -69,7 +69,7 @@ function SortableContentItem({ id, item, onUpdate, onDelete, allItems }) {
             </Box>
             <Collapse in={isExpanded}>
                 <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    {/* --- [新增] 为所有类型的条目添加名称输入框 --- */}
+                    {/* ---为所有类型的条目添加名称输入框 --- */}
                     <TextField label="条目名称 (仅供UI显示)" size="small" value={item.name || ''} onChange={(e) => handleFieldChange('name', e.target.value)} />
                     
                     {item.type === 'MESSAGE_PART' && <>
@@ -144,10 +144,10 @@ export function LlmContentsEditor({ contents, onContentsChange }) {
     const handleAddItem = (type) => {
         let newItem;
         if (type === 'MESSAGE_PART') {
-            // --- [修改] 添加默认名称 ---
+            // ---添加默认名称 ---
             newItem = { type: 'MESSAGE_PART', name: '新消息片段', role: 'user', content: '' };
         } else {
-            // --- [修改] 添加默认名称 ---
+            // ---添加默认名称 ---
             newItem = { type: 'INJECT_MESSAGES', name: '新消息注入', source: '' };
         }
         const updatedItems = [...items, { ...newItem, _internal_id: `${type}_${Date.now()}_${items.length}` }];
