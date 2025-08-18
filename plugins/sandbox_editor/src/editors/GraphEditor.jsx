@@ -5,11 +5,14 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import SaveIcon from '@mui/icons-material/Save';
+import DownloadIcon from '@mui/icons-material/Download';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { SortableNodeItem } from '../components/SortableNodeItem';
 import { RuntimeEditor } from './RuntimeEditor';
 import { mutate } from '../utils/api';
+import { exportAsJson, importFromJson } from '../utils/fileUtils';
 
 export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack }) {
     const [nodes, setNodes] = useState([]);
@@ -18,7 +21,6 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack 
     const newNodeFormRef = useRef(null);
 
     useEffect(() => {
-        // --- [修复 1/7] 在加载数据时，为每个节点添加一个稳定的内部ID ---
         const nodesWithInternalIds = (graphData.nodes || []).map((node, index) => ({
             ...node,
             _internal_id: node.id + `_${Date.now()}_${index}`
@@ -33,7 +35,6 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack 
 
     const syncNodes = async (nodesToSave, optimisticState) => {
         setErrorMessage('');
-        // 乐观更新UI，使用包含 _internal_id 的状态
         setNodes(optimisticState);
         try {
             await mutate(sandboxId, [{
@@ -53,7 +54,6 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack 
     const handleNodeDragEnd = async (event) => {
         const { active, over } = event;
         if (active.id !== over.id) {
-            // --- [修复 2/7] 使用 _internal_id 来查找索引 ---
             const oldIndex = nodes.findIndex(n => n._internal_id === active.id);
             const newIndex = nodes.findIndex(n => n._internal_id === over.id);
             if (oldIndex === -1 || newIndex === -1) return;
@@ -84,14 +84,12 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack 
     
     const handleDeleteNode = async (internalIdToDelete) => {
         if (!window.confirm(`Are you sure you want to delete this node?`)) return;
-        // --- [修复 3/7] 使用 _internal_id 进行过滤 ---
         const updatedNodes = nodes.filter(n => n._internal_id !== internalIdToDelete);
         const nodesToSave = updatedNodes.map(({_internal_id, ...rest}) => rest);
         await syncNodes(nodesToSave, updatedNodes);
     };
 
     const handleAddNode = () => {
-        // --- [修复 4/7] 添加节点时，同时创建 _internal_id ---
         const newInternalId = `new_node_internal_${Date.now()}`;
         const newNode = { 
             _internal_id: newInternalId,
@@ -107,6 +105,51 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack 
              newNodeFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
         }, 100)
     };
+
+    const handleExportNode = (internalIdToExport) => {
+        const nodeToExport = nodes.find(n => n._internal_id === internalIdToExport);
+        if (!nodeToExport) {
+            setErrorMessage('无法找到要导出的节点。');
+            return;
+        }
+
+        // 在导出前，移除仅用于UI的 _internal_id
+        const { _internal_id, ...cleanNode } = nodeToExport;
+        
+        exportAsJson(cleanNode, `${cleanNode.id}.json`);
+    };
+
+    const handleImportNode = async () => {
+        try {
+            const { data: importedNode } = await importFromJson();
+
+            // 验证导入的数据
+            if (typeof importedNode !== 'object' || Array.isArray(importedNode) || importedNode === null) {
+                throw new Error("导入的文件必须是一个有效的JSON对象。");
+            }
+            if (!importedNode.id) {
+                throw new Error("导入的节点缺少必需的 'id' 字段。");
+            }
+
+            // 检查ID冲突
+            if (nodes.some(n => n.id === importedNode.id)) {
+                throw new Error(`ID为 "${importedNode.id}" 的节点已存在。请先在文件中修改ID后再导入。`);
+            }
+
+            // 为新节点添加UI所需的内部ID
+            const newNode = {
+                ...importedNode,
+                _internal_id: `${importedNode.id}_${Date.now()}_imported`
+            };
+
+            setNodes(prev => [...prev, newNode]);
+
+            alert(`成功导入节点 "${newNode.id}"。\n\n请记得点击"全部保存"以持久化更改。`);
+
+        } catch (e) {
+            setErrorMessage(`导入节点失败: ${e.message}`);
+        }
+    };
     
     const handleNodeChange = (index, field, value) => {
         const updatedNodes = [...nodes];
@@ -118,7 +161,6 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack 
         setNodes(updatedNodes);
     };
 
-    // --- [修复 5/7] 使用 _internal_id 来切换展开状态 ---
     const toggleNodeExpand = (internalId) => {
         setExpandedNodes(prev => ({ ...prev, [internalId]: !prev[internalId] }));
     };
@@ -149,6 +191,8 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack 
             <Box sx={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
                 <Button variant="outlined" onClick={onBack}>返回概览</Button>
                 <Typography variant="h5" component="div" sx={{flexGrow: 1}}>正在编辑Graph: {graphName}</Typography>
+                {/* [修改] 将导入按钮改为导入单个节点 */}
+                <Button variant="outlined" startIcon={<UploadFileIcon />} onClick={handleImportNode}>导入节点</Button>
                 <Button variant="outlined" startIcon={<AddIcon />} onClick={handleAddNode}>添加节点</Button>
                 <Button variant="contained" color="success" startIcon={<SaveIcon />} onClick={handleSaveAllNodes}>全部保存</Button>
             </Box>
@@ -156,11 +200,9 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack 
 
             <Box sx={{ flexGrow: 1, overflowY: 'auto' }}>
                 <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleNodeDragEnd}>
-                    {/* --- [修复 6/7] 使用 _internal_id 作为 dnd-kit 的 ID 来源 --- */}
                     <SortableContext items={nodes.map(n => n._internal_id)} strategy={verticalListSortingStrategy}>
                         <List>
                             {nodes.map((node, index) => (
-                                // --- [修复 7/7] 使用 _internal_id 作为 React key 和组件的唯一标识 ---
                                 <div key={node._internal_id} ref={index === nodes.length -1 ? newNodeFormRef : null}>
                                     <SortableNodeItem
                                         id={node._internal_id}
@@ -168,6 +210,7 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack 
                                         expanded={!!expandedNodes[node._internal_id]}
                                         onToggleExpand={() => toggleNodeExpand(node._internal_id)}
                                         onDelete={() => handleDeleteNode(node._internal_id)}
+                                        onExport={() => handleExportNode(node._internal_id)}
                                     >
                                         <Collapse in={!!expandedNodes[node._internal_id]} timeout="auto" unmountOnExit>
                                             {renderNodeForm(node, index)}

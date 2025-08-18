@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Select, MenuItem, FormControl, InputLabel, Box, Switch, FormControlLabel, Alert } from '@mui/material';
+import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Select, MenuItem, FormControl, InputLabel, Box, Switch, FormControlLabel, Alert, Divider } from '@mui/material';
+import { importFromJson } from '../utils/fileUtils';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
 
 // 预定义的 hevno 类型模板，方便用户快速创建
 const PREFAB_TEMPLATES = {
@@ -70,6 +72,27 @@ export function AddItemDialog({ open, onClose, onAdd, parentPath, existingKeys =
         }
     };
 
+    const handleImport = async () => {
+        try {
+            const { data, filename } = await importFromJson();
+            const keyFromFile = filename.toLowerCase().endsWith('.json')
+                ? filename.slice(0, -5)
+                : filename;
+
+            // 检查导入的 key 是否冲突
+            if (existingKeys.includes(keyFromFile)) {
+                setError(`键 "${keyFromFile}" (来自文件名) 已存在。请先手动重命名文件或在下方修改键名。`);
+                setKey(keyFromFile); // 填充键名让用户修改
+            } else {
+                // 如果不冲突，直接添加
+                await onAdd(parentPath, keyFromFile, data);
+                onClose(); // 成功后关闭对话框
+            }
+        } catch (e) {
+            setError(`导入失败: ${e.message}`);
+        }
+    };
+
     const renderValueInput = () => {
         switch (type) {
             case 'string':
@@ -97,6 +120,18 @@ export function AddItemDialog({ open, onClose, onAdd, parentPath, existingKeys =
             <DialogTitle>加入新对象到 "{parentPath}"</DialogTitle>
             <DialogContent>
                 {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+                
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <Button
+                        variant="outlined"
+                        startIcon={<UploadFileIcon />}
+                        onClick={handleImport}
+                    >
+                        从JSON文件导入并添加
+                    </Button>
+                    <Divider>或手动创建</Divider>
+                </Box>
+
                 <TextField label="键 / 名称" value={key} onChange={e => setKey(e.target.value)} fullWidth required autoFocus margin="dense" />
                 <FormControl fullWidth margin="dense">
                     <InputLabel id="add-item-type-label">类型</InputLabel>

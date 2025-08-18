@@ -10,10 +10,10 @@ import HistoryIcon from '@mui/icons-material/History';
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
-// [新增] 导入用于视觉指示的箭头图标
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
-
+import DownloadIcon from '@mui/icons-material/Download';
+import { exportAsJson } from '../utils/fileUtils';
 
 import { isObject, isArray } from '../utils/constants';
 
@@ -41,11 +41,17 @@ export function DataTree({ data, path = '', onEdit, onAdd, onRename, onDelete })
     setCurrentItem(null);
   };
 
-  const handleMenuAction = (action) => {
+  const handleMenuAction = (action, ...args) => {
     if (!currentItem) return;
     const { currentPath, value, siblingKeys } = currentItem;
-    action(currentPath, value, siblingKeys);
+    // 适配新的导出操作，它只需要 path 和 value
+    action(args.length > 0 ? args[0] : currentPath, value, siblingKeys);
     handleMenuClose();
+  };
+
+  const handleExport = (currentPath, value) => {
+    const key = currentPath.split('/').pop();
+    exportAsJson(value, `${key}.json`);
   };
 
   if (!data) return null;
@@ -65,9 +71,6 @@ export function DataTree({ data, path = '', onEdit, onAdd, onRename, onDelete })
           return (
             <React.Fragment key={currentPath}>
               <ListItem
-                // --- [核心修改 1/3] ---
-                // 当条目可展开时，为其添加 button 属性和 onClick 事件处理器
-                // 这使得整个条目行（除了右侧按钮）都可点击以进行展开/折叠
                 button={isExpandable && !editorInfo}
                 onClick={isExpandable && !editorInfo ? () => toggleExpand(currentPath) : undefined}
                 disablePadding
@@ -82,10 +85,6 @@ export function DataTree({ data, path = '', onEdit, onAdd, onRename, onDelete })
                 }
               >
                 <ListItemIcon sx={{minWidth: '40px'}}>
-                  {/* --- [核心修改 2/3] ---
-                      - 如果是可展开的对象，显示一个非交互的箭头作为视觉指示器。
-                      - 否则，显示其对应的特殊图标或通用文件图标。
-                  */}
                   { (isExpandable && !editorInfo) ? (
                       expanded[currentPath] ? <KeyboardArrowDownIcon /> : <KeyboardArrowRightIcon />
                     ) : editorInfo ? editorInfo.icon : <DescriptionIcon />
@@ -101,7 +100,6 @@ export function DataTree({ data, path = '', onEdit, onAdd, onRename, onDelete })
                           : `${isArray(value) ? 'Array' : 'Object'} (${Object.keys(value).length} items)`
                   }
                 />
-                {/* --- [核心修改 3/3] 独立的箭头 IconButton 已被完全移除 --- */}
               </ListItem>
               {isExpandable && !editorInfo && (
                 <Collapse in={expanded[currentPath]} timeout="auto" unmountOnExit>
@@ -113,7 +111,6 @@ export function DataTree({ data, path = '', onEdit, onAdd, onRename, onDelete })
         })}
       </List>
       
-      {/* 上下文菜单组件保持不变 */}
       <Menu
         anchorEl={menuAnchor}
         open={Boolean(menuAnchor)}
@@ -129,6 +126,10 @@ export function DataTree({ data, path = '', onEdit, onAdd, onRename, onDelete })
              <ListItemText>添加项</ListItemText>
           </MenuItem>
         )}
+        <MenuItem onClick={() => handleMenuAction(handleExport)}>
+            <ListItemIcon><DownloadIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>导出为JSON</ListItemText>
+        </MenuItem>
         {currentItem && path !== '' && (
              <MenuItem onClick={() => handleMenuAction(onRename)}>
                 <ListItemIcon><DriveFileRenameOutlineIcon fontSize="small" /></ListItemIcon>
