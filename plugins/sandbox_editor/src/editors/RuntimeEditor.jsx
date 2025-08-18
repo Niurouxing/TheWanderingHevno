@@ -22,6 +22,8 @@ import {
 } from '@dnd-kit/sortable';
 import { SortableRuntimeItem } from '../components/SortableRuntimeItem';
 import { RuntimeConfigForm } from './RuntimeConfigForm';
+// [新增] 导入 schema 管理器
+import { getSchemaForRuntime } from '../utils/schemaManager';
 
 const NEW_RUNTIME_SYMBOL = Symbol('new_runtime');
 
@@ -29,10 +31,23 @@ export function RuntimeEditor({ runList, onRunListChange }) {
   const [runs, setRuns] = useState(runList || []);
   const [editingRun, setEditingRun] = useState(null);
   const [draftData, setDraftData] = useState(null);
+  
+  // [新增] 用于存储当前选中运行时的 schema
+  const [currentSchema, setCurrentSchema] = useState(null);
 
   useEffect(() => {
     setRuns(runList || []);
   }, [runList]);
+  
+  // [新增] 当 draftData 或其 runtime 类型变化时，更新 schema
+  useEffect(() => {
+      if (draftData && draftData.runtime) {
+          const schema = getSchemaForRuntime(draftData.runtime);
+          setCurrentSchema(schema);
+      } else {
+          setCurrentSchema(null);
+      }
+  }, [draftData, draftData?.runtime]);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -165,9 +180,11 @@ export function RuntimeEditor({ runList, onRunListChange }) {
           />
         )}
         
+        {/* [修改] 传递 runtimeType 和 schema 给 RuntimeConfigForm */}
         {draftData.runtime && (
           <RuntimeConfigForm
             runtimeType={draftData.runtime}
+            schema={currentSchema}
             config={draftData.config || {}}
             onConfigChange={(newConfig) => handleDraftChange('config', newConfig)}
           />

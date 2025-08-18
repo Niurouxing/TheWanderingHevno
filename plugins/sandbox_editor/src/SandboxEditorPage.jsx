@@ -1,3 +1,4 @@
+// plugins/sandbox_editor/src/SandboxEditorPage.jsx
 import React, { useState, useEffect, useCallback } from 'react';
 import { Box, Typography, Tabs, Tab, CircularProgress, Button, Alert } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -9,6 +10,7 @@ import { CodexEditor } from './editors/CodexEditor';
 import { GraphEditor } from './editors/GraphEditor';
 import { MemoriaEditor } from './editors/MemoriaEditor';
 import { query, mutate, applyDefinition } from './utils/api';
+import { loadSchemas } from './utils/schemaManager';
 import { GenericEditorDialog } from './editors/GenericEditorDialog';
 import { AddItemDialog } from './editors/AddItemDialog';
 import { isObject } from './utils/constants';
@@ -26,26 +28,40 @@ export function SandboxEditorPage({ services }) {
     const [addItemTarget, setAddItemTarget] = useState(null);
 
     const loadSandboxData = useCallback(async () => {
-        
         if (!currentSandboxId) return;
-        setLoading(true);
-        setError('');
         try {
             const results = await query(currentSandboxId, ['definition', 'lore', 'moment']);
             setSandboxData(results);
         } catch (e) {
-            setError(e.message);
-            console.error(e);
-        } finally {
-            setLoading(false);
+            console.error('加载沙盒数据失败:', e);
+            throw new Error(`加载沙盒数据失败: ${e.message}`);
         }
     }, [currentSandboxId]);
 
-    useEffect(() => {
-        if (currentSandboxId) {
-            loadSandboxData();
+    const loadAllEditorData = useCallback(async () => {
+        if (!currentSandboxId) return;
+
+        setLoading(true);
+        setError('');
+        
+        try {
+            console.log("开始并行加载沙盒数据和UI Schemas...");
+            await Promise.all([
+                loadSandboxData(),
+                loadSchemas()
+            ]);
+            console.log("沙盒数据和UI Schemas均已加载完毕。");
+        } catch (e) {
+            setError(e.message);
+            console.error("加载编辑器所需数据时出错:", e);
+        } finally {
+            setLoading(false);
         }
-    }, [currentSandboxId, loadSandboxData]);
+    }, [currentSandboxId, loadSandboxData]); 
+
+    useEffect(() => {
+        loadAllEditorData();
+    }, [loadAllEditorData]);
 
     const handleScopeChange = (event, newValue) => {
         
@@ -133,10 +149,9 @@ export function SandboxEditorPage({ services }) {
     };
 
 
-    // ... (加载和错误状态的渲染保持不变) ...
     if (!currentSandboxId) return <Box sx={{ p: 4, textAlign: 'center' }}><Typography variant="h6" color="error">未选择要编辑的沙盒</Typography></Box>;
     if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}><CircularProgress /></Box>;
-    if (error) return <Box sx={{ p: 4, textAlign: 'center' }}><Alert severity="error" onClose={() => setError('')}>{error}</Alert><Button variant="outlined" sx={{ mt: 2 }} onClick={loadSandboxData}>重试</Button></Box>;
+    if (error) return <Box sx={{ p: 4, textAlign: 'center' }}><Alert severity="error" onClose={() => setError('')}>{error}</Alert><Button variant="outlined" sx={{ mt: 2 }} onClick={loadAllEditorData}>重试</Button></Box>;
     const currentScopeData = sandboxData[SCOPE_TABS[activeScope]];
 
     if (editingCodex) return <CodexEditor sandboxId={currentSandboxId} basePath={editingCodex.basePath} codexName={editingCodex.name} codexData={editingCodex.data} onBack={handleBackToOverview} />;
