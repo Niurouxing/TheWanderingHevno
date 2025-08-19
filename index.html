@@ -6,20 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Hevno Engine</title>
     
-    <!-- 
-      ===============================================================
-      关键变更: 移除了 Import Map
-      ===============================================================
-      之前的 importmap 已被移除。在新的 v2.1 架构下，像 React 这样的
-      重量级框架依赖，将由使用它的插件（如 core_goliath）在自己的
-      构建过程中（例如，通过 Vite 和 @vitejs/plugin-react）进行处理和打包。
-      
-      这使得平台本身（加载器）保持了极致的轻量和框架无关性，
-      完全符合我们的核心设计哲学。
-    -->
-
     <style>
-      /* 基础样式保持不变，以避免启动时白屏 */
       body {
         margin: 0;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -35,12 +22,7 @@
   </head>
   <body>
     <div id="app">
-        <!-- 应用将挂载在这里 -->
     </div>
-    <!-- 
-      前端内核入口文件保持不变。
-      这个脚本会启动微加载器，动态加载所有插件。
-    -->
     <script type="module" src="/frontend/main.js"></script>
   </body>
 </html>
