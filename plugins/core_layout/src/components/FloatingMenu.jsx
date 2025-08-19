@@ -74,8 +74,8 @@ export function FloatingMenu() {
   const containerSx = {
     width: isOpen ? EXPANDED_WIDTH : COLLAPSED_SIZE,
     height: isOpen ? EXPANDED_HEIGHT : COLLAPSED_SIZE,
-    backgroundColor: '#29344B',
-    color: '#E7C296',
+    backgroundColor: '#1C1F22',
+    color: '#FFFFFF',
     borderRadius: isOpen ? '16px' : '50%',
     display: 'flex',
     alignItems: 'center',
@@ -109,7 +109,7 @@ export function FloatingMenu() {
         <Box sx={containerSx}>
           {/* Central Menu Icon (only visible when collapsed) */}
           <MenuIcon sx={{
-            fontSize: 25,
+            fontSize: 22,
             opacity: isOpen ? 0 : 1,
             transition: 'opacity 0.2s linear',
           }}/>
@@ -146,12 +146,12 @@ export function FloatingMenu() {
                     sx={{
                       width: '100%',
                       height: '100%',
-                      color: '#E7C296',
+                      color: '#FFFFFF',
                       backgroundColor: activePageId === action.id ? 'rgba(231, 194, 150, 0.15)' : 'transparent',
                       transform: activePageId === action.id ? 'scale(1.1)' : 'scale(1)',
                       transition: 'background-color 0.2s, transform 0.2s',
                       '&:hover': {
-                        backgroundColor: 'rgba(231, 194, 150, 0.25)',
+                        backgroundColor: '#474D50',
                         transform: 'scale(1.15)'
                       }
                     }}
