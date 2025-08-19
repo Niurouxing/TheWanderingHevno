@@ -1,3 +1,4 @@
+<!-- public/index.html (或者你的根目录下的 index.html) -->
 <!doctype html>
 <html lang="en">
   <head>
@@ -7,16 +8,24 @@
     <title>Hevno Engine</title>
     
     <style>
+      /* --- 关键修复 --- */
+      /* 强制禁止 html 和 body 元素的滚动能力 */
+      html, body {
+        overflow: hidden !important;
+        height: 100% !important;
+      }
+
       body {
         margin: 0;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
         background-color: #1e1e1e;
         color: #d4d4d4;
       }
+
       #app {
         height: 100vh;
         width: 100vw;
-        overflow: hidden;
+        overflow: hidden; /* 这个也要保留，作为第二层保险 */
       }
     </style>
   </head>

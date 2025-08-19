@@ -19,12 +19,15 @@ const DynamicIcon = ({ name }) => {
 function CockpitContent() {
     const { services, setActivePageId, setMenuOverride } = useLayout();
     const { isLoading, moment } = useSandboxState();
-    const contributionService = services.get('contributionService');
-    const hookManager = services.get('hookManager');
+    
+    // [核心修复 2] 稳定 services 对象，防止不必要的重渲染
+    const stableServices = useMemo(() => services, [services]);
+    
+    const contributionService = stableServices.get('contributionService');
+    const hookManager = stableServices.get('hookManager');
 
     const [isManaging, setIsManaging] = useState(false);
 
-    // [核心修改 1] 使用 useMemo 分别获取两种类型的贡献
     const { backgroundComponent, panelComponents } = useMemo(() => {
         const backgroundContributions = contributionService.getContributionsFor('cockpit.canvas_background');
         const panelContributions = contributionService.getContributionsFor('cockpit.panels');
@@ -38,7 +41,7 @@ function CockpitContent() {
         };
     }, [contributionService]);
 
-    // [最终形态] 动态构建菜单
+
     const runnerMenuActions = useMemo(() => {
         const baseActions = [
             { id: 'runner.back', title: '返回沙盒列表', icon: <ArrowBackIcon />, onClick: () => setActivePageId('sandbox_explorer.main_view') },
@@ -77,12 +80,12 @@ function CockpitContent() {
 
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            {chromeComponents.topBar && <Box sx={{ flexShrink: 0 }}><DynamicComponentLoader contribution={chromeComponents.topBar} services={services} /></Box>}
+            {chromeComponents.topBar && <Box sx={{ flexShrink: 0 }}><DynamicComponentLoader contribution={chromeComponents.topBar} services={stableServices} /></Box>}
             
             <Box sx={{ flexGrow: 1, position: 'relative',overflow: 'hidden'  }}>
                 <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1 }}>
                     {backgroundComponent ? (
-                        <DynamicComponentLoader contribution={backgroundComponent} services={services} />
+                        <DynamicComponentLoader contribution={backgroundComponent} services={stableServices} />
                     ) : (
                         // 如果没有背景组件，可以提供一个默认的、简单的背景
                         <Box sx={{ width: '100%', height: '100%', bgcolor: 'background.default' }} />
@@ -103,13 +106,17 @@ function CockpitContent() {
 
             </Box>
             
-            {chromeComponents.bottomBar && <Box sx={{ flexShrink: 0 }}><DynamicComponentLoader contribution={chromeComponents.bottomBar} services={services} /></Box>}
+            {chromeComponents.bottomBar && <Box sx={{ flexShrink: 0 }}><DynamicComponentLoader contribution={chromeComponents.bottomBar} services={stableServices} /></Box>}
         </Box>
     );
 }
 
 export function RunnerPage() {
     const { currentSandboxId, services } = useLayout();
+    
+    // [核心修复 3] 同样在这里稳定 services 对象
+    const stableServices = useMemo(() => services, [services]);
+    
     if (!currentSandboxId) {
         return (
             <Box sx={{ p: 4, textAlign: 'center', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '100%' }}>
@@ -119,7 +126,7 @@ export function RunnerPage() {
         );
     }
     return (
-        <SandboxStateProvider sandboxId={currentSandboxId} services={services}>
+        <SandboxStateProvider sandboxId={currentSandboxId} services={stableServices}>
             <CssBaseline />
             <CockpitContent />
         </SandboxStateProvider>
