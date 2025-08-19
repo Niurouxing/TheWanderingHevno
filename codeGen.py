@@ -146,8 +146,8 @@ if __name__ == "__main__":
     # ]
 
     paths = [
-        "./frontend",
-        "./plugins/core_layout",
+        # "./frontend",
+        # "./plugins/core_layout",
         # "./plugins/page_demo",
         # "./plugins/core_llm_config",
         # "./plugins/sandbox_editor",

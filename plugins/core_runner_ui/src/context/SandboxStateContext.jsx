@@ -2,13 +2,21 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { query, step, revert } from '../api'; // 引入核心API
 
-const SandboxStateContext = createContext(null);
+export const SandboxStateContext = createContext(null);
 
-export function SandboxStateProvider({ sandboxId, children }) {
+export function SandboxStateProvider({ sandboxId, services, children }) {
     const [sandboxState, setSandboxState] = useState({ moment: null, lore: null, definition: null });
     const [isLoading, setIsLoading] = useState(true);
     const [isStepping, setIsStepping] = useState(false); // 用于区分初次加载和step执行
     const [error, setError] = useState('');
+
+    useEffect(() => {
+        if (services && !services.has('sandboxStateContext')) {
+            console.log('[core_runner_ui] Registering SandboxStateContext service.');
+            services.register('sandboxStateContext', SandboxStateContext, 'core_runner_ui');
+        }
+        // 我们不需要清理函数，因为 Context 应该在 Runner UI 的整个生命周期内都可用
+    }, [services]);
 
     const refreshState = useCallback(async (showLoadingSpinner = true) => {
         if (!sandboxId) return;

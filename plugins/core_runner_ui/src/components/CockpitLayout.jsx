@@ -68,7 +68,7 @@ export function CockpitLayout() {
                     
                     return (
                         <div key={panelId}>
-                            <DynamicComponentLoader contribution={panelInfo} />
+                            <DynamicComponentLoader contribution={panelInfo} services={services} />
                         </div>
                     );
                 })}

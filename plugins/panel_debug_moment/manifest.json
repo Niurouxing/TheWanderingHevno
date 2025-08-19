@@ -17,6 +17,14 @@
                     "componentExportName": "MomentInspectorPanel",
                     "defaultLayout": { "w": 4, "h": 8, "x": 8, "y": 0 }
                 }
+            ],
+            "core_runner_ui.menu_actions": [
+                {
+                    "id": "panel_debug_moment.actions.refresh",
+                    "title": "刷新状态",
+                    "icon": "Refresh",
+                    "hookName": "panel_debug_moment.refresh"
+                }
             ]
         }
     }

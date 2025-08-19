@@ -31,14 +31,14 @@ function getLazyComponent(contribution) {
 }
 
 
-export function DynamicComponentLoader({ contribution, props = {} }) {
+export function DynamicComponentLoader({ contribution, services, props = {} }) {
     if (!contribution) return null;
 
     const Component = getLazyComponent(contribution);
 
     return (
         <React.Suspense fallback={<CircularProgress size={24} />}>
-            <Component {...props} />
+            <Component {...props} services={services} />
         </React.Suspense>
     );
 }
