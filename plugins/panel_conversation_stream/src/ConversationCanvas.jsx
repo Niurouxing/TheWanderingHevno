@@ -44,27 +44,45 @@ export function ConversationCanvas() {
     const [inputValue, setInputValue] = useState('');
     const [isNearBottom, setIsNearBottom] = useState(true);
     const scrollRef = useRef(null);
+    const debounceTimerRef = useRef(null);
 
-    // 实现非对称的滚动逻辑
+    // 实现防抖的滚动逻辑
     const handleScroll = useCallback(() => {
         const container = scrollRef.current;
         if (!container) return;
 
-        const { scrollTop, scrollHeight, clientHeight } = container;
-        const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-
-        if (isNearBottom) {
-            // 如果当前是显示的，那么只有当滚动距离超过 HIDE_THRESHOLD 时才隐藏
-            if (distanceFromBottom > HIDE_THRESHOLD) {
-                setIsNearBottom(false);
-            }
-        } else {
-            // 如果当前是隐藏的，那么只有当滚动距离小于 SHOW_THRESHOLD 时才显示
-            if (distanceFromBottom < SHOW_THRESHOLD) {
-                setIsNearBottom(true);
-            }
+        // 清除之前的防抖计时器
+        if (debounceTimerRef.current) {
+            clearTimeout(debounceTimerRef.current);
         }
+
+        // 设置新的防抖计时器
+        debounceTimerRef.current = setTimeout(() => {
+            const { scrollTop, scrollHeight, clientHeight } = container;
+            const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+
+            if (isNearBottom) {
+                // 如果当前是显示的，那么只有当滚动距离超过 HIDE_THRESHOLD 时才隐藏
+                if (distanceFromBottom > HIDE_THRESHOLD) {
+                    setIsNearBottom(false);
+                }
+            } else {
+                // 如果当前是隐藏的，那么只有当滚动距离小于 SHOW_THRESHOLD 时才显示
+                if (distanceFromBottom < SHOW_THRESHOLD) {
+                    setIsNearBottom(true);
+                }
+            }
+        }, 50); // 50ms 防抖延迟
     }, [isNearBottom]); // 依赖 isNearBottom 以获取最新的状态
+
+    // 清理防抖计时器
+    useEffect(() => {
+        return () => {
+            if (debounceTimerRef.current) {
+                clearTimeout(debounceTimerRef.current);
+            }
+        };
+    }, []);
 
     // 自动滚动到底部
     useEffect(() => {
