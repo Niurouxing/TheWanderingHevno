@@ -1,20 +1,19 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Box, TextField, IconButton, Fade, Typography } from '@mui/material';
+import { Box, TextField, IconButton, Typography } from '@mui/material';
 import SendRoundedIcon from '@mui/icons-material/SendRounded';
 
 const initialMessages = [
     { type: 'system', text: "You wake up in the cramped backstage of the Apollo theater, the stale air thick with dust and mildew. The resistance has stashed you here for the past few hours while they scramble to plan an extraction. Your body aches, exhaustion weighing heavy from the night's evasion through the ruined streets." },
     { type: 'llm', sender: 'Red', text: "\"NN, wake up,\" Red says, kneeling beside you. Their augmented face mask flickers, revealing just enough of their features—pale skin and deep-set eyes—to make them seem real, human. \"You don't have much time.\" Their words are clipped, urgent. \"Stryker's close.\" You push yourself up, shoulders groaning as the exosuit's servos adjust to your movement. The dim emergency lights flicker above, casting long shadows over the cluttered backstage. Stripped-down bots—some missing limbs, others with exposed wiring—are stacked in the corners like discarded toys." },
     { type: 'llm', sender: 'Red', text: "\"They sent two squads to sweep the perimeter,\" Red continues, checking the readout on their augmented forearm. \"One ground unit, one aerial. They're methodical.\" Their gloved fingers tap rapidly against the exposed pipes of the old theater wall. \"You're fast, but not fast enough to outrun a drone swarm.\" A muscle twitches in their jaw. \"We need to get you underground.\"" },
-    
-    { type: 'llm', sender: 'Red', text: "\"NN, wake up,\" Red says, kneeling beside you. Their augmented face mask flickers, revealing just enough of their features—pale skin and deep-set eyes—to make them seem real, human. \"You don't have much time.\" Their words are clipped, urgent. \"Stryker's close.\" You push yourself up, shoulders groaning as the exosuit's servos adjust to your movement. The dim emergency lights flicker above, casting long shadows over the cluttered backstage. Stripped-down bots—some missing limbs, others with exposed wiring—are stacked in the corners like discarded toys." },
-    { type: 'llm', sender: 'Red', text: "\"They sent two squads to sweep the perimeter,\" Red continues, checking the readout on their augmented forearm. \"One ground unit, one aerial. They're methodical.\" Their gloved fingers tap rapidly against the exposed pipes of the old theater wall. \"You're fast, but not fast enough to outrun a drone swarm.\" A muscle twitches in their jaw. \"We need to get you underground.\"" },
-    
+    { type: 'action', text: "You trigger some emergency." },
+    { type: 'user', text: "Your fingers dance across the neuralink interface, and the nearest inactive bot—a headless torso with exposed wiring—jerks to life with a sharp hiss of pneumatics. It shambles toward the wall, stumbling over the debris as you override its basic systems. Then you yank open a hatch you'd noticed earlier—a maintenance shaft that runs into the deeper levels of the theater." },
+    { type: 'system', text: "You wake up in the cramped backstage of the Apollo theater, the stale air thick with dust and mildew. The resistance has stashed you here for the past few hours while they scramble to plan an extraction. Your body aches, exhaustion weighing heavy from the night's evasion through the ruined streets." },
     { type: 'llm', sender: 'Red', text: "\"NN, wake up,\" Red says, kneeling beside you. Their augmented face mask flickers, revealing just enough of their features—pale skin and deep-set eyes—to make them seem real, human. \"You don't have much time.\" Their words are clipped, urgent. \"Stryker's close.\" You push yourself up, shoulders groaning as the exosuit's servos adjust to your movement. The dim emergency lights flicker above, casting long shadows over the cluttered backstage. Stripped-down bots—some missing limbs, others with exposed wiring—are stacked in the corners like discarded toys." },
     { type: 'llm', sender: 'Red', text: "\"They sent two squads to sweep the perimeter,\" Red continues, checking the readout on their augmented forearm. \"One ground unit, one aerial. They're methodical.\" Their gloved fingers tap rapidly against the exposed pipes of the old theater wall. \"You're fast, but not fast enough to outrun a drone swarm.\" A muscle twitches in their jaw. \"We need to get you underground.\"" },
     { type: 'action', text: "You trigger some emergency." },
     { type: 'user', text: "Your fingers dance across the neuralink interface, and the nearest inactive bot—a headless torso with exposed wiring—jerks to life with a sharp hiss of pneumatics. It shambles toward the wall, stumbling over the debris as you override its basic systems. Then you yank open a hatch you'd noticed earlier—a maintenance shaft that runs into the deeper levels of the theater." },
-    { type: 'system', text: "The bot stumbles down into the darkness, and you wait. Seconds later, a distant explosion rumbles through the floor—controlled detonation of the old gas lines, triggering the emergency sprinkler system. The backstage erupts into chaos as the overhead pipes burst, drenching everything in a cold, hissing shower." }
+    { type: 'system', text: "The bot stumbles down into the darkness, and you wait. Seconds later, a distant explosion-controlled detonation of the old gas lines, triggering the emergency sprinkler system. The backstage erupts into chaos as the overhead pipes burst, drenching everything in a cold, hissing shower." }
 ];
 
 const Message = React.memo(({ msg }) => {
@@ -36,21 +35,38 @@ const Message = React.memo(({ msg }) => {
     );
 });
 
+// 定义非对称阈值
+const SHOW_THRESHOLD = 250; // 出现动画的触发距离
+const HIDE_THRESHOLD = 100;  // 消失动画的触发距离
+
 export function ConversationCanvas() {
     const [messages, setMessages] = useState(initialMessages);
     const [inputValue, setInputValue] = useState('');
-    const [showInput, setShowInput] = useState(true);
+    const [isNearBottom, setIsNearBottom] = useState(true);
     const scrollRef = useRef(null);
 
+    // 实现非对称的滚动逻辑
     const handleScroll = useCallback(() => {
         const container = scrollRef.current;
-        if (container) {
-            const { scrollTop, scrollHeight, clientHeight } = container;
-            const isAtBottom = (scrollHeight - scrollTop - clientHeight) < 100;
-            setShowInput(isAtBottom);
-        }
-    }, []);
+        if (!container) return;
 
+        const { scrollTop, scrollHeight, clientHeight } = container;
+        const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+
+        if (isNearBottom) {
+            // 如果当前是显示的，那么只有当滚动距离超过 HIDE_THRESHOLD 时才隐藏
+            if (distanceFromBottom > HIDE_THRESHOLD) {
+                setIsNearBottom(false);
+            }
+        } else {
+            // 如果当前是隐藏的，那么只有当滚动距离小于 SHOW_THRESHOLD 时才显示
+            if (distanceFromBottom < SHOW_THRESHOLD) {
+                setIsNearBottom(true);
+            }
+        }
+    }, [isNearBottom]); // 依赖 isNearBottom 以获取最新的状态
+
+    // 自动滚动到底部
     useEffect(() => {
         const scrollContainer = scrollRef.current;
         if (scrollContainer) {
@@ -58,6 +74,7 @@ export function ConversationCanvas() {
         }
     }, [messages.length]);
     
+    // 发送消息
     const handleSendMessage = () => {
         if (inputValue.trim()) {
             setMessages(prev => [...prev, { type: 'user', text: inputValue.trim() }]);
@@ -68,7 +85,6 @@ export function ConversationCanvas() {
             }, 1500);
         }
     };
-    
     
     return (
         <Box sx={{ position: 'relative', width: '100%', height: '100%', bgcolor: '#121212', overflow: 'hidden' }}>
@@ -82,61 +98,58 @@ export function ConversationCanvas() {
                     scrollbarWidth: 'none', '-ms-overflow-style': 'none',
                 }}
             >
-                {/* 消息容器 */}
                 <Box sx={{
                     maxWidth: '720px', width: '100%', mx: 'auto',
                     pt: '8vh', px: 3,
-                    // [核心修复 1] 移除固定的 padding-bottom
+                    paddingBottom: isNearBottom ? '120px' : '20px',
+                    transition: 'padding-bottom 0.5s cubic-bezier(0.23, 1, 0.32, 1)'
                 }}>
                     {messages.map((msg, index) => <Message key={index} msg={msg} />)}
                 </Box>
-
-                {/* [核心修复 2] 添加一个固定高度的透明占位符 */}
-                {/* 它的高度确保了最后一条消息不会被输入框遮挡 */}
-                <Box sx={{ height: '120px', flexShrink: 0 }} />
             </Box>
 
-            <Fade in={showInput} timeout={400}>
-                 <Box
-                    sx={{
-                        position: 'absolute', bottom: 30, left: '50%', transform: 'translateX(-50%)',
-                        width: 'clamp(300px, 90%, 720px)',
-                        display: 'flex', alignItems: 'center', p: 1,
-                        borderRadius: '20px', backgroundColor: 'rgba(44, 44, 46, 0.65)',
-                        backdropFilter: 'blur(20px) saturate(180%)',
-                        border: '1px solid rgba(255, 255, 255, 0.12)',
-                        boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.35)', zIndex: 10,
+            <Box
+                sx={{
+                    position: 'absolute', bottom: 30, left: '50%',
+                    width: 'clamp(300px, 90%, 720px)',
+                    display: 'flex', alignItems: 'center', p: 1,
+                    borderRadius: '20px', backgroundColor: 'rgba(44, 44, 46, 0.65)',
+                    backdropFilter: 'blur(20px) saturate(180%)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.35)', zIndex: 10,
+                    opacity: isNearBottom ? 1 : 0,
+                    transform: isNearBottom ? 'translate(-50%, 0)' : 'translate(-50%, 150%)',
+                    transition: 'transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s linear',
+                }}
+            >
+                 <TextField
+                    fullWidth
+                    multiline
+                    maxRows={4}
+                    variant="standard"
+                    placeholder="What do you do?"
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    onKeyPress={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            handleSendMessage();
+                        }
                     }}
+                    InputProps={{
+                        disableUnderline: true,
+                        sx: { color: '#EAEAEF', fontSize: '1.05rem', padding: '10px 14px' }
+                    }}
+                />
+                <IconButton
+                    color="primary"
+                    onClick={handleSendMessage}
+                    disabled={!inputValue.trim()}
+                    sx={{ bgcolor: 'rgba(0, 0, 0, 0.25)', '&:hover': { bgcolor: 'rgba(0, 0, 0, 0.4)' }, ml: 1, }}
                 >
-                     <TextField
-                        fullWidth
-                        multiline
-                        maxRows={4}
-                        variant="standard"
-                        placeholder="What do you do?"
-                        value={inputValue}
-                        onChange={(e) => setInputValue(e.target.value)}
-                        onKeyPress={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                                e.preventDefault();
-                                handleSendMessage();
-                            }
-                        }}
-                        InputProps={{
-                            disableUnderline: true,
-                            sx: { color: '#EAEAEF', fontSize: '1.05rem', padding: '10px 14px' }
-                        }}
-                    />
-                    <IconButton
-                        color="primary"
-                        onClick={handleSendMessage}
-                        disabled={!inputValue.trim()}
-                        sx={{ bgcolor: 'rgba(0, 0, 0, 0.25)', '&:hover': { bgcolor: 'rgba(0, 0, 0, 0.4)' }, ml: 1, }}
-                    >
-                        <SendRoundedIcon />
-                    </IconButton>
-                </Box>
-            </Fade>
+                    <SendRoundedIcon />
+                </IconButton>
+            </Box>
         </Box>
     );
 }
