@@ -7,7 +7,6 @@ const LayoutContext = createContext(null);
 export function LayoutProvider({ children, services }) {
   // 使用 useMemo 确保 registry 只被实例化一次
   const contributionRegistry = useMemo(() => {
-    // [核心修改] 从全局服务容器获取 contributionService
     const contributionService = services.get('contributionService');
     return new ContributionRegistry(contributionService);
   }, [services]);
@@ -15,6 +14,8 @@ export function LayoutProvider({ children, services }) {
   const [pages] = useState(() => contributionRegistry.getPageComponents());
   const [activePageId, setActivePageId] = useState(null);
   const [currentSandboxId, setCurrentSandboxId] = useState(null); 
+  
+  const [menuOverride, setMenuOverride] = useState(null);
 
   const value = {
     pages,
@@ -23,6 +24,8 @@ export function LayoutProvider({ children, services }) {
     currentSandboxId,
     setCurrentSandboxId,
     services, // 将平台服务传递下去
+    menuOverride,
+    setMenuOverride,
   };
 
   return (
