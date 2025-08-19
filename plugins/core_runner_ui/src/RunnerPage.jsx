@@ -24,6 +24,20 @@ function CockpitContent() {
 
     const [isManaging, setIsManaging] = useState(false);
 
+    // [核心修改 1] 使用 useMemo 分别获取两种类型的贡献
+    const { backgroundComponent, panelComponents } = useMemo(() => {
+        const backgroundContributions = contributionService.getContributionsFor('cockpit.canvas_background');
+        const panelContributions = contributionService.getContributionsFor('cockpit.panels');
+
+        // 正常情况下，背景组件只有一个。我们取第一个。
+        const background = backgroundContributions.length > 0 ? backgroundContributions[0] : null;
+        
+        return {
+            backgroundComponent: background,
+            panelComponents: panelContributions
+        };
+    }, [contributionService]);
+
     // [最终形态] 动态构建菜单
     const runnerMenuActions = useMemo(() => {
         const baseActions = [
@@ -64,15 +78,41 @@ function CockpitContent() {
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             {chromeComponents.topBar && <Box sx={{ flexShrink: 0 }}><DynamicComponentLoader contribution={chromeComponents.topBar} services={services} /></Box>}
+            
+            {/* [核心修改 2] 创建一个外层容器来容纳分层 */}
+            {/* 这个 Box 是新的，用于确保背景和前景都相对于它进行定位 */}
             <Box sx={{ flexGrow: 1, position: 'relative' }}>
+
+                {/* --- 背景层 --- */}
+                {/* [核心修改 3] 渲染背景组件 */}
+                {/* 它会绝对定位于外层容器，并铺满 */}
+                <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1 }}>
+                    {backgroundComponent ? (
+                        <DynamicComponentLoader contribution={backgroundComponent} services={services} />
+                    ) : (
+                        // 如果没有背景组件，可以提供一个默认的、简单的背景
+                        <Box sx={{ width: '100%', height: '100%', bgcolor: 'background.default' }} />
+                    )}
+                </Box>
+
+                {/* --- 前景层 --- */}
+                {/* [核心修改 4] 渲染可拖拽面板的布局容器 */}
+                {/* 它也绝对定位于外层容器，并浮动在背景之上 */}
+                <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 2 }}>
+                    {/* 我们将 panelComponents 传递给 CockpitLayout */}
+                    <CockpitLayout panels={panelComponents} />
+                </Box>
+
+                {/* 管理模式的遮罩层，需要最高的 z-index */}
                 {isManaging && (
                     <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, bgcolor: 'rgba(0,0,0,0.7)', zIndex: 10, p: 2, color: 'white' }}>
                         <Typography variant="h6">驾驶舱管理面板</Typography>
                         <Button onClick={() => setIsManaging(false)} variant="contained" sx={{mt: 2}}>关闭</Button>
                     </Box>
                 )}
-                <CockpitLayout />
+
             </Box>
+            
             {chromeComponents.bottomBar && <Box sx={{ flexShrink: 0 }}><DynamicComponentLoader contribution={chromeComponents.bottomBar} services={services} /></Box>}
         </Box>
     );

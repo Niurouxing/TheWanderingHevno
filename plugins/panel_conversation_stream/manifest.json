@@ -1,0 +1,21 @@
+{
+    "id": "panel_conversation_stream",
+    "name": "Immersive Conversation Canvas",
+    "version": "1.0.0",
+    "description": "Provides a full-page, director-mode conversation UI with a focus on immersion.",
+    "author": "Hevno Team",
+    "frontend": {
+        "type": "cockpit-canvas",
+        "entryPoint": "dist/main.js",
+        "srcEntryPoint": "src/ConversationCanvas.jsx",
+        "contributions": {
+            "cockpit.canvas_background": [
+                {
+                    "id": "panel_conversation_stream.canvas",
+                    "name": "沉浸式叙事画布",
+                    "componentExportName": "ConversationCanvas"
+                }
+            ]
+        }
+    }
+}

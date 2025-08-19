@@ -22,14 +22,13 @@ const placeholderStyles = `
   }
 `;
 
-export function CockpitLayout() {
-    const { services } = useLayout();
-    const contributionService = services.get('contributionService');
+// [核心修改 1] 组件接收一个 'panels' prop
+export function CockpitLayout({ panels = [] }) {
+    const { services } = useLayout(); // 在这里获取 services
+    // const contributionService = services.get('contributionService'); // 不再需要
 
-    const availablePanels = useMemo(() =>
-        contributionService.getContributionsFor('cockpit.panels'),
-        [contributionService]
-    );
+    // [核心修改 2] availablePanels 直接使用传入的 prop
+    const availablePanels = panels;
 
     const [activePanels] = useState(() => availablePanels.map(p => p.id));
     const [layouts, setLayouts] = useState({});
@@ -54,6 +53,8 @@ export function CockpitLayout() {
         <>
             <GlobalStyles styles={placeholderStyles} />
             <ResponsiveGridLayout
+                // [核心修改 3] 确保 react-grid-layout 是透明的，这样才能看到下面的背景组件
+                style={{ background: 'transparent' }}
                 layouts={layouts}
                 breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
                 cols={{ lg: 12, md: 10, sm: 6, xs: 4, xxs: 2 }}
@@ -67,7 +68,8 @@ export function CockpitLayout() {
                     if (!panelInfo) return null;
                     
                     return (
-                        <div key={panelId}>
+                        <div key={panelId} style={{ background: 'transparent' }}>
+                            {/* DynamicComponentLoader 现在需要从 services 容器获取 services */}
                             <DynamicComponentLoader contribution={panelInfo} services={services} />
                         </div>
                     );
