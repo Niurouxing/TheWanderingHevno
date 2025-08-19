@@ -99,7 +99,7 @@ export function ConversationCanvas() {
                 }}
             >
                 <Box sx={{
-                    maxWidth: '720px', width: '100%', mx: 'auto',
+                    maxWidth: '1000px', width: '100%', mx: 'auto',
                     pt: '8vh', px: 3,
                     paddingBottom: isNearBottom ? '120px' : '20px',
                     transition: 'padding-bottom 0.5s cubic-bezier(0.23, 1, 0.32, 1)'
@@ -111,12 +111,12 @@ export function ConversationCanvas() {
             <Box
                 sx={{
                     position: 'absolute', bottom: 30, left: '50%',
-                    width: 'clamp(300px, 90%, 720px)',
+                    width: 'clamp(300px, 90%, 1000px)',
                     display: 'flex', alignItems: 'center', p: 1,
-                    borderRadius: '20px', backgroundColor: 'rgba(44, 44, 46, 0.65)',
-                    backdropFilter: 'blur(20px) saturate(180%)',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                    boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.35)', zIndex: 10,
+                    borderRadius: '20px', backgroundColor: 'rgba(44, 44, 46, 0.25)',
+                    backdropFilter: 'blur(5px) saturate(200%)',
+                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                    boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.15)', zIndex: 10,
                     opacity: isNearBottom ? 1 : 0,
                     transform: isNearBottom ? 'translate(-50%, 0)' : 'translate(-50%, 150%)',
                     transition: 'transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s linear',
@@ -145,7 +145,7 @@ export function ConversationCanvas() {
                     color="primary"
                     onClick={handleSendMessage}
                     disabled={!inputValue.trim()}
-                    sx={{ bgcolor: 'rgba(0, 0, 0, 0.25)', '&:hover': { bgcolor: 'rgba(0, 0, 0, 0.4)' }, ml: 1, }}
+                    sx={{ bgcolor: 'rgba(0, 0, 0, 0.15)', '&:hover': { bgcolor: 'rgba(0, 0, 0, 0.25)' }, ml: 1, }}
                 >
                     <SendRoundedIcon />
                 </IconButton>
