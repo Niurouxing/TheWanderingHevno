@@ -146,14 +146,14 @@ if __name__ == "__main__":
     # ]
 
     paths = [
-        # "./frontend",
-        # "./plugins/core_layout",
+        "./frontend",
+        "./plugins/core_layout",
         # "./plugins/page_demo",
         # "./plugins/core_llm_config",
         # "./plugins/sandbox_editor",
         # "./plugins/sandbox_explorer",
         "./plugins/core_runner_ui",
-        "./plugins/canvas_demo_background",
+        "./plugins/panel_conversation_stream",
         # "./plugins/core_remote_hooks",
         # "./plugins/core_websocket",
         # "./package.json",

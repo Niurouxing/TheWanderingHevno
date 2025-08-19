@@ -62,7 +62,7 @@ export function CockpitLayout({ panels = [] }) {
                     if (!panelInfo) return null;
                     
                     return (
-                        <div key={panelId} style={{ background: 'transparent' }}>
+                        <div key={panelId} style={{ background: 'transparent',pointerEvents: 'auto' }}>
                             {/* DynamicComponentLoader 现在需要从 services 容器获取 services */}
                             <DynamicComponentLoader contribution={panelInfo} services={services} />
                         </div>

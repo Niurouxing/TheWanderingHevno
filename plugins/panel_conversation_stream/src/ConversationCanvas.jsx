@@ -1,168 +1,168 @@
-// plugins/panel_conversation_stream/src/ConversationCanvas.jsx
-import React, { useState, useRef, useEffect } from 'react';
-import { Box, Typography, TextField, GlobalStyles } from '@mui/material';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Box, TextField, IconButton, Fade, Typography } from '@mui/material';
+import SendRoundedIcon from '@mui/icons-material/SendRounded';
 
-// 1. 静态假数据，用于UI开发
-const mockMessages = [
-    { type: 'system', content: 'The Riordanverse is a world where multiple pantheons of gods are real and are now living in the modern world... somewhere. The gods tend to have the heroes adwareof each book series (their demigod children or magicians) go on quests, fight monsters, and save the world.' },
-    { type: 'system', content: 'Where am I? You are at the edge of a dark forest, its twisted branches clawing at the midnight sky. The leaves whisper with the breath of unseen creatures, and the air carries the metallic scent of blood and something more primal—wet fur and old stone. Moonlight struggles to pierce the canopy, casting dappled shadows across the uneven ground.' },
-    { type: 'system', content: 'To your left, an old dirt road winds through the trees, leading deeper into the wood. The packed earth shows signs of recent activity—hoofprints and deep indentations that suggest a heavy cart had passed this way. To your right, a narrow trail ascends a steep hillside, dotted with gnarled roots and exposed rocks.' },
-    { type: 'user', content: 'You say "Is anyone here?"' },
-    { type: 'model', content: 'The moment your words leave your mouth, the woods tense. Somewhere in the darkness, a twig snaps under unseen weight. A low, rasping chuckle echoes from the trees—neither wholly human nor entirely inhuman. "Oh, someone is here," a voice hisses, thick with malice. "The question is... do you want to be?" The voice is smooth yet scratchy, like parchment left too long in the elements. From the underbrush, a single pair of glowing red eyes emerges, burning like dying embers in the night. A figure steps forward—a man draped in tattered robes, his skin mottled and pale. ⚠️' },
+// 假数据保持不变
+const initialMessages = [
+    { type: 'system', text: "You wake up in the cramped backstage of the Apollo theater, the stale air thick with dust and mildew. The resistance has stashed you here for the past few hours while they scramble to plan an extraction. Your body aches, exhaustion weighing heavy from the night's evasion through the ruined streets." },
+    { type: 'llm', sender: 'Red', text: "\"NN, wake up,\" Red says, kneeling beside you. Their augmented face mask flickers, revealing just enough of their features—pale skin and deep-set eyes—to make them seem real, human. \"You don't have much time.\" Their words are clipped, urgent. \"Stryker's close.\" You push yourself up, shoulders groaning as the exosuit's servos adjust to your movement. The dim emergency lights flicker above, casting long shadows over the cluttered backstage. Stripped-down bots—some missing limbs, others with exposed wiring—are stacked in the corners like discarded toys." },
+    { type: 'llm', sender: 'Red', text: "\"They sent two squads to sweep the perimeter,\" Red continues, checking the readout on their augmented forearm. \"One ground unit, one aerial. They're methodical.\" Their gloved fingers tap rapidly against the exposed pipes of the old theater wall. \"You're fast, but not fast enough to outrun a drone swarm.\" A muscle twitches in their jaw. \"We need to get you underground.\"" },
+    { type: 'action', text: "You trigger some emergency." },
+    { type: 'user', text: "Your fingers dance across the neuralink interface, and the nearest inactive bot—a headless torso with exposed wiring—jerks to life with a sharp hiss of pneumatics. It shambles toward the wall, stumbling over the debris as you override its basic systems. Then you yank open a hatch you'd noticed earlier—a maintenance shaft that runs into the deeper levels of the theater." },
+    { type: 'system', text: "The bot stumbles down into the darkness, and you wait. Seconds later, a distant explosion rumbles through the floor—controlled detonation of the old gas lines, triggering the emergency sprinkler system. The backstage erupts into chaos as the overhead pipes burst, drenching everything in a cold, hissing shower." }
 ];
 
-// 2. 为滚动条和背景添加全局样式
-const customScrollbarStyles = `
-  .custom-scrollbar::-webkit-scrollbar {
-    width: 6px;
-  }
-  .custom-scrollbar::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  .custom-scrollbar::-webkit-scrollbar-thumb {
-    background-color: rgba(255, 255, 255, 0.2);
-    border-radius: 6px;
-    border: 1px solid rgba(0, 0, 0, 0.1);
-  }
-  /* 为了让毛玻璃效果可见，我们需要确保其下的元素（body, #root）有内容 */
-  body, #root, #app {
-      background: #111; /* fallback */
-      background-image: linear-gradient(135deg, #2a2d34 0%, #1a1c20 100%);
-  }
-`;
+// 消息渲染组件 (无变化)
+const Message = React.memo(({ msg }) => {
+    const getMessageStyle = () => {
+        switch (msg.type) {
+            case 'llm': return { fontStyle: 'normal', color: 'text.primary' };
+            case 'user': return { fontStyle: 'normal', color: 'text.primary' };
+            case 'system': return { fontStyle: 'italic', color: 'text.secondary' };
+            case 'action': return { fontStyle: 'italic', color: 'primary.light', borderLeft: '2px solid', borderColor: 'primary.main', pl: 2 };
+            default: return {};
+        }
+    };
+    return (
+        <Box sx={{ mb: 2.5 }}>
+            <Typography variant="body1" sx={{ fontFamily: "'Georgia', serif", lineHeight: 1.7, ...getMessageStyle() }}>
+                {msg.text}
+            </Typography>
+        </Box>
+    );
+});
+
 
 export function ConversationCanvas() {
-    const [messages] = useState(mockMessages);
-    const [isInputVisible, setInputVisible] = useState(false);
-    const scrollContainerRef = useRef(null);
-    const lastScrollDirection = useRef('down'); // 用于检测滚动方向
+    const [messages, setMessages] = useState(initialMessages);
+    const [inputValue, setInputValue] = useState('');
+    const [isAtBottom, setIsAtBottom] = useState(true);
+    const scrollRef = useRef(null);
 
-    // 3. 自动滚动到最新消息的逻辑
     useEffect(() => {
-        const container = scrollContainerRef.current;
-        if (container) {
-            container.scrollTop = container.scrollHeight;
+        const scrollContainer = scrollRef.current;
+        if (scrollContainer && isAtBottom) { // 只在用户位于底部时才自动滚动
+            scrollContainer.scrollTo({
+                top: scrollContainer.scrollHeight,
+                behavior: 'smooth'
+            });
         }
-    }, [messages]);
-
-    // 4. 自动隐藏/显示输入栏的核心逻辑
-    useEffect(() => {
-        const container = scrollContainerRef.current;
-        if (!container) return;
-        
-        const handleScroll = () => {
-             // 如果用户向上滚动，立即隐藏输入栏
-            if (container.scrollTop < container.scrollHeight - container.clientHeight - 5) {
-                setInputVisible(false);
-            }
-        };
-
-        const handleWheel = (event) => {
-            const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 1;
-             // 如果在底部，并且滚轮向下，则显示输入栏
-            if (isAtBottom && event.deltaY > 0) {
-                setInputVisible(true);
-            }
-        };
-
-        container.addEventListener('scroll', handleScroll);
-        container.addEventListener('wheel', handleWheel);
-
-        return () => {
-            container.removeEventListener('scroll', handleScroll);
-            container.removeEventListener('wheel', handleWheel);
-        };
+    }, [messages, isAtBottom]);
+    
+    const handleScroll = useCallback(() => {
+        const container = scrollRef.current;
+        if (container) {
+            const { scrollTop, scrollHeight, clientHeight } = container;
+            const atBottom = scrollHeight - scrollTop - clientHeight < 5;
+            setIsAtBottom(atBottom);
+        }
     }, []);
 
-    const glassEffectSx = {
-        backgroundColor: 'rgba(28, 31, 34, 0.65)',
-        backdropFilter: 'blur(12px) saturate(150%)',
-        boxShadow: '0 0 0 0.5px rgba(0,0,0,0.3)',
+    const handleSendMessage = () => {
+        if (inputValue.trim()) {
+            setIsAtBottom(true); // 发送消息前，假定用户希望看到最新消息
+            setMessages(prev => [...prev, { type: 'user', text: inputValue.trim() }]);
+            setInputValue('');
+            
+            setTimeout(() => {
+                setMessages(prev => [...prev, { type: 'llm', sender: 'Red', text: "Good thinking. That explosion will draw their attention. Now move, quickly! Down the shaft. I'll cover our tracks up here and meet you at the rendezvous point." }]);
+            }, 1500);
+        }
     };
     
     return (
-        <>
-            <GlobalStyles styles={customScrollbarStyles} />
-            <Box sx={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-                
-                {/* 5. 消息展示区域 */}
-                <Box
-                    ref={scrollContainerRef}
-                    className="custom-scrollbar"
-                    sx={{
-                        flexGrow: 1,
-                        overflowY: 'auto',
-                        p: { xs: 2, sm: 3, md: 4 },
-                        transition: 'padding-bottom 0.3s ease-in-out',
-                        pb: isInputVisible ? '120px' : { xs: 2, sm: 3, md: 4 } // 为滑出的输入栏留出空间
-                    }}
-                >
-                    <Box sx={{ maxWidth: '720px', mx: 'auto' }}>
-                        {messages.map((msg, index) => (
-                            <Box key={index} sx={{ mb: 2.5 }}>
-                                <Typography
-                                    sx={{
-                                        fontFamily: '"Georgia", serif',
-                                        fontSize: '1.1rem',
-                                        lineHeight: 1.7,
-                                        color: msg.type === 'user' ? '#aebac3' : '#e6edf3',
-                                        fontStyle: msg.type === 'user' ? 'italic' : 'normal',
-                                        textAlign: msg.type === 'user' ? 'right' : 'left',
-                                        whiteSpace: 'pre-wrap', // 保持文本格式
-                                    }}
-                                >
-                                    {msg.type === 'user' && <Box component="span" sx={{ fontSize: '0.9em', color: '#7d8590' }}>You say </Box>}
-                                    {msg.content}
-                                </Typography>
-                            </Box>
-                        ))}
-                    </Box>
+        // [关键改动 1] 最外层容器现在是定位上下文 (position: relative)
+        <Box sx={{ position: 'relative', width: '100%', height: '100%', bgcolor: '#121212', overflow: 'hidden' }}>
+            
+            {/* [关键改动 2] 滚动区域使用绝对定位，强制其尺寸与父容器完全一致 */}
+            {/* 这创建了一个独立的滚动层，不会影响外部布局 */}
+            <Box
+                ref={scrollRef}
+                onScroll={handleScroll}
+                sx={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    overflowY: 'auto',
+                    // 隐藏滚动条样式
+                    '&::-webkit-scrollbar': { display: 'none' },
+                    scrollbarWidth: 'none',
+                    '-ms-overflow-style': 'none',
+                }}
+            >
+                {/* 内容容器现在位于这个绝对定位的滚动层内部 */}
+                <Box sx={{
+                    maxWidth: '720px',
+                    mx: 'auto',
+                    py: '8vh',
+                    px: 3,
+                }}>
+                    {messages.map((msg, index) => <Message key={index} msg={msg} />)}
                 </Box>
+                {/* 占位符确保最后一条消息不被输入框遮挡 */}
+                <Box sx={{ height: '120px', flexShrink: 0 }} />
+            </Box>
 
-                {/* 6. 自动隐藏的输入栏 */}
+            {/* [无变化] 浮动输入栏仍然绝对定位于最外层容器，浮动在滚动层之上 */}
+            <Fade in={isAtBottom} timeout={400}>
                 <Box
                     sx={{
                         position: 'absolute',
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        p: { xs: 1, sm: 2 },
-                        transform: isInputVisible ? 'translateY(0)' : 'translateY(100%)',
-                        opacity: isInputVisible ? 1 : 0,
-                        transition: 'transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
-                        pointerEvents: isInputVisible ? 'auto' : 'none',
+                        bottom: 30,
+                        left: '50%',
+                        transform: 'translateX(-50%)',
+                        width: 'clamp(300px, 90%, 720px)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        p: 1,
+                        borderRadius: '12px',
+                        backgroundColor: 'rgba(28, 28, 30, 0.65)',
+                        backdropFilter: 'blur(12px) saturate(180%)',
+                        boxShadow: '0px 8px 32px rgba(0, 0, 0, 0.3)',
+                        border: '1px solid rgba(255, 255, 255, 0.1)',
+                        zIndex: 10, // 确保在滚动内容之上
                     }}
                 >
-                    <Box sx={{
-                        ...glassEffectSx,
-                        maxWidth: '760px',
-                        mx: 'auto',
-                        p: 1,
-                        borderRadius: '16px',
-                    }}>
-                        <TextField
-                            fullWidth
-                            multiline
-                            maxRows={5}
-                            placeholder="What do you say?"
-                            variant="standard"
-                            InputProps={{
-                                disableUnderline: true,
-                                sx: {
-                                    p: 1.5,
-                                    color: '#e6edf3',
-                                    fontFamily: '"Georgia", serif',
-                                    fontSize: '1.1rem',
-                                    '::placeholder': { color: '#7d8590' },
-                                }
-                            }}
-                            autoFocus={isInputVisible} // 当显示时自动聚焦
-                        />
-                    </Box>
+                    <TextField
+                        fullWidth
+                        multiline
+                        maxRows={4}
+                        variant="standard"
+                        placeholder="Describe your action..."
+                        value={inputValue}
+                        onChange={(e) => setInputValue(e.target.value)}
+                        onKeyPress={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSendMessage();
+                            }
+                        }}
+                        sx={{
+                            '& .MuiInputBase-root': {
+                                color: '#EAEAEF',
+                                padding: '8px 12px',
+                            },
+                        }}
+                        InputProps={{
+                            disableUnderline: true,
+                        }}
+                    />
+                    <IconButton
+                        color="primary"
+                        onClick={handleSendMessage}
+                        disabled={!inputValue.trim()}
+                        sx={{
+                            bgcolor: 'rgba(255,255,255,0.1)',
+                            '&:hover': { bgcolor: 'rgba(255,255,255,0.2)' },
+                            ml: 1,
+                        }}
+                    >
+                        <SendRoundedIcon />
+                    </IconButton>
                 </Box>
-            </Box>
-        </>
+            </Fade>
+        </Box>
     );
 }
-
-export default ConversationCanvas;
