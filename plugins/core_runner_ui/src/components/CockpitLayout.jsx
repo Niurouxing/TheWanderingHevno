@@ -22,12 +22,8 @@ const placeholderStyles = `
   }
 `;
 
-// [核心修改 1] 组件接收一个 'panels' prop
 export function CockpitLayout({ panels = [] }) {
-    const { services } = useLayout(); // 在这里获取 services
-    // const contributionService = services.get('contributionService'); // 不再需要
-
-    // [核心修改 2] availablePanels 直接使用传入的 prop
+    const { services } = useLayout(); 
     const availablePanels = panels;
 
     const [activePanels] = useState(() => availablePanels.map(p => p.id));
@@ -49,15 +45,13 @@ export function CockpitLayout({ panels = [] }) {
     };
 
     return (
-        // --- 3. 使用 React.Fragment 包裹并应用 GlobalStyles ---
         <>
             <GlobalStyles styles={placeholderStyles} />
             <ResponsiveGridLayout
-                // [核心修改 3] 确保 react-grid-layout 是透明的，这样才能看到下面的背景组件
                 style={{ background: 'transparent' }}
                 layouts={layouts}
                 breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
-                cols={{ lg: 12, md: 10, sm: 6, xs: 4, xxs: 2 }}
+                cols={{ lg: 24, md: 20, sm: 12, xs: 8, xxs: 4 }}
                 rowHeight={30}
                 onLayoutChange={handleLayoutChange}
                 compactType={null} 
