@@ -38,9 +38,6 @@ class LLMRuntime(RuntimeInterface):
         top_p: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="控制 nucleus sampling。")
         top_k: Optional[int] = Field(default=None, gt=0, description="控制 top-k sampling。")
 
-        # 兼容旧的 'prompt' 字段，但标记为已弃用
-        prompt: Optional[str] = Field(default=None, description="[已弃用] 请改用 'contents' 列表。")
-
         @field_validator('contents')
         def check_contents_not_empty(cls, v):
             if not v:
