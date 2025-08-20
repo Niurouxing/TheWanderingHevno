@@ -6,8 +6,7 @@ import { SandboxStateProvider, useSandboxState } from './context/SandboxStateCon
 import { DynamicComponentLoader } from './components/DynamicComponentLoader';
 import { ManagementPanel } from './components/ManagementPanel';
 import { ChromeActionsBar } from './components/ChromeActionsBar';
-// --- 1. 导入新的 FloatingPanel 组件 ---
-import { FloatingPanel } from './components/FloatingPanel';
+import { FloatingPanel } from './components/FloatingPanel'; // 保持不变
 
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import TuneIcon from '@mui/icons-material/Tune';
@@ -19,7 +18,6 @@ const DynamicIcon = ({ name }) => {
   return Icon ? <Icon /> : null;
 };
 
-// --- 2. 定义 z-index 的基础值 ---
 const BASE_Z_INDEX = 100;
 
 function CockpitContent() {
@@ -32,8 +30,6 @@ function CockpitContent() {
     const [isManaging, setIsManaging] = useState(false);
     const [activeBackgroundId, setActiveBackgroundId] = useState(null);
 
-    // --- 3. 引入新的、简化的 panelStates 状态管理 ---
-    // panelStates 结构: { [panelId]: { x, y, width, height, zIndex, isVisible } }
     const [panelStates, setPanelStates] = useState({});
     const [highestZIndex, setHighestZIndex] = useState(BASE_Z_INDEX);
 
@@ -45,7 +41,6 @@ function CockpitContent() {
         return { availableBackgrounds: backgrounds, availablePanels: panels };
     }, [contributionService]);
 
-    // --- 4. 修改 Effect 以加载和初始化新的状态结构 ---
     useEffect(() => {
         if (!sandboxId) return;
         
@@ -58,14 +53,11 @@ function CockpitContent() {
             localStorage.removeItem(getStorageKey());
         }
 
-        // 初始化所有面板的状态，无论是否保存过
         const initialStates = {};
         let maxZ = BASE_Z_INDEX;
 
         availablePanels.forEach((panel, index) => {
             const savedPanelState = savedState?.panelStates?.[panel.id];
-            
-            // 如果有保存的状态，则使用它，否则使用 manifest 中的默认值
             const defaultState = panel.defaultState || { x: 50 + index * 20, y: 50 + index * 20, width: 450, height: 400 };
             
             initialStates[panel.id] = {
@@ -84,14 +76,11 @@ function CockpitContent() {
 
         setPanelStates(initialStates);
         setHighestZIndex(maxZ);
-
-        // 初始化背景
         const defaultBg = availableBackgrounds.find(bg => bg.defaultEnabled);
         setActiveBackgroundId(savedState?.activeBackgroundId ?? (defaultBg ? defaultBg.id : null));
 
     }, [sandboxId, availablePanels, availableBackgrounds, getStorageKey]);
 
-    // --- 5. 修改 Effect 以保存新的状态结构 ---
     useEffect(() => {
         if (!sandboxId || Object.keys(panelStates).length === 0) return;
         
@@ -103,7 +92,6 @@ function CockpitContent() {
 
     }, [activeBackgroundId, panelStates, sandboxId, getStorageKey]);
     
-    // --- 6. 新的事件处理器 ---
     const handlePanelFocus = useCallback((panelId) => {
         const newZ = highestZIndex + 1;
         setHighestZIndex(newZ);
@@ -120,10 +108,18 @@ function CockpitContent() {
         }));
     }, []);
 
+    // --- [新增] 创建一个新的回调函数来处理缩放停止事件 ---
+    const handlePanelResizeStop = useCallback((panelId, size) => {
+        setPanelStates(prev => ({
+            ...prev,
+            [panelId]: { ...prev[panelId], width: size.width, height: size.height }
+        }));
+    }, []);
+
+
     const handleTogglePanel = (panelId) => {
         setPanelStates(prev => {
             const isVisible = !prev[panelId].isVisible;
-            // 如果是打开面板，则置于顶层
             const newZ = isVisible ? highestZIndex + 1 : prev[panelId].zIndex;
             if (isVisible) setHighestZIndex(newZ);
 
@@ -153,7 +149,7 @@ function CockpitContent() {
         [panelStates]
     );
 
-
+    // ... (runnerMenuActions, chromeActions, chromeComponents 的 useMemo 钩子保持不变) ...
     const runnerMenuActions = useMemo(() => {
         const baseActions = [
             { id: 'runner.back', title: '返回沙盒列表', icon: <ArrowBackIcon />, onClick: () => setActivePageId('sandbox_explorer.main_view') },
@@ -194,7 +190,6 @@ function CockpitContent() {
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             {chromeComponents.topBar && <Box sx={{ flexShrink: 0 }}><DynamicComponentLoader contribution={chromeComponents.topBar} services={stableServices} /></Box>}
             
-            {/* --- 7. 主内容区现在作为拖动边界和渲染容器 --- */}
             <Box sx={{ flexGrow: 1, position: 'relative', overflow: 'hidden' }}>
                 <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1 }}>
                     {backgroundToRender ? (
@@ -208,7 +203,6 @@ function CockpitContent() {
                     )}
                 </Box>
                 
-                {/* --- 8. 直接渲染 FloatingPanel，不再需要 CockpitLayout --- */}
                 {availablePanels.map(panelInfo => {
                     const state = panelStates[panelInfo.id];
                     if (!state || !state.isVisible) return null;
@@ -220,6 +214,7 @@ function CockpitContent() {
                             panelState={state}
                             onFocus={handlePanelFocus}
                             onDragStop={handlePanelDragStop}
+                            onResizeStop={handlePanelResizeStop} // <-- 将新的回调函数传递下去
                         >
                             <DynamicComponentLoader contribution={panelInfo} services={stableServices} />
                         </FloatingPanel>
@@ -250,6 +245,7 @@ function CockpitContent() {
     );
 }
 
+// RunnerPage 组件本身不需要修改
 export function RunnerPage() {
     const { currentSandboxId, services } = useLayout();
     const stableServices = useMemo(() => services, [services]);

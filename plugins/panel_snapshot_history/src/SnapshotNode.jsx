@@ -101,15 +101,13 @@ export const SnapshotNode = React.memo(({ node, headSnapshotId, onRevert, onDele
                     <Typography variant="caption" color="text.secondary">{timestamp}</Typography>
                 </Box>
                 {isHovered && !isHead && (
-                    <Tooltip title="永久删除此快照">
                         <IconButton 
                             size="small" 
                             onClick={() => onDelete(node.id)}
-                            sx={{ ml: 'auto', color: 'error.light', opacity: 0.7, '&:hover': { opacity: 1 }, pl: 2 }}
+                            sx={{ ml: 'auto', color: 'error.light', opacity: 0.7, '&:hover': { opacity: 1 },  }}
                         >
                             <DeleteForeverIcon fontSize="small" />
                         </IconButton>
-                    </Tooltip>
                 )}
             </Box>
 
