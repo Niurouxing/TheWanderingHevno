@@ -1,7 +1,6 @@
 // plugins/panel_snapshot_history/src/SnapshotHistoryPanel.jsx
 import React, { useMemo, useContext } from 'react';
-import { Box, Typography, Paper, IconButton, Tooltip, CircularProgress, Skeleton } from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh';
+import { Box, Typography, Paper, CircularProgress, Skeleton } from '@mui/material';
 import { SnapshotNode } from './SnapshotNode';
 
 const ROW_HEIGHT = 52; // Consistent with SnapshotNode
@@ -26,7 +25,6 @@ export function SnapshotHistoryPanel({ services }) {
         headSnapshotId, 
         isLoading, 
         error, 
-        refreshState, 
         revertSnapshot,
         deleteSnapshotFromHistory 
     } = useContext(SandboxStateContext);
@@ -79,13 +77,13 @@ export function SnapshotHistoryPanel({ services }) {
 
     const renderContent = () => {
         if (isLoading && history.length === 0) {
-            return <Box sx={{ p: 2 }}><Skeleton variant="text" width="80%" /><Skeleton variant="text" width="60%" /></Box>;
+            return <Box sx={{ p: 2, pt: 0 }}><Skeleton variant="text" width="80%" /><Skeleton variant="text" width="60%" /></Box>;
         }
         if (error) {
-            return <Typography color="error.main" sx={{ p: 2 }}>{error}</Typography>;
+            return <Typography color="error.main" sx={{ p: 2, pt: 0 }}>{error}</Typography>;
         }
         if (snapshotTree.length === 0) {
-            return <Typography color="text.secondary" sx={{ p: 2 }}>没有可用的快照历史。</Typography>;
+            return <Typography color="text.secondary" sx={{ p: 2, pt: 0 }}>没有可用的快照历史。</Typography>;
         }
         return snapshotTree.map((rootNode) => (
             <SnapshotNode 
@@ -101,17 +99,33 @@ export function SnapshotHistoryPanel({ services }) {
 
     return (
         <Paper 
-            variant="outlined" 
-            sx={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', bgcolor: 'rgba(30, 30, 30, 0.7)', backdropFilter: 'blur(10px)' }}
+            sx={{ 
+                height: '100%', 
+                width: '100%', 
+                display: 'flex', 
+                flexDirection: 'column', 
+                overflow: 'hidden',
+                // --- 毛玻璃风格 ---
+                backgroundColor: 'rgba(40, 40, 40, 0.65)',
+                backdropFilter: 'blur(8px) saturate(180%)',
+                WebkitBackdropFilter: 'blur(8px) saturate(180%)', // 兼容 Safari
+                borderRadius: '16px', // 更大的圆角
+                border: '1px solid rgba(255, 255, 255, 0.12)', // 柔和的边缘
+                boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)', // 增加深度
+            }}
         >
+            {/* --- 不可见的拖拽区域 --- */}
             <Box
                 className="drag-handle"
-                sx={{ p: 1, pl: 2, cursor: 'move', bgcolor: 'rgba(255, 255, 255, 0.08)', borderBottom: 1, borderColor: 'divider', flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-            >
-                <Typography variant="subtitle2" noWrap>快照历史</Typography>
-                <Tooltip title="刷新"><span><IconButton size="small" onClick={() => refreshState()} disabled={isLoading}>{isLoading ? <CircularProgress size={16} color="inherit" /> : <RefreshIcon sx={{ fontSize: 16 }} />}</IconButton></span></Tooltip>
-            </Box>
-            <Box sx={{ flexGrow: 1, overflow: 'auto', p: 2 }}>
+                sx={{
+                    height: '40px',
+                    width: '100%',
+                    cursor: 'move',
+                    flexShrink: 0,
+                }}
+            />
+            {/* --- 调整内容区的内边距 --- */}
+            <Box sx={{ flexGrow: 1, overflow: 'auto', px: 2, pb: 2 }}>
                 <Box sx={{ minWidth: 'max-content' }}>
                     {renderContent()}
                 </Box>
