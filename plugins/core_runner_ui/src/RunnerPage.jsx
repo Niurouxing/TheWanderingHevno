@@ -255,9 +255,9 @@ function CockpitContent({ services }) {
                             onFocus={handlePanelFocus}
                             onDragStop={handlePanelDragStop}
                             onResizeStop={handlePanelResizeStop}
-                        >
-                            <DynamicComponentLoader contribution={panelInfo} services={stableServices} />
-                        </FloatingPanel>
+                            contribution={panelInfo}
+                            services={stableServices}
+                        />
                     );
                 })}
                 
