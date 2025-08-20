@@ -51,11 +51,16 @@ const Message = React.memo(({ msg }) => {
 const SHOW_THRESHOLD = 250;
 const HIDE_THRESHOLD = 100;
 
-export function ConversationCanvas({ moment, performStep, isStepping }) {
+export function ConversationCanvas({ moment, performStep, isStepping, sandboxId }) {
     const [inputValue, setInputValue] = useState('');
     const [isNearBottom, setIsNearBottom] = useState(true);
     const scrollRef = useRef(null);
     const debounceTimerRef = useRef(null);
+
+    // 使用 useMemo 根据 sandboxId 构建背景图片 URL
+    const backgroundImageUrl = useMemo(() => {
+        return sandboxId ? `/api/sandboxes/${sandboxId}/icon` : 'none';
+    }, [sandboxId]);
 
     const messages = useMemo(() => {
         const historyEntries = moment?.memoria?.chat_history?.entries || [];
@@ -124,11 +129,32 @@ export function ConversationCanvas({ moment, performStep, isStepping }) {
     
     return (
         <Box sx={{ position: 'relative', width: '100%', height: '100%', bgcolor: '#121212', overflow: 'hidden' }}>
+            {/* --- 新增的背景层 --- */}
+            <Box
+                sx={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: '100%',
+                    backgroundImage: `url(${backgroundImageUrl})`,
+                    backgroundSize: 'cover',
+                    backgroundPosition: 'center',
+                    // [核心] 应用高斯模糊和调暗效果
+                    filter: 'blur(150px) brightness(0.25)',
+                    // 放大一点可以避免模糊后边缘出现虚边，使效果更平滑
+                    transform: 'scale(1.1)', 
+                    zIndex: 0, // 确保它在最底层
+                }}
+            />
+
             <Box
                 ref={scrollRef}
                 onScroll={handleScroll}
                 sx={{
-                    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                    // 确保内容层在背景层之上
+                    position: 'relative', zIndex: 1,
+                    width: '100%', height: '100%',
                     overflowY: 'auto',
                     '&::-webkit-scrollbar': { display: 'none' },
                     scrollbarWidth: 'none', '-ms-overflow-style': 'none',

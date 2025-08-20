@@ -19,7 +19,7 @@ const DynamicIcon = ({ name }) => {
 function CockpitContent() {
     const { services, setActivePageId, setMenuOverride } = useLayout();
     // [改动] 从 useSandboxState 获取所有需要传递给子组件的值
-    const { isLoading, moment, performStep, isStepping } = useSandboxState();
+    const { sandboxId, isLoading, moment, performStep, isStepping } = useSandboxState();
     
     // [核心修复 2] 稳定 services 对象，防止不必要的重渲染
     const stableServices = useMemo(() => services, [services]);
@@ -90,7 +90,7 @@ function CockpitContent() {
                         <DynamicComponentLoader 
                             contribution={backgroundComponent} 
                             services={stableServices}
-                            props={{ moment, performStep, isStepping }}
+                            props={{ moment, performStep, isStepping, sandboxId }}
                         />
                     ) : (
                         // 如果没有背景组件，可以提供一个默认的、简单的背景
