@@ -17,6 +17,14 @@
                     "defaultLayout": { "w": 8, "h": 12, "x": 0, "y": 0 },
                     "defaultEnabled": true
                 }
+            ],
+            "cockpit.chrome_actions": [
+                {
+                    "id": "panel_snapshot_history.toggle_button",
+                    "panelId": "panel_snapshot_history.main",
+                    "title": "切换快照历史",
+                    "icon": "History"
+                }
             ]
         }
     }

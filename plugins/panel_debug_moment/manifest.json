@@ -26,6 +26,14 @@
                     "icon": "Refresh",
                     "hookName": "panel_debug_moment.refresh"
                 }
+            ],
+            "cockpit.chrome_actions": [
+                {
+                    "id": "panel_debug_moment.toggle_button",
+                    "panelId": "panel_debug_moment.main",
+                    "title": "切换状态监视器",
+                    "icon": "Science"
+                }
             ]
         }
     }

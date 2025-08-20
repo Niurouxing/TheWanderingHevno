@@ -6,6 +6,8 @@ import { SandboxStateProvider, useSandboxState } from './context/SandboxStateCon
 import { CockpitLayout } from './components/CockpitLayout';
 import { DynamicComponentLoader } from './components/DynamicComponentLoader';
 import { ManagementPanel } from './components/ManagementPanel';
+// --- 1. 导入新的 ChromeActionsBar 组件 ---
+import { ChromeActionsBar } from './components/ChromeActionsBar';
 
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import TuneIcon from '@mui/icons-material/Tune';
@@ -55,7 +57,6 @@ function CockpitContent() {
         }
 
         if (savedState) {
-            // 加载已保存的状态
             setActiveBackgroundId(savedState.activeBackgroundId || null);
             
             const existingPanelIds = savedState.activePanelIds?.filter(id => 
@@ -73,13 +74,18 @@ function CockpitContent() {
             const defaultPanels = availablePanels.filter(p => p.defaultEnabled);
             setActivePanelIds(defaultPanels.map(p => p.id));
             
-            // [解决尺寸丢失的关键] 为 *所有* 可用面板创建初始布局，而不仅仅是激活的
+            // [核心修改] 为所有断点创建初始布局，确保在任何屏幕尺寸下都能正确初始化
             const initialLayouts = {};
+            const breakpoints = ['lg', 'md', 'sm', 'xs', 'xxs'];
             const allPanelsLayout = availablePanels.map(p => ({
                 ...(p.defaultLayout || { w: 6, h: 8, x: 0, y: Infinity }), // y: Infinity让r-g-l自动堆叠
                 i: p.id,
             }));
-            initialLayouts['lg'] = allPanelsLayout;
+            
+            breakpoints.forEach(bp => {
+                initialLayouts[bp] = allPanelsLayout;
+            });
+
             setLayouts(initialLayouts);
         }
     }, [sandboxId, availableBackgrounds, availablePanels, getStorageKey]);
@@ -147,6 +153,11 @@ function CockpitContent() {
         return () => setMenuOverride(null);
     }, [setMenuOverride, runnerMenuActions]);
 
+    // --- 2. 查询新的 `cockpit.chrome_actions` 贡献点 ---
+    const chromeActions = useMemo(() => {
+        return contributionService.getContributionsFor('cockpit.chrome_actions');
+    }, [contributionService]);
+
     const chromeComponents = useMemo(() => {
         // ... (this logic remains the same)
         const contributions = contributionService.getContributionsFor('cockpit.chrome');
@@ -185,6 +196,13 @@ function CockpitContent() {
                         onLayoutChange={handleLayoutChange}
                     />
                 </Box>
+                
+                {/* --- 3. 在这里渲染新的按钮栏 --- */}
+                <ChromeActionsBar
+                    actions={chromeActions}
+                    activePanelIds={activePanelIds}
+                    onTogglePanel={handleTogglePanel}
+                />
                 
                 <ManagementPanel
                     isOpen={isManaging}

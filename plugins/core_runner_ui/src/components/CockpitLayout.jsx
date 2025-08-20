@@ -20,13 +20,9 @@ const placeholderStyles = `
   }
 `;
 
-// [核心修改] 组件现在是无状态的，接收所有必要的 props
 export function CockpitLayout({ panels = [], activePanelIds = [], layouts = {}, onLayoutChange }) {
     const { services } = useLayout(); 
     
-    // 从所有可用面板中，只渲染那些ID在 activePanelIds 列表中的面板
-    const panelsToRender = panels.filter(p => activePanelIds.includes(p.id));
-
     return (
         <>
             <GlobalStyles styles={placeholderStyles} />
@@ -36,15 +32,30 @@ export function CockpitLayout({ panels = [], activePanelIds = [], layouts = {}, 
                 breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
                 cols={{ lg: 24, md: 20, sm: 12, xs: 8, xxs: 4 }}
                 rowHeight={30}
-                onLayoutChange={(layout, allLayouts) => onLayoutChange(allLayouts)} // 将事件冒泡上去
-                compactType={null} 
+                onLayoutChange={onLayoutChange}
+                // [核心修改] 禁用自动紧凑布局，这是允许自由定位的第一步。
+                compactType={null}
+                // [核心修改] 明确允许组件重叠。没有这个，拖动时组件依然会相互推挤。
+                preventCollision={false}
                 draggableHandle=".drag-handle"
             >
-                {panelsToRender.map(panelInfo => (
-                    <div key={panelInfo.id} style={{ background: 'transparent', pointerEvents: 'auto' }}>
-                        <DynamicComponentLoader contribution={panelInfo} services={services} />
-                    </div>
-                ))}
+                {panels.map(panelInfo => {
+                    const isActive = activePanelIds.includes(panelInfo.id);
+                    
+                    const style = {
+                        background: 'transparent',
+                        pointerEvents: isActive ? 'auto' : 'none',
+                        visibility: isActive ? 'visible' : 'hidden',
+                        // [新增] 当面板重叠时，确保被拖动的面板总是在最上层
+                        zIndex: 100 // 可以根据需要调整
+                    };
+
+                    return (
+                        <div key={panelInfo.id} style={style}>
+                            <DynamicComponentLoader contribution={panelInfo} services={services} />
+                        </div>
+                    );
+                })}
             </ResponsiveGridLayout>
         </>
     );
