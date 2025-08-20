@@ -1,0 +1,23 @@
+{
+    "id": "panel_snapshot_history",
+    "name": "Snapshot History Panel",
+    "version": "1.0.0",
+    "description": "Provides a tree-based UI to visualize and switch between sandbox snapshots.",
+    "author": "Hevno Team",
+    "frontend": {
+        "type": "cockpit-panel",
+        "entryPoint": "dist/main.js",
+        "srcEntryPoint": "src/SnapshotHistoryPanel.jsx",
+        "contributions": {
+            "cockpit.panels": [
+                {
+                    "id": "panel_snapshot_history.main",
+                    "name": "快照历史",
+                    "componentExportName": "SnapshotHistoryPanel",
+                    "defaultLayout": { "w": 8, "h": 12, "x": 0, "y": 0 },
+                    "defaultEnabled": true
+                }
+            ]
+        }
+    }
+}
