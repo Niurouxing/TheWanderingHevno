@@ -15,6 +15,16 @@
                     "id": "core_layout.host.provider",
                     "initializerExportName": "initializeUI"
                 }
+            ],
+            "core.shared_services": [
+                {
+                    "id": "layoutContext",
+                    "description": "LayoutContext for accessing layout state and React Context."
+                },
+                {
+                    "id": "useLayout",
+                    "description": "React Hook for using LayoutContext in plugin components."
+                }
             ]
         }
     }

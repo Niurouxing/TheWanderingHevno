@@ -4,6 +4,8 @@ import { ContributionRegistry } from '../services/ContributionRegistry';
 
 const LayoutContext = createContext(null);
 
+export { LayoutContext };
+
 export function LayoutProvider({ children, services }) {
   // 使用 useMemo 确保 registry 只被实例化一次
   const contributionRegistry = useMemo(() => {

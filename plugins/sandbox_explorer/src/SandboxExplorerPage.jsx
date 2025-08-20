@@ -5,7 +5,6 @@ import { Box, Grid, Typography, CircularProgress, Button } from '@mui/material';
 import { SandboxCard } from './components/SandboxCard';
 import { AddSandboxDialog } from './components/AddSandboxDialog';
 import { AddSandboxCard } from './components/AddSandboxCard';
-import { useLayout } from '../../core_layout/src/context/LayoutContext';
 
 // --- API 调用函数 ---
 
@@ -108,6 +107,14 @@ export function SandboxExplorerPage({ services }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [isAddDialogOpen, setAddDialogOpen] = useState(false);
+  
+  // [新增] 从services获取useLayout钩子
+  const useLayout = services.get('useLayout');
+  if (!useLayout) {
+    // 优雅降级：如果未注册，抛出错误或使用默认值
+    console.error('[sandbox_explorer] useLayout hook not found in services.');
+    return <Box sx={{ p: 4, color: 'error.main' }}>错误：核心布局服务不可用。</Box>;
+  }
   const { setActivePageId, setCurrentSandboxId } = useLayout();
   
   const hookManager = services.get('hookManager');

@@ -4,7 +4,6 @@ import { Box, Typography, Tabs, Tab, CircularProgress, Button, Alert } from '@mu
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import PublishedWithChangesIcon from '@mui/icons-material/PublishedWithChanges';
 import AddIcon from '@mui/icons-material/Add';
-import { useLayout } from '../../core_layout/src/context/LayoutContext';
 import { SCOPE_TABS } from './utils/constants';
 import { DataTree } from './components/DataTree';
 import { CodexEditor } from './editors/CodexEditor';
@@ -19,7 +18,13 @@ import { RenameItemDialog } from './components/RenameItemDialog';
 import { isObject } from './utils/constants';
 
 export function SandboxEditorPage({ services }) {
+    const useLayout = services.get('useLayout');
+    if (!useLayout) {
+        console.error('[sandbox_editor] useLayout hook not found in services.');
+        return <Box sx={{ p: 4, color: 'error.main' }}>错误：核心布局服务不可用。</Box>;
+    }
     const { currentSandboxId, setActivePageId, setCurrentSandboxId } = useLayout();
+    
     const [sandboxData, setSandboxData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');

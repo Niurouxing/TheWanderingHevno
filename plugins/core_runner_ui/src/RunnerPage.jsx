@@ -1,7 +1,6 @@
 // plugins/core_runner_ui/src/RunnerPage.jsx
 import React, { useMemo, useEffect, useState, useCallback } from 'react';
 import { Box, Typography, CssBaseline, CircularProgress } from '@mui/material';
-import { useLayout } from '../../core_layout/src/context/LayoutContext';
 import { SandboxStateProvider, useSandboxState } from './context/SandboxStateContext';
 import { DynamicComponentLoader } from './components/DynamicComponentLoader';
 import { ManagementPanel } from './components/ManagementPanel';
@@ -20,10 +19,16 @@ const DynamicIcon = ({ name }) => {
 
 const BASE_Z_INDEX = 100;
 
-function CockpitContent() {
-    const { services, setActivePageId, setMenuOverride } = useLayout();
+function CockpitContent({ services }) {
+    // [新增] 从services获取useLayout钩子
+    const useLayout = services.get('useLayout');
+    if (!useLayout) {
+        console.error('[core_runner_ui] useLayout hook not found in services.');
+        return <Box sx={{ p: 4, color: 'error.main' }}>错误：核心布局服务不可用。</Box>;
+    }
+    const { services: layoutServices, setActivePageId, setMenuOverride } = useLayout();
     const { sandboxId, isLoading, moment, performStep, isStepping } = useSandboxState();
-    const stableServices = useMemo(() => services, [services]);
+    const stableServices = useMemo(() => layoutServices, [layoutServices]);
     const contributionService = stableServices.get('contributionService');
     const hookManager = stableServices.get('hookManager');
 
@@ -281,9 +286,15 @@ function CockpitContent() {
 }
 
 // RunnerPage 组件本身不需要修改
-export function RunnerPage() {
-    const { currentSandboxId, services } = useLayout();
-    const stableServices = useMemo(() => services, [services]);
+export function RunnerPage({ services }) {
+    // [新增] 从services获取useLayout钩子
+    const useLayout = services.get('useLayout');
+    if (!useLayout) {
+        console.error('[core_runner_ui] useLayout hook not found in services.');
+        return <Box sx={{ p: 4, color: 'error.main' }}>错误：核心布局服务不可用。</Box>;
+    }
+    const { currentSandboxId, services: layoutServices } = useLayout();
+    const stableServices = useMemo(() => layoutServices, [layoutServices]);
     
     if (!currentSandboxId) {
         return (
@@ -296,7 +307,7 @@ export function RunnerPage() {
     return (
         <SandboxStateProvider sandboxId={currentSandboxId} services={stableServices}>
             <CssBaseline />
-            <CockpitContent />
+            <CockpitContent services={services} />
         </SandboxStateProvider>
     );
 }

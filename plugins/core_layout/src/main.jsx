@@ -1,6 +1,6 @@
 // plugins/core_layout/src/main.jsx
 import React from 'react';
-import { LayoutProvider } from './context/LayoutContext';
+import { LayoutProvider, LayoutContext, useLayout } from './context/LayoutContext';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { ConfirmationService } from './services/ConfirmationService';
@@ -60,6 +60,12 @@ export function registerPlugin(context) {
   // 注册此插件提供的服务
   const confirmationService = new ConfirmationService();
   context.register('confirmationService', confirmationService, 'core_layout');
+
+  // [新增] 注册LayoutContext和useLayout钩子
+  context.register('layoutContext', LayoutContext, 'core_layout');
+  context.register('useLayout', useLayout, 'core_layout');
+
+  console.log('[core_layout] Registered shared services: layoutContext, useLayout');
 
     // 注意：不再监听 'loader.ready' 钩子
 }
