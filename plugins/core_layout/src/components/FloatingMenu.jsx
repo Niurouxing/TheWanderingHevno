@@ -131,7 +131,7 @@ export function FloatingMenu() {
     >
       <Box
         ref={draggableRef}
-        sx={{ position: 'absolute', bottom: 24, left: 24, zIndex: 1300 }}
+        sx={{ position: 'absolute', bottom: 40, left: 24, zIndex: 1300 }}
         tabIndex={-1}
         onBlur={handleBlur}
       >
