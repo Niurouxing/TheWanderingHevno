@@ -1,15 +1,18 @@
 // plugins/core_runner_ui/src/components/ManagementPanel.jsx
 import React from 'react';
 import { 
-    Box, Paper, Typography, Button, List, ListItem, ListItemText, ListItemIcon, Switch, Divider 
+    Box, Paper, Typography, Button, List, ListItem, ListItemText, Switch, Divider,
+    ListSubheader, RadioGroup, FormControlLabel, Radio
 } from '@mui/material';
-import VisibilityIcon from '@mui/icons-material/Visibility';
-import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 
 export function ManagementPanel({ 
     isOpen, 
     onClose, 
+    // [新功能] 接收背景和面板两种类型的组件
+    availableBackgrounds,
+    activeBackgroundId,
+    onSelectBackground,
     availablePanels, 
     activePanelIds, 
     onTogglePanel,
@@ -30,11 +33,11 @@ export function ManagementPanel({
             <Paper 
                 elevation={10}
                 sx={{ 
-                    width: 'clamp(350px, 50vw, 500px)', 
+                    width: 'clamp(400px, 50vw, 550px)', 
                     maxHeight: '80vh',
                     display: 'flex',
                     flexDirection: 'column',
-                    p: 2,
+                    p: 2.5,
                 }}
                 onClick={(e) => e.stopPropagation()}
             >
@@ -42,12 +45,30 @@ export function ManagementPanel({
                     <Typography variant="h6">驾驶舱管理</Typography>
                     <Button onClick={onClose}>关闭</Button>
                 </Box>
-                
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                    控制在驾驶舱中显示哪些面板。布局会自动保存。
-                </Typography>
 
-                <List sx={{ overflowY: 'auto', flexGrow: 1 }}>
+                <List sx={{ overflowY: 'auto', flexGrow: 1, p:0 }}>
+                    {/* --- 背景画布选择区 --- */}
+                    <ListSubheader sx={{bgcolor: 'transparent'}}>背景画布 (单选)</ListSubheader>
+                    <RadioGroup
+                        aria-label="background-selector"
+                        name="background-selector"
+                        value={activeBackgroundId || 'none'}
+                        onChange={(e) => onSelectBackground(e.target.value === 'none' ? null : e.target.value)}
+                    >
+                        <ListItem>
+                             <FormControlLabel value="none" control={<Radio />} label="无" />
+                        </ListItem>
+                        {availableBackgrounds.map(bg => (
+                            <ListItem key={bg.id}>
+                                <FormControlLabel value={bg.id} control={<Radio />} label={bg.name} />
+                            </ListItem>
+                        ))}
+                    </RadioGroup>
+
+                    <Divider sx={{ my: 1.5 }} />
+
+                    {/* --- 浮动面板选择区 --- */}
+                    <ListSubheader sx={{bgcolor: 'transparent'}}>浮动面板 (多选)</ListSubheader>
                     {availablePanels.map(panel => {
                         const isActive = activePanelIds.includes(panel.id);
                         return (
@@ -58,9 +79,6 @@ export function ManagementPanel({
                                     checked={isActive}
                                 />
                             }>
-                                <ListItemIcon>
-                                    {isActive ? <VisibilityIcon /> : <VisibilityOffIcon color="disabled"/>}
-                                </ListItemIcon>
                                 <ListItemText primary={panel.name} />
                             </ListItem>
                         );

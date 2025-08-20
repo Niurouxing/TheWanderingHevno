@@ -13,7 +13,8 @@
                 {
                     "id": "panel_conversation_stream.canvas",
                     "name": "沉浸式叙事画布",
-                    "componentExportName": "ConversationCanvas"
+                    "componentExportName": "ConversationCanvas",
+                    "defaultEnabled": true
                 }
             ]
         }
