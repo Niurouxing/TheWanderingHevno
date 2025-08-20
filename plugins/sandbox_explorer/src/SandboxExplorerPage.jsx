@@ -113,10 +113,9 @@ export function SandboxExplorerPage({ services }) {
   const hookManager = services.get('hookManager');
   const confirmationService = services?.get('confirmationService');
 
+
   const loadData = useCallback(async () => {
-    if (sandboxes.length === 0) {
-      setLoading(true);
-    }
+    setLoading(true); // 总是在开始加载时设置为 true
     setError('');
     try {
       const data = await fetchSandboxes();
@@ -127,7 +126,7 @@ export function SandboxExplorerPage({ services }) {
     } finally {
       setLoading(false);
     }
-  }, [sandboxes.length]);
+  }, []); // 依赖项数组置空，确保函数实例在组件生命周期内保持稳定
 
   useEffect(() => {
     loadData();
@@ -204,8 +203,7 @@ export function SandboxExplorerPage({ services }) {
     try {
         // 调用新创建的API函数
         await uploadSandboxIcon(sandboxId, file);
-        // 上传成功后，重新加载所有沙盒数据
-        // 这将获取到最新的 `icon_updated_at` 时间戳，从而使图片URL失效并强制浏览器重新加载新封面
+        // 此处调用 loadData 现在将始终获取最新数据并刷新UI
         await loadData();
     } catch (e) {
         alert(`上传封面失败: ${e.message}`);
@@ -232,13 +230,14 @@ export function SandboxExplorerPage({ services }) {
     <Box sx={{ p: 3, height: '100%', overflowY: 'auto' }}>
       <Typography variant="h4" gutterBottom>沙盒</Typography>
       
+      {/* [修复] 3. 为 Grid 组件添加 'item' prop，符合MUI的最佳实践 */}
       <Grid container spacing={3}>
-        <Grid >
+        <Grid item>
           <AddSandboxCard onClick={() => setAddDialogOpen(true)} />
         </Grid>
 
         {sandboxes.map((sandbox) => (
-          <Grid key={sandbox.id} >
+          <Grid item key={sandbox.id} >
             <SandboxCard 
                 sandbox={sandbox}
                 onSelect={handleSelect}
