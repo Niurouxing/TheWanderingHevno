@@ -40,14 +40,11 @@ export function SnapshotHistoryPanel({ services }) {
                 roots.push(node);
             }
         }
-        // Sort children chronologically
         for (const node of nodeMap.values()) {
             node.children.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         }
-        // Sort roots
         roots.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
-        // Compute subtree heights
         const computeHeight = (node) => {
             if (node.children.length === 0) {
                 node.subtreeHeight = ROW_HEIGHT;
@@ -106,12 +103,13 @@ export function SnapshotHistoryPanel({ services }) {
                 flexDirection: 'column', 
                 overflow: 'hidden',
                 // --- 毛玻璃风格 ---
-                backgroundColor: 'rgba(40, 40, 40, 0.65)',
-                backdropFilter: 'blur(8px) saturate(180%)',
-                WebkitBackdropFilter: 'blur(8px) saturate(180%)', // 兼容 Safari
+                backgroundColor: 'rgba(40, 40, 40, 0.35)',
+                backdropFilter: 'blur(15px) saturate(200%)',
+                WebkitBackdropFilter: 'blur(15px) saturate(200%)', // 兼容 Safari
                 borderRadius: '16px', // 更大的圆角
                 border: '1px solid rgba(255, 255, 255, 0.12)', // 柔和的边缘
                 boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)', // 增加深度
+                position: 'relative', // 为了伪元素定位
             }}
         >
             {/* --- 不可见的拖拽区域 --- */}
@@ -122,10 +120,26 @@ export function SnapshotHistoryPanel({ services }) {
                     width: '100%',
                     cursor: 'move',
                     flexShrink: 0,
+                    position: 'relative',
+                    zIndex: 2, // 确保拖拽区在最上层
                 }}
             />
             {/* --- 调整内容区的内边距 --- */}
-            <Box sx={{ flexGrow: 1, overflow: 'auto', px: 2, pb: 2 }}>
+            <Box sx={{ 
+                flexGrow: 1, 
+                overflow: 'auto', 
+                px: 2, 
+                pb: 2,
+                // --- 【核心改动】 ---
+                // 在容器顶部添加一个渐变遮罩来实现平滑消失的效果
+                maskImage: 'linear-gradient(to bottom, transparent 0%, black 30px)',
+                // 兼容 Webkit 内核浏览器 (Chrome, Safari)
+                WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 30px)',
+                // 为了让渐变效果从拖拽区下方开始，我们需要将内容区的顶部向上移动
+                // 与此同时，使用 padding-top 来将内容本身推回到原来的位置
+                marginTop: '-40px', // 向上移动，使其顶部与拖拽区重合
+                paddingTop: '40px', // 将内容推回原位，避免被拖拽区遮挡
+            }}>
                 <Box sx={{ minWidth: 'max-content' }}>
                     {renderContent()}
                 </Box>
