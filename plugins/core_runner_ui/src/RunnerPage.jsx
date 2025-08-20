@@ -6,7 +6,7 @@ import { SandboxStateProvider, useSandboxState } from './context/SandboxStateCon
 import { DynamicComponentLoader } from './components/DynamicComponentLoader';
 import { ManagementPanel } from './components/ManagementPanel';
 import { ChromeActionsBar } from './components/ChromeActionsBar';
-import { FloatingPanel } from './components/FloatingPanel'; // 保持不变
+import { FloatingPanel } from './components/FloatingPanel';
 
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import TuneIcon from '@mui/icons-material/Tune';
@@ -33,7 +33,7 @@ function CockpitContent() {
     const [panelStates, setPanelStates] = useState({});
     const [highestZIndex, setHighestZIndex] = useState(BASE_Z_INDEX);
 
-    const getStorageKey = useCallback(() => `cockpit_freelayout_v1_${sandboxId}`, [sandboxId]);
+    const getStorageKey = useCallback(() => `cockpit_freelayout_v2_${sandboxId}`, [sandboxId]);
 
     const { availableBackgrounds, availablePanels } = useMemo(() => {
         const backgrounds = contributionService.getContributionsFor('cockpit.canvas_background');
@@ -60,13 +60,17 @@ function CockpitContent() {
             const savedPanelState = savedState?.panelStates?.[panel.id];
             const defaultState = panel.defaultState || { x: 50 + index * 20, y: 50 + index * 20, width: 450, height: 400 };
             
+            const isEnabled = savedPanelState?.isEnabled ?? panel.defaultEnabled;
+            const isVisible = savedPanelState?.isVisible ?? isEnabled;
+
             initialStates[panel.id] = {
                 x: savedPanelState?.x ?? defaultState.x,
                 y: savedPanelState?.y ?? defaultState.y,
                 width: savedPanelState?.width ?? defaultState.width,
                 height: savedPanelState?.height ?? defaultState.height,
                 zIndex: savedPanelState?.zIndex ?? (BASE_Z_INDEX + index),
-                isVisible: savedPanelState?.isVisible ?? panel.defaultEnabled,
+                isEnabled: isEnabled,
+                isVisible: isVisible,
             };
             
             if (initialStates[panel.id].zIndex > maxZ) {
@@ -108,7 +112,6 @@ function CockpitContent() {
         }));
     }, []);
 
-    // --- [新增] 创建一个新的回调函数来处理缩放停止事件 ---
     const handlePanelResizeStop = useCallback((panelId, size) => {
         setPanelStates(prev => ({
             ...prev,
@@ -116,16 +119,38 @@ function CockpitContent() {
         }));
     }, []);
 
-
-    const handleTogglePanel = (panelId) => {
+    // --- 由 ManagementPanel 调用 ---
+    const handleTogglePanelEnabled = (panelId) => {
         setPanelStates(prev => {
-            const isVisible = !prev[panelId].isVisible;
-            const newZ = isVisible ? highestZIndex + 1 : prev[panelId].zIndex;
-            if (isVisible) setHighestZIndex(newZ);
+            const currentState = prev[panelId];
+            const newIsEnabled = !currentState.isEnabled;
 
             return {
                 ...prev,
-                [panelId]: { ...prev[panelId], isVisible, zIndex: newZ }
+                [panelId]: { 
+                    ...currentState, 
+                    isEnabled: newIsEnabled, 
+                    // --- [核心修改] ---
+                    // 无论启用还是禁用，都将可见性设为 false。
+                    // 启用时：面板保持隐藏，但右上角按钮会出现。
+                    // 禁用时：面板被隐藏，右上角按钮也随之消失。
+                    isVisible: false,
+                }
+            };
+        });
+    };
+
+    // --- 由 ChromeActionsBar 调用 ---
+    const handleTogglePanelVisibility = (panelId) => {
+        setPanelStates(prev => {
+            const currentState = prev[panelId];
+            const newIsVisible = !currentState.isVisible;
+            const newZ = newIsVisible ? highestZIndex + 1 : currentState.zIndex;
+            if (newIsVisible) setHighestZIndex(newZ);
+            
+            return {
+                ...prev,
+                [panelId]: { ...currentState, isVisible: newIsVisible, zIndex: newZ }
             };
         });
     };
@@ -142,14 +167,20 @@ function CockpitContent() {
         return availableBackgrounds.find(bg => bg.id === activeBackgroundId);
     }, [activeBackgroundId, availableBackgrounds]);
 
-    const activePanelIds = useMemo(() => 
+    const enabledPanelIds = useMemo(() => 
+        Object.entries(panelStates)
+            .filter(([, state]) => state.isEnabled)
+            .map(([id]) => id),
+        [panelStates]
+    );
+
+    const visiblePanelIds = useMemo(() =>
         Object.entries(panelStates)
             .filter(([, state]) => state.isVisible)
             .map(([id]) => id),
         [panelStates]
     );
 
-    // ... (runnerMenuActions, chromeActions, chromeComponents 的 useMemo 钩子保持不变) ...
     const runnerMenuActions = useMemo(() => {
         const baseActions = [
             { id: 'runner.back', title: '返回沙盒列表', icon: <ArrowBackIcon />, onClick: () => setActivePageId('sandbox_explorer.main_view') },
@@ -170,9 +201,13 @@ function CockpitContent() {
         return () => setMenuOverride(null);
     }, [setMenuOverride, runnerMenuActions]);
 
-    const chromeActions = useMemo(() => {
+    const allChromeActions = useMemo(() => {
         return contributionService.getContributionsFor('cockpit.chrome_actions');
     }, [contributionService]);
+
+    const chromeActionsToRender = useMemo(() => {
+        return allChromeActions.filter(action => enabledPanelIds.includes(action.panelId));
+    }, [allChromeActions, enabledPanelIds]);
 
     const chromeComponents = useMemo(() => {
         const contributions = contributionService.getContributionsFor('cockpit.chrome');
@@ -205,7 +240,7 @@ function CockpitContent() {
                 
                 {availablePanels.map(panelInfo => {
                     const state = panelStates[panelInfo.id];
-                    if (!state || !state.isVisible) return null;
+                    if (!state || !state.isEnabled || !state.isVisible) return null;
                     
                     return (
                         <FloatingPanel
@@ -214,7 +249,7 @@ function CockpitContent() {
                             panelState={state}
                             onFocus={handlePanelFocus}
                             onDragStop={handlePanelDragStop}
-                            onResizeStop={handlePanelResizeStop} // <-- 将新的回调函数传递下去
+                            onResizeStop={handlePanelResizeStop}
                         >
                             <DynamicComponentLoader contribution={panelInfo} services={stableServices} />
                         </FloatingPanel>
@@ -222,9 +257,9 @@ function CockpitContent() {
                 })}
                 
                 <ChromeActionsBar
-                    actions={chromeActions}
-                    activePanelIds={activePanelIds}
-                    onTogglePanel={handleTogglePanel}
+                    actions={chromeActionsToRender}
+                    activePanelIds={visiblePanelIds}
+                    onTogglePanel={handleTogglePanelVisibility}
                 />
                 
                 <ManagementPanel
@@ -234,8 +269,8 @@ function CockpitContent() {
                     activeBackgroundId={activeBackgroundId}
                     onSelectBackground={setActiveBackgroundId}
                     availablePanels={availablePanels}
-                    activePanelIds={activePanelIds}
-                    onTogglePanel={handleTogglePanel}
+                    activePanelIds={enabledPanelIds}
+                    onTogglePanel={handleTogglePanelEnabled}
                     onResetLayout={handleResetLayout}
                 />
             </Box>

@@ -154,7 +154,7 @@ if __name__ == "__main__":
         # "./plugins/sandbox_explorer",
         "./plugins/core_runner_ui",
         "./plugins/panel_conversation_stream",
-        # "./plugins/panel_debug_moment",
+        "./plugins/panel_debug_moment",
         "./plugins/panel_snapshot_history",
         # "./plugins/core_remote_hooks",
         # "./plugins/core_websocket",
