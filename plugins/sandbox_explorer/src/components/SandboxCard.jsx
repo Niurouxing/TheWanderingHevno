@@ -75,7 +75,7 @@ export function SandboxCard({ sandbox, onEdit, onRun, onDelete, onSelect, onExpo
           height="140"
           image={iconUrl}
           alt={`Cover for ${sandbox.name}`}
-=
+
           sx={{ objectFit: 'cover' }}
           onError={(e) => { e.target.onerror = null; e.target.src = placeholderImage; }}
         />
