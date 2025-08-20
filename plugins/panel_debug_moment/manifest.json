@@ -15,7 +15,7 @@
                     "id": "panel_debug_moment.main",
                     "name": "状态监视器 (Moment)",
                     "componentExportName": "MomentInspectorPanel",
-                    "defaultLayout": { "w": 6, "h": 10, "x": 18, "y": 0 },
+                    "defaultState": { "x": 1050, "y": 20, "width": 450, "height": 500 },
                     "defaultEnabled": true
                 }
             ],
