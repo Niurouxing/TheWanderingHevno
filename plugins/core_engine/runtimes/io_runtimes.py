@@ -2,8 +2,9 @@
 import logging
 from typing import Dict, Any, Literal, Type
 from pydantic import BaseModel, Field
+from datetime import datetime
 
-from ..contracts import ExecutionContext, RuntimeInterface
+from ..contracts import ExecutionContext, RuntimeInterface, GenericNode
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ class InputRuntime(RuntimeInterface):
 
 class LogRuntime(RuntimeInterface):
     """
-    system.io.log: 向后端日志系统输出一条消息。
+    system.io.log: 向后端日志系统输出一条消息，并将其记录到 moment 状态中。
     提供一个标准化的、用于调试图执行流程的工具。
     """
     LOG_LEVELS = {
@@ -53,13 +54,29 @@ class LogRuntime(RuntimeInterface):
     async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
         try:
             validated_config = self.ConfigModel.model_validate(config)
-            
+            node: GenericNode = kwargs.get("node")
+
+            # 1. 向后端控制台输出日志
             level = self.LOG_LEVELS.get(validated_config.level, logging.INFO)
-            
             runtime_logger = logging.getLogger("hevno.runtime.log")
             runtime_logger.log(level, validated_config.message)
+
+            # 2. 向 moment state 中添加结构化日志
+            moment_state = context.shared.moment_state
+            if '_log_info' not in moment_state or not isinstance(moment_state.get('_log_info'), list):
+                moment_state['_log_info'] = []
+
+            log_entry = {
+                "type": "system_log",
+                "timestamp": datetime.now().isoformat(),
+                "node_id": node.id if node else 'unknown',
+                "data": {
+                    "level": validated_config.level,
+                    "message": validated_config.message,
+                }
+            }
+            moment_state['_log_info'].append(log_entry)
             
             return {}
         except Exception as e:
-            # Pydantic validation errors are helpful here
             return {"error": f"Invalid configuration for system.io.log: {e}"}

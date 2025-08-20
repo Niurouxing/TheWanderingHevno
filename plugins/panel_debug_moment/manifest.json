@@ -1,8 +1,8 @@
 {
     "id": "panel_debug_moment",
-    "name": "Moment State Inspector Panel",
+    "name": "Debug Log Panel",
     "version": "1.0.0",
-    "description": "A simple panel that displays the content of the 'moment' state for debugging.",
+    "description": "A panel that displays runtime diagnostic information from moment._log_info, including LLM calls and system logs.",
     "author": "Hevno Team",
     "frontend": {
         "type": "cockpit-panel",
@@ -13,9 +13,9 @@
             "cockpit.panels": [
                 {
                     "id": "panel_debug_moment.main",
-                    "name": "状态监视器 (Moment)",
+                    "name": "调试日志",
                     "componentExportName": "MomentInspectorPanel",
-                    "defaultState": { "x": 1050, "y": 20, "width": 450, "height": 500 },
+                    "defaultState": { "x": 1050, "y": 20, "width": 450, "height": 700 },
                     "defaultEnabled": true
                 }
             ],
@@ -31,8 +31,8 @@
                 {
                     "id": "panel_debug_moment.toggle_button",
                     "panelId": "panel_debug_moment.main",
-                    "title": "切换状态监视器",
-                    "icon": "Science"
+                    "title": "切换调试日志",
+                    "icon": "BugReport"
                 }
             ]
         }

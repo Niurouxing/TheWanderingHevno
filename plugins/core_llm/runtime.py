@@ -90,29 +90,38 @@ class LLMRuntime(RuntimeInterface):
         }
         
         response: LLMResponse = None
+    
+        # 获取 moment state 并确保 _log_info 存在
+        moment_state = context.shared.moment_state
+        if '_log_info' not in moment_state or not isinstance(moment_state.get('_log_info'), list):
+            moment_state['_log_info'] = []
+            
         try:
             response = await llm_service.request(**request_payload)
             
-            if "diagnostics_log" in context.run_vars:
-                diagnostic_entry = {
-                    "timestamp": datetime.now().isoformat(),
-                    "node_id": node.id if node else 'unknown',
-                    "runtime": "llm.default",
+            # 将诊断信息写入 moment._log_info 而不是 run_vars
+            diagnostic_entry = {
+                "type": "llm_call",
+                "timestamp": datetime.now().isoformat(),
+                "node_id": node.id if node else 'unknown',
+                "data": {
                     "request": request_payload,
                     "response": response.model_dump(mode='json') if response else None 
                 }
-                context.run_vars["diagnostics_log"].append(diagnostic_entry)
+            }
+            moment_state['_log_info'].append(diagnostic_entry)
 
             if response.error_details:
                 return {"error": response.error_details.message, "error_type": response.error_details.error_type.value, "details": response.error_details.model_dump()}
             return {"output": response.content, "usage": response.usage, "model_name": response.model_name}
         
         except LLMRequestFailedError as e:
-            if "diagnostics_log" in context.run_vars:
-                diagnostic_entry = {
-                    "timestamp": datetime.now().isoformat(),
-                    "node_id": node.id if node else 'unknown',
-                    "runtime": "llm.default",
+            # 在异常情况下也写入诊断信息
+            diagnostic_entry = {
+                "type": "llm_call",
+                "timestamp": datetime.now().isoformat(),
+                "node_id": node.id if node else 'unknown',
+                "data": {
                     "request": request_payload,
                     "response": {
                         "status": "ERROR",
@@ -122,6 +131,7 @@ class LLMRuntime(RuntimeInterface):
                         }
                     }
                 }
-                context.run_vars["diagnostics_log"].append(diagnostic_entry)
+            }
+            moment_state['_log_info'].append(diagnostic_entry)
             
             return {"error": str(e), "details": e.last_error.model_dump() if e.last_error else None}
