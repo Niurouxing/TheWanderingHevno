@@ -1,10 +1,12 @@
 // plugins/core_runner_ui/src/RunnerPage.jsx
-import React, { useMemo, useEffect, useState } from 'react';
+import React, { useMemo, useEffect, useState, useCallback } from 'react';
 import { Box, Typography, CssBaseline, CircularProgress, Button } from '@mui/material';
 import { useLayout } from '../../core_layout/src/context/LayoutContext';
 import { SandboxStateProvider, useSandboxState } from './context/SandboxStateContext';
 import { CockpitLayout } from './components/CockpitLayout';
 import { DynamicComponentLoader } from './components/DynamicComponentLoader';
+// --- 1. 导入新的 ManagementPanel ---
+import { ManagementPanel } from './components/ManagementPanel';
 
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import TuneIcon from '@mui/icons-material/Tune';
@@ -18,30 +20,103 @@ const DynamicIcon = ({ name }) => {
 
 function CockpitContent() {
     const { services, setActivePageId, setMenuOverride } = useLayout();
-    // [改动] 从 useSandboxState 获取所有需要传递给子组件的值
     const { sandboxId, isLoading, moment, performStep, isStepping } = useSandboxState();
-    
-    // [核心修复 2] 稳定 services 对象，防止不必要的重渲染
     const stableServices = useMemo(() => services, [services]);
-    
     const contributionService = stableServices.get('contributionService');
     const hookManager = stableServices.get('hookManager');
 
     const [isManaging, setIsManaging] = useState(false);
+    
+    // --- 2. 状态提升 ---
+    // activePanelIds: 存储当前可见面板的ID列表
+    // layouts: 存储 react-grid-layout 的布局信息
+    const [activePanelIds, setActivePanelIds] = useState([]);
+    const [layouts, setLayouts] = useState({});
+
+    const getStorageKey = useCallback(() => `cockpit_layout_${sandboxId}`, [sandboxId]);
+
+    // --- 3. 从 localStorage 加载或初始化布局 ---
+    useEffect(() => {
+        if (!sandboxId) return;
+
+        const allAvailablePanels = contributionService.getContributionsFor('cockpit.panels');
+        const storageKey = getStorageKey();
+        let savedState = null;
+        try {
+            const savedJson = localStorage.getItem(storageKey);
+            if (savedJson) {
+                savedState = JSON.parse(savedJson);
+            }
+        } catch (e) {
+            console.error("Failed to parse cockpit layout from localStorage", e);
+            localStorage.removeItem(storageKey);
+        }
+
+        if (savedState && savedState.activePanelIds && savedState.layouts) {
+            // 健壮性检查: 只加载仍然存在的插件面板
+            const existingPanelIds = savedState.activePanelIds.filter(id => 
+                allAvailablePanels.some(p => p.id === id)
+            );
+            setActivePanelIds(existingPanelIds);
+            setLayouts(savedState.layouts);
+        } else {
+            // 如果没有保存的状态，则初始化默认布局
+            const defaultActivePanels = allAvailablePanels.filter(p => p.defaultEnabled);
+            const initialLayouts = {};
+            const layoutForBreakpoint = defaultActivePanels.map(p => ({
+                ...(p.defaultLayout || { w: 4, h: 4, x: 0, y: 0 }),
+                i: p.id,
+            }));
+
+            // react-grid-layout 需要为每个断点设置布局
+            initialLayouts['lg'] = layoutForBreakpoint;
+            
+            setActivePanelIds(defaultActivePanels.map(p => p.id));
+            setLayouts(initialLayouts);
+        }
+    }, [sandboxId, contributionService, getStorageKey]);
+
+    // --- 4. 将布局变化持久化到 localStorage ---
+    useEffect(() => {
+        // 避免在初始加载时写入空的 state
+        if (!sandboxId || activePanelIds.length === 0) return;
+
+        try {
+            const stateToSave = { activePanelIds, layouts };
+            localStorage.setItem(getStorageKey(), JSON.stringify(stateToSave));
+        } catch (e) {
+            console.error("Failed to save cockpit layout to localStorage", e);
+        }
+    }, [activePanelIds, layouts, sandboxId, getStorageKey]);
+    
+    // --- 5. 管理面板的逻辑函数 ---
+    const handleTogglePanel = (panelId) => {
+        setActivePanelIds(prev => {
+            if (prev.includes(panelId)) {
+                return prev.filter(id => id !== panelId);
+            } else {
+                return [...prev, panelId];
+            }
+        });
+    };
+
+    const handleResetLayout = () => {
+        if (window.confirm('你确定要重置驾驶舱布局到默认设置吗？')) {
+            localStorage.removeItem(getStorageKey());
+            window.location.reload(); // 最简单的重置方式
+        }
+    };
+
 
     const { backgroundComponent, panelComponents } = useMemo(() => {
         const backgroundContributions = contributionService.getContributionsFor('cockpit.canvas_background');
         const panelContributions = contributionService.getContributionsFor('cockpit.panels');
-
-        // 正常情况下，背景组件只有一个。我们取第一个。
         const background = backgroundContributions.length > 0 ? backgroundContributions[0] : null;
-        
         return {
             backgroundComponent: background,
             panelComponents: panelContributions
         };
     }, [contributionService]);
-
 
     const runnerMenuActions = useMemo(() => {
         const baseActions = [
@@ -83,32 +158,38 @@ function CockpitContent() {
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             {chromeComponents.topBar && <Box sx={{ flexShrink: 0 }}><DynamicComponentLoader contribution={chromeComponents.topBar} services={stableServices} /></Box>}
             
-            <Box sx={{ flexGrow: 1, position: 'relative',overflow: 'hidden'  }}>
+            <Box sx={{ flexGrow: 1, position: 'relative', overflow: 'hidden' }}>
                 <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1 }}>
                     {backgroundComponent ? (
-                        // [改动] 将状态和函数作为 props 注入到动态加载的组件中
                         <DynamicComponentLoader 
                             contribution={backgroundComponent} 
                             services={stableServices}
                             props={{ moment, performStep, isStepping, sandboxId }}
                         />
                     ) : (
-                        // 如果没有背景组件，可以提供一个默认的、简单的背景
                         <Box sx={{ width: '100%', height: '100%', bgcolor: 'background.default' }} />
                     )}
                 </Box>
 
-                <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 2,overflow: 'auto' ,pointerEvents: 'none' }}>
-                    {/* 我们将 panelComponents 传递给 CockpitLayout */}
-                    <CockpitLayout panels={panelComponents} />
+                <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 2, overflow: 'auto', pointerEvents: 'none' }}>
+                    {/* --- 6. 将状态和回调传递给 CockpitLayout --- */}
+                    <CockpitLayout 
+                        panels={panelComponents} 
+                        activePanelIds={activePanelIds}
+                        layouts={layouts}
+                        onLayoutChange={setLayouts}
+                    />
                 </Box>
-
-                {isManaging && (
-                    <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, bgcolor: 'rgba(0,0,0,0.7)', zIndex: 10, p: 2, color: 'white' }}>
-                        <Typography variant="h6">驾驶舱管理面板</Typography>
-                        <Button onClick={() => setIsManaging(false)} variant="contained" sx={{mt: 2}}>关闭</Button>
-                    </Box>
-                )}
+                
+                {/* --- 7. 渲染 ManagementPanel --- */}
+                <ManagementPanel
+                    isOpen={isManaging}
+                    onClose={() => setIsManaging(false)}
+                    availablePanels={panelComponents}
+                    activePanelIds={activePanelIds}
+                    onTogglePanel={handleTogglePanel}
+                    onResetLayout={handleResetLayout}
+                />
 
             </Box>
             

@@ -1,7 +1,6 @@
 // plugins/core_runner_ui/src/components/CockpitLayout.jsx
-import React, { useState, useMemo, useEffect } from 'react';
+import React from 'react';
 import { Responsive, WidthProvider } from 'react-grid-layout';
-// --- 1. 导入 GlobalStyles ---
 import { GlobalStyles } from '@mui/material';
 import { useLayout } from '../../../core_layout/src/context/LayoutContext';
 import { DynamicComponentLoader } from './DynamicComponentLoader';
@@ -11,38 +10,22 @@ import 'react-resizable/css/styles.css';
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 
-// --- 2. 定义我们的美化样式 ---
 const placeholderStyles = `
   .react-grid-layout .react-grid-placeholder {
-    background-color: rgba(0, 127, 255, 0.2); /* 一个更柔和的蓝色调，半透明 */
-    border: 2px dashed rgba(0, 127, 255, 0.5); /* 虚线边框 */
-    border-radius: 8px; /* 圆角，使其与你的UI更匹配 */
-    transition: all 0.2s ease-in-out; /* 添加平滑的过渡效果 */
-    opacity: 1 !important; /* 确保我们的样式生效 */
+    background-color: rgba(0, 127, 255, 0.2);
+    border: 2px dashed rgba(0, 127, 255, 0.5);
+    border-radius: 8px;
+    transition: all 0.2s ease-in-out;
+    opacity: 1 !important;
   }
 `;
 
-export function CockpitLayout({ panels = [] }) {
+// [核心修改] 组件现在是无状态的，接收所有必要的 props
+export function CockpitLayout({ panels = [], activePanelIds = [], layouts = {}, onLayoutChange }) {
     const { services } = useLayout(); 
-    const availablePanels = panels;
-
-    const [activePanels] = useState(() => availablePanels.map(p => p.id));
-    const [layouts, setLayouts] = useState({});
-
-    useEffect(() => {
-        const initialLayouts = {};
-        availablePanels.forEach(p => {
-            initialLayouts[p.id] = {
-                ...(p.defaultLayout || { w: 4, h: 4, x: 0, y: 0 }),
-                i: p.id,
-            };
-        });
-        setLayouts({ lg: Object.values(initialLayouts) });
-    }, [availablePanels]);
-
-    const handleLayoutChange = (layout, allLayouts) => {
-        setLayouts(allLayouts);
-    };
+    
+    // 从所有可用面板中，只渲染那些ID在 activePanelIds 列表中的面板
+    const panelsToRender = panels.filter(p => activePanelIds.includes(p.id));
 
     return (
         <>
@@ -53,21 +36,15 @@ export function CockpitLayout({ panels = [] }) {
                 breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
                 cols={{ lg: 24, md: 20, sm: 12, xs: 8, xxs: 4 }}
                 rowHeight={30}
-                onLayoutChange={handleLayoutChange}
+                onLayoutChange={(layout, allLayouts) => onLayoutChange(allLayouts)} // 将事件冒泡上去
                 compactType={null} 
                 draggableHandle=".drag-handle"
             >
-                {activePanels.map(panelId => {
-                    const panelInfo = availablePanels.find(p => p.id === panelId);
-                    if (!panelInfo) return null;
-                    
-                    return (
-                        <div key={panelId} style={{ background: 'transparent',pointerEvents: 'auto' }}>
-                            {/* DynamicComponentLoader 现在需要从 services 容器获取 services */}
-                            <DynamicComponentLoader contribution={panelInfo} services={services} />
-                        </div>
-                    );
-                })}
+                {panelsToRender.map(panelInfo => (
+                    <div key={panelInfo.id} style={{ background: 'transparent', pointerEvents: 'auto' }}>
+                        <DynamicComponentLoader contribution={panelInfo} services={services} />
+                    </div>
+                ))}
             </ResponsiveGridLayout>
         </>
     );

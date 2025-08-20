@@ -15,7 +15,8 @@
                     "id": "panel_debug_moment.main",
                     "name": "状态监视器 (Moment)",
                     "componentExportName": "MomentInspectorPanel",
-                    "defaultLayout": { "w": 4, "h": 8, "x": 8, "y": 0 }
+                    "defaultLayout": { "w": 6, "h": 10, "x": 18, "y": 0 },
+                    "defaultEnabled": true
                 }
             ],
             "core_runner_ui.menu_actions": [
