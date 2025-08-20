@@ -1,12 +1,12 @@
 // plugins/panel_snapshot_history/src/SnapshotHistoryPanel.jsx
-import React, { useMemo, useContext } from 'react'; // 引入 useContext 和 useMemo
+import React, { useMemo, useContext } from 'react';
 import { Box, Typography, Paper, IconButton, Tooltip, CircularProgress, Skeleton } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
-// 直接从 core_runner_ui 导入 context，因为它是核心服务
-import { SandboxStateContext } from '../../core_runner_ui/src/context/SandboxStateContext';
 import { SnapshotNode } from './SnapshotNode';
+// [移除] 不再需要下面这行硬编码的 import
+// import { SandboxStateContext } from '../../core_runner_ui/src/context/SandboxStateContext';
 
-// 一个辅助函数，用于从扁平数组构建树状结构
+// buildTree 辅助函数保持不变
 const buildTree = (snapshots) => {
     if (!snapshots || snapshots.length === 0) return [];
     const nodeMap = new Map(snapshots.map(s => [s.id, { ...s, children: [] }]));
@@ -25,16 +25,26 @@ const buildTree = (snapshots) => {
     return roots;
 };
 
-
 export function SnapshotHistoryPanel({ services }) {
     const confirmationService = services?.get('confirmationService');
 
-    // [核心修改] 从 context 获取所有状态和方法，移除本地 state
-    const context = useContext(SandboxStateContext);
-    if (!context) {
-        return <Paper variant="outlined" sx={{p: 2, color: 'error.main'}}>错误: SandboxStateContext 未找到。</Paper>
+    // --- 核心修改：采用与 panel_debug_moment 相同的依赖获取方式 ---
+    // 1. 从服务容器中按名称查找 Context 对象
+    const SandboxStateContext = services?.get('sandboxStateContext');
+
+    // 2. 如果核心依赖不存在，则优雅地失败，提供明确的错误信息
+    if (!SandboxStateContext) {
+        return (
+            <Paper variant="outlined" sx={{ p: 2, color: 'error.main', height: '100%' }}>
+                <Typography variant="subtitle2">错误</Typography>
+                <Typography variant="body2">
+                    无法找到核心服务 'sandboxStateContext'。请确保 'core_runner_ui' 插件已正确加载。
+                </Typography>
+            </Paper>
+        );
     }
     
+    // 3. 使用动态获取到的 Context
     const { 
         history, 
         headSnapshotId, 
@@ -43,26 +53,22 @@ export function SnapshotHistoryPanel({ services }) {
         refreshState, 
         revertSnapshot,
         deleteSnapshotFromHistory 
-    } = context;
+    } = useContext(SandboxStateContext);
 
-    // [核心修改] 将删除操作封装，并集成确认对话框
     const handleDelete = React.useCallback(async (snapshotId) => {
         if (isLoading || !confirmationService) return;
-
         const confirmed = await confirmationService.confirm({
             title: '删除快照确认',
             message: '确定要永久删除这个快照及其所有子快照吗？此操作不可撤销。',
         });
-
         if (confirmed) {
-            // 调用 context 提供的方法
             await deleteSnapshotFromHistory(snapshotId);
         }
     }, [isLoading, confirmationService, deleteSnapshotFromHistory]);
 
-    // 使用 useMemo 避免在每次渲染时都重新计算树结构
     const snapshotTree = useMemo(() => buildTree(history), [history]);
 
+    // ... 剩余的渲染逻辑完全不变 ...
     const renderContent = () => {
         if (isLoading && history.length === 0) {
             return (
@@ -85,7 +91,6 @@ export function SnapshotHistoryPanel({ services }) {
                 key={rootNode.id} 
                 node={rootNode} 
                 headSnapshotId={headSnapshotId}
-                // [核心修改] 直接传递 context 的方法
                 onRevert={revertSnapshot}
                 onDelete={handleDelete}
                 isLast={false}
@@ -123,7 +128,6 @@ export function SnapshotHistoryPanel({ services }) {
                 <Typography variant="subtitle2" noWrap>快照历史</Typography>
                 <Tooltip title="刷新">
                     <span>
-                        {/* [核心修改] 刷新按钮调用 context 的 refreshState */}
                         <IconButton size="small" onClick={() => refreshState()} disabled={isLoading}>
                             {isLoading ? <CircularProgress size={16} color="inherit" /> : <RefreshIcon sx={{ fontSize: 16 }} />}
                         </IconButton>
