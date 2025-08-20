@@ -1,18 +1,16 @@
 // plugins/panel_snapshot_history/src/SnapshotHistoryPanel.jsx
-import React from 'react';
+import React, { useMemo, useContext } from 'react'; // 引入 useContext 和 useMemo
 import { Box, Typography, Paper, IconButton, Tooltip, CircularProgress, Skeleton } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import { useLayout } from '../../core_layout/src/context/LayoutContext';
-import { getHistory, getSandboxDetails, revert, deleteSnapshot } from '../../core_runner_ui/src/api';
+// 直接从 core_runner_ui 导入 context，因为它是核心服务
+import { SandboxStateContext } from '../../core_runner_ui/src/context/SandboxStateContext';
 import { SnapshotNode } from './SnapshotNode';
 
 // 一个辅助函数，用于从扁平数组构建树状结构
 const buildTree = (snapshots) => {
     if (!snapshots || snapshots.length === 0) return [];
-
     const nodeMap = new Map(snapshots.map(s => [s.id, { ...s, children: [] }]));
     const roots = [];
-
     for (const node of nodeMap.values()) {
         if (node.parent_snapshot_id && nodeMap.has(node.parent_snapshot_id)) {
             nodeMap.get(node.parent_snapshot_id).children.push(node);
@@ -20,60 +18,34 @@ const buildTree = (snapshots) => {
             roots.push(node);
         }
     }
-    
-    // 确保子节点按创建时间排序
     for (const node of nodeMap.values()) {
         node.children.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     }
     roots.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-
     return roots;
 };
 
+
 export function SnapshotHistoryPanel({ services }) {
-    const { currentSandboxId } = useLayout();
     const confirmationService = services?.get('confirmationService');
 
-    const [history, setHistory] = React.useState([]);
-    const [headSnapshotId, setHeadSnapshotId] = React.useState(null);
-    const [isLoading, setIsLoading] = React.useState(true);
-    const [error, setError] = React.useState('');
+    // [核心修改] 从 context 获取所有状态和方法，移除本地 state
+    const context = useContext(SandboxStateContext);
+    if (!context) {
+        return <Paper variant="outlined" sx={{p: 2, color: 'error.main'}}>错误: SandboxStateContext 未找到。</Paper>
+    }
+    
+    const { 
+        history, 
+        headSnapshotId, 
+        isLoading, 
+        error, 
+        refreshState, 
+        revertSnapshot,
+        deleteSnapshotFromHistory 
+    } = context;
 
-    const loadData = React.useCallback(async (showLoadingSpinner = true) => {
-        if (!currentSandboxId) return;
-        if (showLoadingSpinner) setIsLoading(true);
-        setError('');
-        try {
-            const [historyData, detailsData] = await Promise.all([
-                getHistory(currentSandboxId),
-                getSandboxDetails(currentSandboxId)
-            ]);
-            setHistory(historyData);
-            setHeadSnapshotId(detailsData.head_snapshot_id);
-        } catch (e) {
-            setError(`加载失败: ${e.message}`);
-        } finally {
-            if (showLoadingSpinner) setIsLoading(false);
-        }
-    }, [currentSandboxId]);
-
-    React.useEffect(() => {
-        loadData();
-    }, [loadData]);
-
-    const handleRevert = React.useCallback(async (snapshotId) => {
-        if (isLoading) return;
-        setIsLoading(true);
-        try {
-            await revert(currentSandboxId, snapshotId);
-            await loadData(false); // 重新加载数据以更新UI
-        } catch (e) {
-            setError(`切换失败: ${e.message}`);
-        } finally {
-            setIsLoading(false);
-        }
-    }, [currentSandboxId, isLoading, loadData]);
-
+    // [核心修改] 将删除操作封装，并集成确认对话框
     const handleDelete = React.useCallback(async (snapshotId) => {
         if (isLoading || !confirmationService) return;
 
@@ -82,20 +54,14 @@ export function SnapshotHistoryPanel({ services }) {
             message: '确定要永久删除这个快照及其所有子快照吗？此操作不可撤销。',
         });
 
-        if (!confirmed) return;
-
-        setIsLoading(true);
-        try {
-            await deleteSnapshot(currentSandboxId, snapshotId);
-            await loadData(false); // 删除后刷新
-        } catch (e) {
-            setError(`删除失败: ${e.message}`);
-        } finally {
-            setIsLoading(false);
+        if (confirmed) {
+            // 调用 context 提供的方法
+            await deleteSnapshotFromHistory(snapshotId);
         }
-    }, [currentSandboxId, isLoading, loadData, confirmationService]);
+    }, [isLoading, confirmationService, deleteSnapshotFromHistory]);
 
-    const snapshotTree = React.useMemo(() => buildTree(history), [history]);
+    // 使用 useMemo 避免在每次渲染时都重新计算树结构
+    const snapshotTree = useMemo(() => buildTree(history), [history]);
 
     const renderContent = () => {
         if (isLoading && history.length === 0) {
@@ -119,9 +85,10 @@ export function SnapshotHistoryPanel({ services }) {
                 key={rootNode.id} 
                 node={rootNode} 
                 headSnapshotId={headSnapshotId}
-                onRevert={handleRevert}
+                // [核心修改] 直接传递 context 的方法
+                onRevert={revertSnapshot}
                 onDelete={handleDelete}
-                isLast={false} // 根节点没有兄弟
+                isLast={false}
             />
         ));
     };
@@ -156,7 +123,8 @@ export function SnapshotHistoryPanel({ services }) {
                 <Typography variant="subtitle2" noWrap>快照历史</Typography>
                 <Tooltip title="刷新">
                     <span>
-                        <IconButton size="small" onClick={() => loadData()} disabled={isLoading}>
+                        {/* [核心修改] 刷新按钮调用 context 的 refreshState */}
+                        <IconButton size="small" onClick={() => refreshState()} disabled={isLoading}>
                             {isLoading ? <CircularProgress size={16} color="inherit" /> : <RefreshIcon sx={{ fontSize: 16 }} />}
                         </IconButton>
                     </span>
