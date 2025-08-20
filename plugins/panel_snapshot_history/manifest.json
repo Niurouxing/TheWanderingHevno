@@ -14,7 +14,7 @@
                     "id": "panel_snapshot_history.main",
                     "name": "快照历史",
                     "componentExportName": "SnapshotHistoryPanel",
-                    "defaultLayout": { "w": 8, "h": 12, "x": 0, "y": 0 },
+                    "defaultState": { "x": 20, "y": 20, "width": 400, "height": 600 },
                     "defaultEnabled": true
                 }
             ],
