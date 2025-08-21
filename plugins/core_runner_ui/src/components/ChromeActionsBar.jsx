@@ -14,7 +14,7 @@ const DynamicIcon = ({ name }) => {
  * 渲染在驾驶舱右上角的全局操作按钮。
  * 这些按钮通常用于切换浮动面板的可见性。
  */
-export function ChromeActionsBar({ actions, activePanelIds, onTogglePanel }) {
+export function ChromeActionsBar({ actions, activePanelIds, onTogglePanel, onTriggerHook }) {
   if (!actions || actions.length === 0) {
     return null;
   }
@@ -25,17 +25,28 @@ export function ChromeActionsBar({ actions, activePanelIds, onTogglePanel }) {
         position: 'absolute',
         top: 16,
         right: 16,
-        zIndex: 1100, // 高于面板(2)，低于管理弹窗(10)和浮动菜单(1300)
+        zIndex: 1100, 
         display: 'flex',
-        gap: 1.5, // 按钮之间的间距
+        gap: 1.5,
       }}
     >
       {actions.map(action => {
-        const isActive = activePanelIds.includes(action.panelId);
+        // isActive 状态仅对关联了 panelId 的按钮有效
+        const isActive = action.panelId ? activePanelIds.includes(action.panelId) : false;
+
+        // 封装点击处理逻辑
+        const handleClick = () => {
+            if (action.panelId && onTogglePanel) {
+                onTogglePanel(action.panelId);
+            } else if (action.hookName && onTriggerHook) {
+                onTriggerHook(action.hookName);
+            }
+        };
+
         return (
           <Tooltip title={action.title} placement="bottom" key={action.id}>
             <IconButton
-              onClick={() => onTogglePanel(action.panelId)}
+              onClick={handleClick}
               sx={{
                 color: isActive ? 'primary.main' : '#FFFFFF',
                 backgroundColor: 'rgba(44, 44, 46, 0.25)',

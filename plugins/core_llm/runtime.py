@@ -10,6 +10,7 @@ from .contracts import LLMResponse, LLMRequestFailedError
 
 logger = logging.getLogger(__name__)
 
+
 class LLMRuntime(RuntimeInterface):
     """
     一个强大的运行时，它通过"列表展开"机制编排一个结构化的消息列表，
@@ -34,9 +35,23 @@ class LLMRuntime(RuntimeInterface):
             description="一个定义消息结构的列表，支持静态部分和动态注入。"
         )
         temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0, description="控制生成文本的随机性。")
-        max_tokens: Optional[int] = Field(default=None, gt=0, description="限制生成的最大 token 数量。")
+        max_output_tokens: Optional[int] = Field(default=None, gt=0, description="限制生成的最大 token 数量。")
         top_p: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="控制 nucleus sampling。")
         top_k: Optional[int] = Field(default=None, gt=0, description="控制 top-k sampling。")
+        
+        # 这个布尔字段会自动被前端渲染为开关 (Switch)
+        include_thoughts: Optional[bool] = Field(
+            default=None,
+            title="启用思考链",
+            description="如果为 true，模型将在最终回答前输出其思考过程。仅部分模型支持。"
+        )
+        # 这个整数/数字字段会自动被渲染为数字输入框
+        thinking_budget: Optional[int] = Field(
+            default=None,
+            gt=0,
+            title="思考预算",
+            description="为思考过程分配的最大 token 数量。仅在启用思考链时有效。"
+        )
 
         @field_validator('contents')
         def check_contents_not_empty(cls, v):
@@ -78,8 +93,25 @@ class LLMRuntime(RuntimeInterface):
                 elif injected_messages is not None:
                      logger.warning(f"Macro for INJECT_MESSAGES 'source' did not evaluate to a list. Got {type(injected_messages).__name__}. Ignoring.")
 
-        # 从验证过的配置中提取参数
-        llm_params = validated_config.model_dump(exclude={"model", "contents", "prompt"}, exclude_none=True)
+        # --- [核心优化] 从扁平化的配置中重新构建 provider 期望的参数结构 ---
+        llm_params = validated_config.model_dump(
+            # 排除我们手动处理的字段
+            exclude={"model", "contents", "include_thoughts", "thinking_budget"}, 
+            # 排除值为 None 的字段，保持请求体干净
+            exclude_none=True
+        )
+        
+        # 如果用户配置了任何一个思考链相关的参数，则构建 thinking_config 字典
+        thinking_config = {}
+        if validated_config.include_thoughts is not None:
+            thinking_config['include_thoughts'] = validated_config.include_thoughts
+        if validated_config.thinking_budget is not None:
+            thinking_config['thinking_budget'] = validated_config.thinking_budget
+        
+        # 只有在 thinking_config 不为空时，才将其添加到最终参数中
+        if thinking_config:
+            llm_params['thinking_config'] = thinking_config
+
         llm_service = context.shared.services.llm_service
         node = kwargs.get("node")
         
@@ -91,7 +123,6 @@ class LLMRuntime(RuntimeInterface):
         
         response: LLMResponse = None
     
-        # 获取 moment state 并确保 _log_info 存在
         moment_state = context.shared.moment_state
         if '_log_info' not in moment_state or not isinstance(moment_state.get('_log_info'), list):
             moment_state['_log_info'] = []
@@ -99,13 +130,17 @@ class LLMRuntime(RuntimeInterface):
         try:
             response = await llm_service.request(**request_payload)
             
-            # 将诊断信息写入 moment._log_info 而不是 run_vars
+            # --- [核心修改] ---
+            # 优先使用从 response 中回传的、最准确的请求数据来记录日志。
+            # 如果 response 中没有（为了兼容旧的 provider），则回退到我们最初构建的 payload。
+            log_request_data = response.final_request_payload if response and response.final_request_payload else request_payload
+
             diagnostic_entry = {
                 "type": "llm_call",
                 "timestamp": datetime.now().isoformat(),
                 "node_id": node.id if node else 'unknown',
                 "data": {
-                    "request": request_payload,
+                    "request": log_request_data, # <-- 使用最准确的数据
                     "response": response.model_dump(mode='json') if response else None 
                 }
             }
@@ -116,13 +151,13 @@ class LLMRuntime(RuntimeInterface):
             return {"output": response.content, "usage": response.usage, "model_name": response.model_name}
         
         except LLMRequestFailedError as e:
-            # 在异常情况下也写入诊断信息
+            # 在硬性失败的情况下，我们没有 response 对象，只能记录原始的 request_payload。
             diagnostic_entry = {
                 "type": "llm_call",
                 "timestamp": datetime.now().isoformat(),
                 "node_id": node.id if node else 'unknown',
                 "data": {
-                    "request": request_payload,
+                    "request": request_payload, # <-- 在此场景下，这是我们能获取到的最准确信息
                     "response": {
                         "status": "ERROR",
                         "error_details": {

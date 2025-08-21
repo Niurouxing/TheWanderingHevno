@@ -6,15 +6,21 @@ export function SchemaField({ fieldKey, schema, value, onChange }) {
   const label = schema.title || fieldKey;
   const description = schema.description || null;
   const defaultValue = schema.default;
-  const currentValue = value ?? defaultValue;
+
+  // --- [核心修复 3/3] ---
+  // 判断一个字段是否为布尔类型的最终逻辑
+  const isBooleanField = 
+      schema.type === 'boolean' || 
+      (Array.isArray(schema.anyOf) && schema.anyOf.some(item => item.type === 'boolean'));
+
+  const currentValue = value ?? defaultValue ?? (isBooleanField ? false : '');
 
   const handleChange = (event) => {
     const { type, checked, value } = event.target;
     const finalValue = type === 'checkbox' ? checked : value;
     onChange(fieldKey, finalValue);
   };
-  
-  // 渲染下拉选择框 (for enums)
+
   if (schema.enum) {
     return (
       <FormControl fullWidth size="small" variant="outlined">
@@ -23,7 +29,6 @@ export function SchemaField({ fieldKey, schema, value, onChange }) {
           label={label}
           value={currentValue || ''}
           onChange={handleChange}
-          // helperText is not a prop for Select, description should be handled outside if needed
         >
           {schema.enum.map((option) => (
             <MenuItem key={option} value={option}>
@@ -31,13 +36,12 @@ export function SchemaField({ fieldKey, schema, value, onChange }) {
             </MenuItem>
           ))}
         </Select>
-        {/* We can add a FormHelperText component for description if needed */}
       </FormControl>
     );
   }
-
-  // 渲染开关 (for booleans)
-  if (schema.type === 'boolean') {
+  
+  // 使用我们上面定义的 isBooleanField 变量
+  if (isBooleanField) {
     return (
       <FormControlLabel
         control={
@@ -47,11 +51,11 @@ export function SchemaField({ fieldKey, schema, value, onChange }) {
           />
         }
         label={label}
+        title={description || ''}
       />
     );
   }
-  
-  // 渲染数字输入框
+
   if (schema.type === 'number' || schema.type === 'integer') {
     return (
         <TextField
@@ -66,9 +70,8 @@ export function SchemaField({ fieldKey, schema, value, onChange }) {
         />
     );
   }
-
+  
   // 默认渲染文本框 (for strings)
-  // 简单的启发式方法来决定是否使用多行文本框
   const isMultiline = schema.description?.toLowerCase().includes('json') || 
                       schema.description?.toLowerCase().includes('宏') ||
                       fieldKey.toLowerCase().includes('code') || 

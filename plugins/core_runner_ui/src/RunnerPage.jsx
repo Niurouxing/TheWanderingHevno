@@ -210,9 +210,28 @@ function CockpitContent({ services }) {
         return contributionService.getContributionsFor('cockpit.chrome_actions');
     }, [contributionService]);
 
+    // [核心修改] 重新计算 chromeActionsToRender 的逻辑
     const chromeActionsToRender = useMemo(() => {
-        return allChromeActions.filter(action => enabledPanelIds.includes(action.panelId));
-    }, [allChromeActions, enabledPanelIds]);
+        const isHtmlCanvasActive = activeBackgroundId === 'panel_interactive_html.canvas';
+        
+        return allChromeActions.filter(action => {
+            // 条件1: 如果 action 关联一个 panel, 检查该 panel 是否已启用
+            if (action.panelId) {
+                return enabledPanelIds.includes(action.panelId);
+            }
+            // 条件2: 如果是 HTML 配置按钮, 仅当 HTML 画布激活时显示
+            if (action.id === 'panel_interactive_html.config_button') {
+                return isHtmlCanvasActive;
+            }
+            // 默认对其他没有特定规则的 action 不显示 (或者可以返回 true 如果有其他通用按钮)
+            return false;
+        });
+    }, [allChromeActions, enabledPanelIds, activeBackgroundId]);
+
+    // [新增] 定义一个触发钩子的处理器
+    const handleTriggerHook = useCallback((hookName) => {
+        hookManager?.trigger(hookName);
+    }, [hookManager]);
 
     const chromeComponents = useMemo(() => {
         const contributions = contributionService.getContributionsFor('cockpit.chrome');
@@ -265,6 +284,7 @@ function CockpitContent({ services }) {
                     actions={chromeActionsToRender}
                     activePanelIds={visiblePanelIds}
                     onTogglePanel={handleTogglePanelVisibility}
+                    onTriggerHook={handleTriggerHook}
                 />
                 
                 <ManagementPanel

@@ -44,6 +44,14 @@ class LLMResponse(BaseModel):
     model_name: Optional[str] = None
     usage: Optional[Dict[str, int]] = None
     error_details: Optional[LLMError] = None
+    
+    # --- [核心修改] ---
+    # 添加一个字段来携带提供商在最后一刻构建的、完整的请求负载。
+    # 这使得日志记录可以100%忠实于实际的API调用。
+    final_request_payload: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="The final, complete request payload constructed by the provider just before the API call."
+    )
 
 
 # --- Custom Exception (公共契约) ---
