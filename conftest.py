@@ -9,6 +9,7 @@ from httpx import AsyncClient
 from httpx import ASGITransport 
 from fastapi.testclient import TestClient
 from asgi_lifespan import LifespanManager 
+from backend.app import create_app
 
 from tests.conftest_data import *
 

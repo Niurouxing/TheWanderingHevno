@@ -108,7 +108,8 @@ async def populate_llm_services(container: Container, hook_manager: HookManager)
 
         # a. 为每个 provider 创建并注册一个单例工厂
         factory = ProviderFactory(initial_config=config)
-        container.register(f"provider_factory_{provider_id}", lambda f=factory: f, singleton=True)
+        container.register(f"provider_factory_{provider_id}", lambda: factory, singleton=True)
+
 
         # b. 注册 provider 服务本身，但它不是单例！
         #    它的工厂函数从单例 ProviderFactory 中获取实例。
@@ -127,7 +128,7 @@ async def populate_llm_services(container: Container, hook_manager: HookManager)
             key_manager.register_provider(provider_id, config["keys_env_var"])
             logger.info(f"Dynamically registered custom provider '{provider_id}'.")
         except Exception as e:
-            logger.error(f"Failed to register custom provider '{provider_id}': {e}")
+            logger.error(f"Failed to register custom provider '{provider_id}': {e}", exc_info=True)
 
     logger.info(f"LLM Provider Registry populated. Providers: {provider_registry.get_all_provider_names()}")
 

@@ -40,7 +40,7 @@ class CustomProviderConfig(BaseModel):
     base_url: Optional[str] = Field(None, description="自定义提供商的基础URL (例如 'https://api.example.com')。")
     model_mapping: Optional[str] = Field(
         None, 
-        description="模型映射。格式为 'proxy_model_name:real_model_name,another:real' 或 JSON 字符串 '{"proxy":"real"}'。"
+        description="模型映射。格式为 'proxy_model_name:real_model_name,another:real' 或 JSON 字符串 '{\"proxy\":\"real\"}'。"
     )
 
 def _parse_provider_configs_from_env() -> Dict[str, Dict[str, Any]]:
