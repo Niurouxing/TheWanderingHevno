@@ -13,8 +13,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-# --- Enums and Data Classes for Key State Management ---
-
 class KeyStatus(str, Enum):
     """定义 API 密钥的健康状态。"""
     AVAILABLE = "available"
@@ -27,7 +25,7 @@ class KeyInfo:
     """存储单个 API 密钥及其状态信息。"""
     key_string: str
     status: KeyStatus = KeyStatus.AVAILABLE
-    rate_limit_until: float = 0.0  # Unix timestamp until which the key is rate-limited
+    rate_limit_until: float = 0.0
 
     def is_available(self) -> bool:
         """检查密钥当前是否可用。"""
@@ -41,10 +39,8 @@ class KeyInfo:
         return self.status == KeyStatus.AVAILABLE
 
 
-# --- Core Manager Components ---
-
 class CredentialManager:
-    """负责从环境变量中安全地加载和解析密钥。"""
+    """负责从环境变量加载和解析密钥。"""
 
     def load_keys_from_env(self, env_variable: str) -> List[str]:
         """从指定的环境变量中加载 API 密钥。"""
@@ -107,7 +103,7 @@ class ProviderKeyPool:
 
 
 class KeyPoolManager:
-    """顶层管理器，负责协调对 .env 文件的读写和内存状态。"""
+    """顶层管理器，负责协调 .env 的读写和内存状态。"""
     def __init__(self, credential_manager: CredentialManager):
         self._pools: Dict[str, ProviderKeyPool] = {}
         self._cred_manager = credential_manager
@@ -131,8 +127,6 @@ class KeyPoolManager:
             raise ValueError(f"Provider '{provider_name}' is not registered.")
         
         env_variable = self._provider_env_vars[provider_name]
-        
-        # 即使 .env 文件现在为空，这个调用也会确保 os.environ 反映最新状态
         load_dotenv(dotenv_path=self._dotenv_path, override=True)
         
         keys = self._cred_manager.load_keys_from_env(env_variable)
@@ -180,13 +174,9 @@ class KeyPoolManager:
             logger.warning(f"Key with suffix '...{key_suffix_to_remove}' not found for provider '{provider_name}'.")
             return
 
-        # --- 核心修复开始 ---
-        # 1. 在修改 .env 文件之前，从当前进程的 os.environ 中删除该变量
-        #    这样可以确保后续的 load_dotenv 不会受到旧值的影响
         if env_var in os.environ:
             del os.environ[env_var]
             logger.debug(f"Temporarily removed '{env_var}' from os.environ to ensure clean reload.")
-        # --- 核心修复结束 ---
 
         if not updated_keys:
             unset_key(self._dotenv_path, env_var)
@@ -220,7 +210,7 @@ class KeyPoolManager:
             await pool.mark_as_banned(key_string)
 
     def unregister_provider(self, provider_name: str):
-        """从管理器中注销一个提供商及其密钥池。"""
+        """注销提供商及其密钥池。"""
         if provider_name in self._pools:
             self._pools.pop(provider_name, None)
             self._provider_env_vars.pop(provider_name, None)
@@ -229,7 +219,6 @@ class KeyPoolManager:
             logger.warning(f"Attempted to unregister a non-existent provider from KeyPoolManager: '{provider_name}'.")
     
     def get_custom_provider_config(self) -> Dict[str, Any]:
-        """从 .env 文件读取自定义提供商的配置。"""
         load_dotenv(dotenv_path=self._dotenv_path, override=True)
         return {
             "base_url": os.getenv("OPENAI_CUSTOM_BASE_URL"),
@@ -237,8 +226,6 @@ class KeyPoolManager:
         }
 
     def set_custom_provider_config(self, base_url: Optional[str], model_mapping: Optional[str]):
-        """向 .env 文件写入自定义提供商的配置并重载所有密钥池。"""
-        # --- 核心修复：确保在写入前从 os.environ 中移除，防止旧值污染 ---
         if "OPENAI_CUSTOM_BASE_URL" in os.environ: 
             del os.environ["OPENAI_CUSTOM_BASE_URL"]
         if "OPENAI_CUSTOM_MODEL_MAPPING" in os.environ: 
@@ -258,7 +245,6 @@ class KeyPoolManager:
             unset_key(self._dotenv_path, "OPENAI_CUSTOM_MODEL_MAPPING")
             logger.info(f"Unset OPENAI_CUSTOM_MODEL_MAPPING from .env file.")
 
-        # 重新加载所有提供商的配置和密钥
         for provider_name in list(self._provider_env_vars.keys()):
             self.reload_keys(provider_name)
         logger.info("All provider pools have been reloaded after config change.")
