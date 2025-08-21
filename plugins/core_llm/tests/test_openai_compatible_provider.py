@@ -30,11 +30,11 @@ class TestOpenAICompatibleProviderUnit:
 
     def test_init_with_valid_url(self):
         provider = OpenAICompatibleProvider("https://api.openai.com")
-        assert provider.base_url == "https://api.openai.com/v1"
+        assert provider.base_url == "https://api.openai.com"
 
     def test_init_adds_v1_to_url(self):
         provider = OpenAICompatibleProvider("https://api.groq.com/openai")
-        assert provider.base_url == "https://api.groq.com/openai/v1"
+        assert provider.base_url == "https://api.groq.com/openai"
 
     def test_init_with_model_mapping(self):
         mapping = {"proxy-model": "real-model-name"}
@@ -57,7 +57,8 @@ class TestOpenAICompatibleProviderUnit:
         
         with patch.object(provider.http_client, 'post', new_callable=AsyncMock) as mock_post:
             mock_http_response = AsyncMock()
-            mock_http_response.json = AsyncMock(return_value=mock_response_data)
+            # [核心修复] 使用同步的 Mock 来模拟同步的 .json() 方法
+            mock_http_response.json = Mock(return_value=mock_response_data)
             mock_http_response.raise_for_status = Mock(return_value=None)
             mock_post.return_value = mock_http_response
             
@@ -86,7 +87,8 @@ class TestOpenAICompatibleProviderUnit:
 
         with patch.object(provider.http_client, 'post', new_callable=AsyncMock) as mock_post:
             mock_http_response = AsyncMock()
-            mock_http_response.json = AsyncMock(return_value=mock_response_data)
+            # [核心修复] 使用同步的 Mock 来模拟同步的 .json() 方法
+            mock_http_response.json = Mock(return_value=mock_response_data)
             mock_http_response.raise_for_status = Mock(return_value=None)
             mock_post.return_value = mock_http_response
 
@@ -134,7 +136,7 @@ class TestDynamicProviderIntegration:
         provider_instance = provider_registry.get("my_groq")
         assert provider_instance is not None
         assert isinstance(provider_instance, OpenAICompatibleProvider)
-        assert provider_instance.base_url == "https://api.groq.com/openai/v1"
+        assert provider_instance.base_url == "https://api.groq.com/openai"
         assert provider_instance.model_mapping == {"llama3": "real-llama-model"}
         
         key_manager: KeyPoolManager = container.resolve("key_pool_manager")
@@ -216,7 +218,7 @@ class TestLLMConfigAPI_E2E:
         #    应用的启动过程现在应该已经正确读取了 temp_env_file 的内容。
         initial_factory: ProviderFactory = container.resolve("provider_factory_reload_test")
         initial_provider: OpenAICompatibleProvider = initial_factory.get_provider()
-        assert initial_provider.base_url == "https://initial.api.com/v1"
+        assert initial_provider.base_url == "https://initial.api.com"
 
         # 3. 模拟外部变更：直接修改 .env 文件内容
         dotenv.set_key(str(temp_env_file), "PROVIDER_RELOAD_TEST_BASE_URL", "https://reloaded.api.com")
@@ -232,4 +234,4 @@ class TestLLMConfigAPI_E2E:
 
         reloaded_provider: OpenAICompatibleProvider = reloaded_factory.get_provider()
         assert reloaded_provider is not initial_provider, "The provider instance should have been recreated."
-        assert reloaded_provider.base_url == "https://reloaded.api.com/v1"
+        assert reloaded_provider.base_url == "https://reloaded.api.com"

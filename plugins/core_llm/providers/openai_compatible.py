@@ -20,10 +20,8 @@ class OpenAICompatibleProvider(LLMProvider):
     def __init__(self, base_url: str, model_mapping: Dict[str, str] = None):
         if not base_url:
             raise ValueError("OpenAICompatibleProvider requires a 'base_url'.")
-        # 确保 base_url 以 /v1 结尾，如果没有则添加
+        # 直接使用提供的 base_url，只移除末尾可能存在的斜杠
         self.base_url = base_url.rstrip('/')
-        if not self.base_url.endswith("/v1"):
-            self.base_url += "/v1"
         
         self.model_mapping = model_mapping or {}
         # 创建反向映射，用于从规范名称找到代理名称
@@ -77,21 +75,26 @@ class OpenAICompatibleProvider(LLMProvider):
             response = await self.http_client.post(endpoint, headers=headers, json=payload)
             response.raise_for_status()
             
-            data = await response.json()
+            data = response.json()
             
             first_choice = data.get("choices", [{}])[0]
             content = first_choice.get("message", {}).get("content")
             
-            if content is None:
-                content = ""
-
             usage_data = data.get("usage", {})
+    
+            # [核心修复] 创建一个新的字典，只包含值为整数的键值对，
+            # 以确保与 LLMResponse 模型的 `usage: Dict[str, int]` 契约兼容。
+            normalized_usage = {
+                key: value
+                for key, value in usage_data.items()
+                if isinstance(value, int)
+            }
             
             return LLMResponse(
                 status=LLMResponseStatus.SUCCESS,
                 content=content,
-                model_name=data.get("model", model_name), # 返回原始规范名称以保持一致
-                usage=usage_data,
+                model_name=data.get("model", model_name),
+                usage=normalized_usage, # <-- 使用净化后的、保证兼容的usage对象
                 final_request_payload=final_request_for_log
             )
 

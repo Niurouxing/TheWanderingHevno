@@ -97,8 +97,11 @@ class ProviderKeyPool:
         for key in self._keys:
             if key.key_string == key_string and key.status != KeyStatus.BANNED:
                 key.status = KeyStatus.BANNED
-                await self._semaphore.acquire()
-                logger.warning(f"Key for '{self.provider_name}' ending with '...{key_string[-4:]}' permanently banned. Concurrency reduced.")
+                # --- [核心修复] ---
+                # 移除对信号量的操作。信号量只应该在 acquire/release 周期中被管理。
+                # 密钥状态的改变已经足够让 acquire_key 逻辑跳过这个密钥。
+                # await self._semaphore.acquire() 
+                logger.warning(f"Key for '{self.provider_name}' ending with '...{key_string[-4:]}' permanently banned.")
                 break
 
 
@@ -174,9 +177,12 @@ class KeyPoolManager:
             logger.warning(f"Key with suffix '...{key_suffix_to_remove}' not found for provider '{provider_name}'.")
             return
 
-        if env_var in os.environ:
-            del os.environ[env_var]
-            logger.debug(f"Temporarily removed '{env_var}' from os.environ to ensure clean reload.")
+        # --- [核心修复] ---
+        # 移除对 os.environ 的直接操作。
+        # 让 load_dotenv(override=True) 在 reload_keys 中全权负责刷新。
+        # if env_var in os.environ:
+        #     del os.environ[env_var]
+        #     logger.debug(f"Temporarily removed '{env_var}' from os.environ to ensure clean reload.")
 
         if not updated_keys:
             unset_key(self._dotenv_path, env_var)
@@ -185,6 +191,7 @@ class KeyPoolManager:
             set_key(self._dotenv_path, env_var, ",".join(updated_keys))
             logger.info(f"Removed key ending in '...{key_suffix_to_remove}' from .env file.")
         
+        # reload_keys 将会负责从更新后的 .env 文件中读取正确的状态
         self.reload_keys(provider_name)
 
     def get_pool(self, provider_name: str) -> Optional[ProviderKeyPool]:
@@ -226,10 +233,12 @@ class KeyPoolManager:
         }
 
     def set_custom_provider_config(self, base_url: Optional[str], model_mapping: Optional[str]):
-        if "OPENAI_CUSTOM_BASE_URL" in os.environ: 
-            del os.environ["OPENAI_CUSTOM_BASE_URL"]
-        if "OPENAI_CUSTOM_MODEL_MAPPING" in os.environ: 
-            del os.environ["OPENAI_CUSTOM_MODEL_MAPPING"]
+        # --- [核心修复] ---
+        # 移除对 os.environ 的直接操作，让 load_dotenv(override=True) 在 reload_keys 中处理
+        # if "OPENAI_CUSTOM_BASE_URL" in os.environ: 
+        #     del os.environ["OPENAI_CUSTOM_BASE_URL"]
+        # if "OPENAI_CUSTOM_MODEL_MAPPING" in os.environ: 
+        #     del os.environ["OPENAI_CUSTOM_MODEL_MAPPING"]
 
         if base_url:
             set_key(self._dotenv_path, "OPENAI_CUSTOM_BASE_URL", base_url)
