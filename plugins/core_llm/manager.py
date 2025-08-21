@@ -248,3 +248,81 @@ class KeyPoolManager:
         for provider_name in list(self._provider_env_vars.keys()):
             self.reload_keys(provider_name)
         logger.info("All provider pools have been reloaded after config change.")
+
+    # --- [新增] ---
+    def add_provider_config(self, provider_id: str, config: Dict[str, Any]):
+        """
+        向 .env 文件添加一个全新的提供商配置。
+        这是一个原子性操作，如果失败则不应该留下部分配置。
+        """
+        # 1. 检查是否已在HEVNO_LLM_PROVIDERS中存在
+        current_providers_str = get_key(self._dotenv_path, "HEVNO_LLM_PROVIDERS") or ""
+        provider_ids = [p.strip() for p in current_providers_str.split(',') if p.strip()]
+        if provider_id in provider_ids:
+            raise ValueError(f"Provider with ID '{provider_id}' already exists in HEVNO_LLM_PROVIDERS.")
+
+        # 2. 检查是否已在内存中注册
+        if provider_id in self._provider_env_vars:
+            raise ValueError(f"Provider with ID '{provider_id}' already registered in memory.")
+
+        # 3. 更新 HEVNO_LLM_PROVIDERS 列表
+        provider_ids.append(provider_id)
+        
+        # 4. 准备所有要写入的 .env 键值对
+        prefix = f"PROVIDER_{provider_id.upper()}_"
+        keys_env_var = f"{prefix}API_KEYS" # 约定：密钥的环境变量名是自动生成的
+        
+        config_to_write = {
+            "HEVNO_LLM_PROVIDERS": ",".join(provider_ids),
+            f"{prefix}TYPE": config['type'],
+            f"{prefix}BASE_URL": config['base_url'],
+            f"{prefix}KEYS_ENV": keys_env_var,
+        }
+        # Model mapping 是可选的
+        if config.get('model_mapping'):
+            mapping_str = ",".join([f"{k}:{v}" for k, v in config['model_mapping'].items()])
+            config_to_write[f"{prefix}MODEL_MAPPING"] = mapping_str
+        
+        # 5. 执行写入
+        try:
+            for key, value in config_to_write.items():
+                set_key(self._dotenv_path, key, value)
+            # 还需要确保密钥变量存在，即使是空的
+            if not get_key(self._dotenv_path, keys_env_var):
+                set_key(self._dotenv_path, keys_env_var, "")
+
+            logger.info(f"Successfully wrote configuration for new provider '{provider_id}' to .env.")
+        except Exception as e:
+            # 简单的回滚尝试
+            for key in config_to_write:
+                unset_key(self._dotenv_path, key)
+            raise IOError(f"Failed to write provider config to .env: {e}") from e
+
+    # --- [新增] ---
+    def remove_provider_config(self, provider_id: str):
+        """从 .env 文件中移除一个提供商的所有相关配置。"""
+        if provider_id not in self._provider_env_vars:
+            raise ValueError(f"Provider '{provider_id}' not registered, cannot remove.")
+
+        # 1. 从 HEVNO_LLM_PROVIDERS 列表中移除
+        current_providers_str = get_key(self._dotenv_path, "HEVNO_LLM_PROVIDERS") or ""
+        provider_ids = [p.strip() for p in current_providers_str.split(',') if p.strip() and p != provider_id]
+        
+        if not provider_ids:
+            unset_key(self._dotenv_path, "HEVNO_LLM_PROVIDERS")
+        else:
+            set_key(self._dotenv_path, "HEVNO_LLM_PROVIDERS", ",".join(provider_ids))
+
+        # 2. 移除该提供商的所有特定变量
+        prefix = f"PROVIDER_{provider_id.upper()}_"
+        keys_to_remove = [
+            f"{prefix}TYPE",
+            f"{prefix}BASE_URL",
+            f"{prefix}KEYS_ENV",
+            f"{prefix}MODEL_MAPPING",
+            self._provider_env_vars[provider_id] # 删除密钥本身的环境变量
+        ]
+        for key in keys_to_remove:
+            unset_key(self._dotenv_path, key)
+        
+        logger.info(f"Successfully removed all .env configuration for provider '{provider_id}'.")

@@ -64,3 +64,29 @@ export async function deleteKey(providerName, keySuffix) {
     // DELETE请求成功时通常没有响应体，直接返回成功状态
     return { message: "Delete successful" };
 }
+
+
+export async function addProvider(providerConfig) {
+    const response = await fetch(`${BASE_URL}/providers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(providerConfig),
+    });
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({ detail: "Failed to create provider." }));
+        throw new Error(err.detail || `HTTP Error ${response.status}`);
+    }
+    return response.json();
+}
+
+
+export async function deleteProvider(providerId) {
+    const response = await fetch(`${BASE_URL}/providers/${providerId}`, {
+        method: 'DELETE',
+    });
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({ detail: "Failed to delete provider." }));
+        throw new Error(err.detail || `HTTP Error ${response.status}`);
+    }
+    return response.json();
+}

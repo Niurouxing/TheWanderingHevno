@@ -2,7 +2,7 @@
 
 import logging
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -36,6 +36,13 @@ class KeyConfigResponse(BaseModel):
 
 class AddKeyRequest(BaseModel):
     key: str = Field(..., min_length=10, description="要添加的完整 API 密钥。")
+
+# --- [新增] Pydantic 模型用于请求体验证 ---
+class ProviderConfigRequest(BaseModel):
+    id: str = Field(..., pattern=r"^[a-zA-Z0-9_]+$", description="提供商的唯一ID，只允许字母、数字和下划线。")
+    type: Literal["openai_compatible"] = Field(..., description="提供商的类型。")
+    base_url: str = Field(..., description="API的基础URL。")
+    model_mapping: Dict[str, str] = Field(default_factory=dict, description="模型别名映射。")
 
 # [新增] 为新的 /providers 端点定义响应模型
 class ProviderInfo(BaseModel):
@@ -124,6 +131,53 @@ async def reload_llm_configuration(
         return {"message": "LLM configuration reloaded successfully."}
     except Exception as e:
         logger.exception("Failed during LLM configuration hot reload.")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- [新增] 创建新提供商的端点 ---
+@config_api_router.post("/providers", status_code=201)
+async def create_provider(
+    request: ProviderConfigRequest,
+    key_manager: KeyPoolManager = Depends(Service("key_pool_manager")),
+    container: Container = Depends(Service("container"))
+):
+    """
+    创建一个新的自定义 LLM 提供商，并将其配置写入 .env 文件。
+    """
+    try:
+        # Pydantic 模型已经确保了 config 字典的结构正确
+        key_manager.add_provider_config(request.id, request.model_dump())
+        
+        # 写入成功后，触发一次热重载以使新提供商生效
+        await reload_llm_configuration(container)
+        
+        return {"message": f"Provider '{request.id}' created and reloaded successfully."}
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) # 409 Conflict for existing resource
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- [新增] 删除提供商的端点 ---
+@config_api_router.delete("/providers/{provider_id}", status_code=200)
+async def delete_provider(
+    provider_id: str,
+    key_manager: KeyPoolManager = Depends(Service("key_pool_manager")),
+    container: Container = Depends(Service("container"))
+):
+    """
+    从 .env 文件中删除一个自定义 LLM 提供商的所有配置。
+    """
+    # 添加一个保护，防止删除内置提供商
+    if provider_id in ["gemini", "mock"]:
+        raise HTTPException(status_code=403, detail=f"Cannot delete built-in provider '{provider_id}'.")
+    try:
+        key_manager.remove_provider_config(provider_id)
+        # 删除成功后，触发一次热重载以移除该提供商
+        await reload_llm_configuration(container)
+        return {"message": f"Provider '{provider_id}' removed and configuration reloaded."}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
