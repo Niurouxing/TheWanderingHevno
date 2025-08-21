@@ -98,8 +98,20 @@ export function ProviderEditDialog({ open, onClose, onSave, existingProviderIds 
                     <Typography gutterBottom>模型别名 (可选)</Typography>
                     {mappings.map((map, index) => (
                         <Box key={index} sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
-                            <TextField label="别名 (在图中使用)" size="small" value={map.alias} onChange={(e) => handleMappingChange(index, 'alias', e.target.value)} />
-                            <TextField label="映射到 (规范模型)" size="small" value={map.canonical} onChange={(e) => handleMappingChange(index, 'canonical', e.target.value)} />
+                            <TextField 
+                                label="提供商模型名称" 
+                                size="small" 
+                                value={map.alias} 
+                                onChange={(e) => handleMappingChange(index, 'alias', e.target.value)} 
+                                helperText="例如: llama3-70b-8192"
+                            />
+                            <TextField 
+                                label="映射模型名称" 
+                                size="small" 
+                                value={map.canonical} 
+                                onChange={(e) => handleMappingChange(index, 'canonical', e.target.value)}
+                                helperText="例如: meta/llama3-70b-instruct"
+                            />
                             <Tooltip title="移除此行">
                                 <span>
                                     <IconButton onClick={() => removeMappingRow(index)} disabled={mappings.length === 1}>

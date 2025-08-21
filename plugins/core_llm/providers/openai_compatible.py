@@ -41,7 +41,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self,
         *,
         messages: List[Dict[str, Any]],
-        model_name: str, # <-- 注意：这里传入的现在是不带前缀的, e.g., "gemini-1.5-pro"
+        model_name: str, # <-- 接收到的是完整的规范名称, e.g., "meta/llama3-70b-instruct"
         api_key: str,
         **kwargs: Any
     ) -> LLMResponse:
@@ -52,11 +52,18 @@ class OpenAICompatibleProvider(LLMProvider):
             "Content-Type": "application/json",
         }
         
-        # OpenAI 兼容提供商通常不需要 provider 前缀，所以这里的逻辑是正确的
-        model_name_for_request = self._reverse_model_mapping.get(model_name, model_name)
+        # 使用完整的规范名称 (model_name) 在反向映射中查找提供商特定的名称。
+        # 如果找不到，则说明没有为此模型配置别名，我们直接将规范名称的第二部分
+        # (例如 "llama3-70b-instruct") 作为后备。
+        provider_specific_model_name = self._reverse_model_mapping.get(model_name)
+        if not provider_specific_model_name:
+            # 后备逻辑：如果模型没有在 mapping 中明确指定，
+            # 则尝试使用规范名称的第二部分。
+            # 这使得用户可以添加一个 provider 而不必须为每个模型都创建别名。
+            provider_specific_model_name = model_name.split('/')[-1]
 
         payload = {
-            "model": model_name_for_request,
+            "model": provider_specific_model_name, # <-- 使用查找或后备的名称
             "messages": messages,
             "temperature": kwargs.get("temperature"),
             "max_tokens": kwargs.get("max_output_tokens"),
@@ -70,8 +77,6 @@ class OpenAICompatibleProvider(LLMProvider):
             response = await self.http_client.post(endpoint, headers=headers, json=payload)
             response.raise_for_status()
             
-            # 【BUG 修复 2/2】
-            # response.json() 是一个异步方法，必须 await
             data = await response.json()
             
             first_choice = data.get("choices", [{}])[0]
@@ -85,7 +90,7 @@ class OpenAICompatibleProvider(LLMProvider):
             return LLMResponse(
                 status=LLMResponseStatus.SUCCESS,
                 content=content,
-                model_name=data.get("model", model_name),
+                model_name=data.get("model", model_name), # 返回原始规范名称以保持一致
                 usage=usage_data,
                 final_request_payload=final_request_for_log
             )

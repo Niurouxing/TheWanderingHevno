@@ -36,13 +36,17 @@ class GeminiProvider(LLMProvider):
         self,
         *,
         messages: List[Dict[str, Any]],
-        model_name: str,
+        model_name: str, # <-- It receives the full "gemini/gemini-1.5-pro"
         api_key: str,
         **kwargs: Any
     ) -> LLMResponse:
         try:
             genai.configure(api_key=api_key)
             
+            # 如果模型名称包含'/'，则只取后半部分。
+            # 这使得 provider 对 LLMService 的实现细节更具弹性。
+            actual_model_name = model_name.split('/')[-1]
+
             system_instruction = None
             provider_messages = []
             
@@ -76,10 +80,9 @@ class GeminiProvider(LLMProvider):
                     thinking_budget=thinking_config_dict.get('thinking_budget')
                 )
 
-            # --- [核心修改 1/3] ---
             # 构建一个用于日志记录的、包含所有最终参数的字典。
             final_request_for_log = {
-                "model_name": model_name,
+                "model_name": actual_model_name, # Log the name we actually use
                 "system_instruction": system_instruction.strip() if system_instruction else None,
                 "messages": provider_messages,
                 "generation_config": generation_config_params,
@@ -89,7 +92,7 @@ class GeminiProvider(LLMProvider):
 
             # --- 在实例化模型时传入安全设置 ---
             model = genai.GenerativeModel(
-                model_name,
+                actual_model_name, # <-- 使用处理过的名称
                 system_instruction=system_instruction.strip() if system_instruction else None,
                 safety_settings=FIXED_SAFETY_SETTINGS
             )
@@ -104,7 +107,6 @@ class GeminiProvider(LLMProvider):
                 if response.prompt_feedback.block_reason:
                     error_message = f"Request blocked due to {response.prompt_feedback.block_reason.name}"
                     error = LLMError(error_type=LLMErrorType.INVALID_REQUEST_ERROR, message=error_message, is_retryable=False)
-                    # --- [核心修改 2/3] ---
                     # 在返回错误响应时，也附上最终请求。
                     return LLMResponse(status=LLMResponseStatus.FILTERED, model_name=model_name, error_details=error, final_request_payload=final_request_for_log)
                 else:

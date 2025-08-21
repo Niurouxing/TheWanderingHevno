@@ -170,7 +170,7 @@ class LLMService(LLMServiceInterface):
     async def _attempt_request_with_key(
         self,
         provider_name: str,
-        model_name: str,
+        model_name: str, # model_name is the full canonical name, e.g., "gemini/gemini-1.5-pro"
         messages: List[Dict[str, Any]],
         key_info: Optional[KeyInfo],
         **kwargs
@@ -181,14 +181,15 @@ class LLMService(LLMServiceInterface):
         provider = self.provider_registry.get(provider_name)
         api_key_str = key_info.key_string if key_info else ""
         
-        # 【BUG 修复 1/2】
-        # 总是解析出不带前缀的模型名称，并将其传递给 provider.generate
-        _, actual_model_name = self._parse_model_name(model_name)
+        # --- [核心修复] ---
+        # 移除这行错误的代码。provider.generate 需要完整的规范名称来进行正确的模型映射。
+        # _, actual_model_name = self._parse_model_name(model_name)
 
         try:
+            # 直接将完整的 model_name 传递下去
             response = await provider.generate(
                 messages=messages, 
-                model_name=actual_model_name, # <-- 使用修正后的变量
+                model_name=model_name, # <-- 使用完整的规范名称
                 api_key=api_key_str, 
                 **kwargs
             )
