@@ -13,6 +13,8 @@ from .manager import KeyPoolManager, KeyInfo, ProviderKeyPool
 from .factory import ProviderFactory
 from .registry import ProviderRegistry
 from .utils import parse_provider_configs_from_env
+# [新增] 导入 LLMProvider 基类以进行类型提示
+from .providers.base import LLMProvider
 
 
 logger = logging.getLogger(__name__)
@@ -35,12 +37,37 @@ class KeyConfigResponse(BaseModel):
 class AddKeyRequest(BaseModel):
     key: str = Field(..., min_length=10, description="要添加的完整 API 密钥。")
 
-class CustomProviderConfig(BaseModel):
-    base_url: Optional[str] = Field(None, description="自定义提供商的基础URL。")
-    model_mapping: Optional[str] = Field(
-        None,
-        description="模型映射，格式 'proxy:real,another:real' 或 JSON 字符串。"
-    )
+# [新增] 为新的 /providers 端点定义响应模型
+class ProviderInfo(BaseModel):
+    id: str
+    type: str # 'gemini', 'mock', 'openai_compatible' 等
+    model_mapping: Dict[str, str] = Field(default_factory=dict)
+    
+class ProvidersListResponse(BaseModel):
+    providers: List[ProviderInfo]
+
+
+# --- API 端点 ---
+
+# 端点：获取所有已注册的提供商信息
+@config_api_router.get("/providers", response_model=ProvidersListResponse)
+async def list_registered_providers(
+    provider_registry: ProviderRegistry = Depends(Service("provider_registry"))
+):
+    """
+    获取后端当前已注册的所有 LLM 提供商的列表及其元数据。
+    """
+    provider_infos = []
+    for provider_id in provider_registry.get_all_provider_names():
+        provider_instance: LLMProvider = provider_registry.get(provider_id)
+        if provider_instance:
+            provider_infos.append(ProviderInfo(
+                id=provider_id,
+                type=provider_instance.__class__.__name__, # e.g., "GeminiProvider"
+                # 假设所有 provider 都有 model_mapping 属性，没有则为空字典
+                model_mapping=getattr(provider_instance, 'model_mapping', {})
+            ))
+    return ProvidersListResponse(providers=provider_infos)
 
 
 @config_api_router.post("/reload", status_code=200)
@@ -100,25 +127,35 @@ async def reload_llm_configuration(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@config_api_router.get("/custom_provider", response_model=CustomProviderConfig)
-async def get_custom_provider_configuration(
-    key_manager: KeyPoolManager = Depends(Service("key_pool_manager"))
-):
-    config = key_manager.get_custom_provider_config()
-    return CustomProviderConfig(**config)
 
-@config_api_router.put("/custom_provider", status_code=200)
-async def update_custom_provider_configuration(
-    request: CustomProviderConfig,
+# [新增] 添加和删除密钥的API端点
+@config_api_router.post("/{provider_name}/keys", status_code=201)
+async def add_api_key(
+    provider_name: str,
+    request: AddKeyRequest,
     key_manager: KeyPoolManager = Depends(Service("key_pool_manager"))
 ):
-    """更新自定义提供商配置并触发密钥池重载。"""
     try:
-        key_manager.set_custom_provider_config(request.base_url, request.model_mapping)
-        return {"message": "Custom provider configuration updated. The application will use the new settings on subsequent reloads."}
+        key_manager.add_key_to_provider(provider_name, request.key)
+        return {"message": f"Key successfully added to provider '{provider_name}' and .env file updated."}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.exception("Failed to update custom provider config.")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to add key: {e}")
+
+@config_api_router.delete("/{provider_name}/keys/{key_suffix}", status_code=200)
+async def delete_api_key(
+    provider_name: str,
+    key_suffix: str,
+    key_manager: KeyPoolManager = Depends(Service("key_pool_manager"))
+):
+    try:
+        key_manager.remove_key_from_provider(provider_name, key_suffix)
+        return {"message": f"Key ending in '...{key_suffix}' for provider '{provider_name}' removed from .env file."}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to remove key: {e}")
 
 
 def get_key_pool(

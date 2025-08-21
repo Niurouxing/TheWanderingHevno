@@ -2,9 +2,9 @@
 import React from 'react';
 import { Box, Typography } from '@mui/material';
 import { SchemaField } from '../components/SchemaField';
-// [恢复] 重新导入我们现有的高级编辑器
 import { CodexInvokeEditor } from './CodexInvokeEditor.jsx';
 import { LlmContentsEditor } from './LlmContentsEditor.jsx';
+import { LlmModelEditor } from './LlmModelEditor.jsx';
 
 //接收新的 runtimeType prop
 export function RuntimeConfigForm({ runtimeType, schema, config, onConfigChange }) {
@@ -46,7 +46,19 @@ export function RuntimeConfigForm({ runtimeType, schema, config, onConfigChange 
           );
         }
 
-        // --- 特殊情况 2: codex.invoke 的 'from' 字段 ---
+        // --- [新增] 特殊情况 2: llm.default 的 'model' 字段 ---
+        if (runtimeType === 'llm.default' && key === 'model') {
+            return (
+                <LlmModelEditor
+                    key={key}
+                    value={config.model}
+                    onChange={(newValue) => handleChange('model', newValue)}
+                    schema={propSchema}
+                />
+            );
+        }
+
+        // --- 特殊情况 3: codex.invoke 的 'from' 字段 ---
         if (runtimeType === 'codex.invoke' && key === 'from') {
           return (
             <CodexInvokeEditor

@@ -10,7 +10,8 @@ import { CodexEditor } from './editors/CodexEditor';
 import { GraphEditor } from './editors/GraphEditor';
 import { MemoriaEditor } from './editors/MemoriaEditor';
 import { query, mutate, applyDefinition } from './utils/api';
-import { loadSchemas } from './utils/schemaManager';
+// [修改] 导入新的 schemaManager 函数
+import { loadSchemas, loadLlmProviders } from './utils/schemaManager';
 import { GenericEditorDialog } from './editors/GenericEditorDialog';
 import { AddItemDialog } from './editors/AddItemDialog';
 // ---导入新的 Rename 对话框 ---
@@ -58,12 +59,13 @@ export function SandboxEditorPage({ services }) {
         setError('');
         
         try {
-            console.log("开始并行加载沙盒数据和UI Schemas...");
+            console.log("开始并行加载沙盒数据、UI Schemas 和 LLM 提供商...");
             await Promise.all([
                 loadSandboxData(),
-                loadSchemas()
+                loadSchemas(),
+                loadLlmProviders() // [新增] 调用新的加载函数
             ]);
-            console.log("沙盒数据和UI Schemas均已加载完毕。");
+            console.log("沙盒数据、UI Schemas 和 LLM 提供商均已加载完毕。");
         } catch (e) {
             setError(e.message);
             console.error("加载编辑器所需数据时出错:", e);
