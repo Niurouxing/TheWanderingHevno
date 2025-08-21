@@ -41,6 +41,7 @@ class TestOpenAICompatibleProviderUnit:
         provider = OpenAICompatibleProvider("https://api.example.com", mapping)
         assert provider.model_mapping == mapping
         assert provider.get_underlying_model("proxy-model") == "real-model-name"
+        assert provider._reverse_model_mapping == {"real-model-name": "proxy-model"}
 
     def test_init_without_base_url_raises_error(self):
         with pytest.raises(ValueError, match="requires a 'base_url'"):
@@ -69,6 +70,38 @@ class TestOpenAICompatibleProviderUnit:
             assert result.content == "Hello, world!"
             assert result.final_request_payload is not None
             assert result.final_request_payload["payload"]["temperature"] == 0.5
+
+    @pytest.mark.asyncio
+    async def test_generate_uses_reverse_model_mapping(self):
+        """
+        测试 `generate` 方法是否正确使用反向模型映射来发送代理模型名称。
+        """
+        model_mapping = {"my-gemini-proxy": "gemini/gemini-1.5-pro"}
+        provider = OpenAICompatibleProvider("https://api.proxy.com", model_mapping)
+        
+        mock_response_data = {
+            "choices": [{"message": {"content": "Response from proxy"}}],
+            "model": "my-gemini-proxy", "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+        }
+
+        with patch.object(provider.http_client, 'post', new_callable=AsyncMock) as mock_post:
+            mock_http_response = AsyncMock()
+            mock_http_response.json = AsyncMock(return_value=mock_response_data)
+            mock_http_response.raise_for_status = Mock(return_value=None)
+            mock_post.return_value = mock_http_response
+
+            # 调用 generate 时使用规范名称
+            await provider.generate(
+                messages=[{"role": "user", "content": "Hi"}],
+                model_name="gemini/gemini-1.5-pro", # <-- Canonical name
+                api_key="proxy-key"
+            )
+
+            # 验证发送到代理的请求中，模型名称是代理名称
+            mock_post.assert_called_once()
+            called_args, called_kwargs = mock_post.call_args
+            request_payload = called_kwargs.get("json", {})
+            assert request_payload.get("model") == "my-gemini-proxy" # <-- Assert it's the proxy name
 
     def test_translate_error_network_error(self):
         provider = OpenAICompatibleProvider("https://api.example.com")

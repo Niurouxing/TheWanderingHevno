@@ -130,6 +130,10 @@ async def populate_llm_services(container: Container, hook_manager: HookManager)
         except Exception as e:
             logger.error(f"Failed to register custom provider '{provider_id}': {e}", exc_info=True)
 
+    # --- 【核心修改】 ---
+    # 3. 在所有提供商都注册完毕后，构建能力图谱
+    provider_registry.build_capability_map()
+
     logger.info(f"LLM Provider Registry populated. Providers: {provider_registry.get_all_provider_names()}")
 
 

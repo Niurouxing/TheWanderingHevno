@@ -24,18 +24,24 @@ class OpenAICompatibleProvider(LLMProvider):
         self.base_url = base_url.rstrip('/')
         if not self.base_url.endswith("/v1"):
             self.base_url += "/v1"
+        
         self.model_mapping = model_mapping or {}
+        # 创建反向映射，用于从规范名称找到代理名称
+        # 格式: { "gemini/gemini-1.5-pro": "my-gemini-proxy-name", ... }
+        self._reverse_model_mapping = {v: k for k, v in self.model_mapping.items()}
+        
         self.http_client = httpx.AsyncClient(timeout=120.0)
 
     def get_underlying_model(self, model_name: str) -> Optional[str]:
         """根据配置的映射返回模型的"真实"身份。"""
+        # model_name 在这里是代理名称 (e.g., 'chat_model_pro')
         return self.model_mapping.get(model_name)
 
     async def generate(
         self,
         *,
         messages: List[Dict[str, Any]],
-        model_name: str,
+        model_name: str, # <-- 注意：这里传入的现在是不带前缀的, e.g., "gemini-1.5-pro"
         api_key: str,
         **kwargs: Any
     ) -> LLMResponse:
@@ -45,16 +51,17 @@ class OpenAICompatibleProvider(LLMProvider):
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+        
+        # OpenAI 兼容提供商通常不需要 provider 前缀，所以这里的逻辑是正确的
+        model_name_for_request = self._reverse_model_mapping.get(model_name, model_name)
 
-        # 构造请求体
         payload = {
-            "model": model_name,
+            "model": model_name_for_request,
             "messages": messages,
             "temperature": kwargs.get("temperature"),
             "max_tokens": kwargs.get("max_output_tokens"),
             "top_p": kwargs.get("top_p"),
         }
-        # 移除值为 None 的参数
         payload = {k: v for k, v in payload.items() if v is not None}
         
         final_request_for_log = {"endpoint": endpoint, "payload": payload}
@@ -63,14 +70,15 @@ class OpenAICompatibleProvider(LLMProvider):
             response = await self.http_client.post(endpoint, headers=headers, json=payload)
             response.raise_for_status()
             
+            # 【BUG 修复 2/2】
+            # response.json() 是一个异步方法，必须 await
             data = await response.json()
             
             first_choice = data.get("choices", [{}])[0]
             content = first_choice.get("message", {}).get("content")
             
-            # 处理流式响应或工具调用等情况（简化处理）
             if content is None:
-                content = "" # 确保总是有字符串返回
+                content = ""
 
             usage_data = data.get("usage", {})
             
@@ -83,7 +91,6 @@ class OpenAICompatibleProvider(LLMProvider):
             )
 
         except httpx.HTTPStatusError as e:
-            # 对于HTTP错误，我们在这里将其转换为LLMError并封装，而不是抛出
             error = self.translate_error(e)
             return LLMResponse(
                 status=LLMResponseStatus.ERROR,
@@ -92,7 +99,6 @@ class OpenAICompatibleProvider(LLMProvider):
                 final_request_payload=final_request_for_log
             )
         except Exception as e:
-            # 对于其他网络错误等，让上层捕获并翻译
             raise e
 
     def translate_error(self, ex: Exception) -> LLMError:
@@ -103,7 +109,7 @@ class OpenAICompatibleProvider(LLMProvider):
             if status_code == 401:
                 return LLMError(error_type=LLMErrorType.AUTHENTICATION_ERROR, message="Invalid API key provided.", is_retryable=False, provider_details=error_details)
             if status_code == 429:
-                return LLMError(error_type=LLMErrorType.RATE_LIMIT_ERROR, message="Rate limit exceeded.", is_retryable=False, provider_details=error_details)
+                return LLMError(error_type=LLMErrorType.RATE_LIMIT_ERROR, message="Rate limit exceeded.", is_retryable=True, provider_details=error_details)
             if 400 <= status_code < 500:
                 return LLMError(error_type=LLMErrorType.INVALID_REQUEST_ERROR, message=f"Client error: {ex.response.text}", is_retryable=False, provider_details=error_details)
             if 500 <= status_code < 600:

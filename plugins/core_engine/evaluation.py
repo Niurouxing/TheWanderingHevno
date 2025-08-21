@@ -39,7 +39,7 @@ def build_evaluation_context(
     """
     context = {
         **PRE_IMPORTED_MODULES,
-        # 【新】注入三层作用域，并用 DotAccessibleDict 包装以支持点符号访问
+        # 注入三层作用域，并用 DotAccessibleDict 包装以支持点符号访问
         "definition": DotAccessibleDict(exec_context.shared.definition_state),
         "lore": DotAccessibleDict(exec_context.shared.lore_state),
         "moment": DotAccessibleDict(exec_context.shared.moment_state),
