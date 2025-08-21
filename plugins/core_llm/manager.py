@@ -258,6 +258,35 @@ class KeyPoolManager:
             self.reload_keys(provider_name)
         logger.info("All provider pools have been reloaded after config change.")
 
+    # --- [新增] 更新提供商配置的方法 ---
+    def update_provider_config(self, provider_id: str, new_config: Dict[str, Any]):
+        """
+        更新 .env 文件中一个现有提供商的配置。
+        """
+        if provider_id not in self._provider_env_vars:
+            raise ValueError(f"Provider '{provider_id}' not registered, cannot update.")
+
+        prefix = f"PROVIDER_{provider_id.upper()}_"
+        
+        try:
+            # 更新 Base URL 和 Type (尽管 Type 目前是固定的)
+            set_key(self._dotenv_path, f"{prefix}TYPE", new_config['type'])
+            set_key(self._dotenv_path, f"{prefix}BASE_URL", new_config['base_url'])
+
+            # 更新 Model Mapping
+            model_mapping_key = f"{prefix}MODEL_MAPPING"
+            if new_config.get('model_mapping'):
+                mapping_str = ",".join([f"{k}:{v}" for k, v in new_config['model_mapping'].items()])
+                set_key(self._dotenv_path, model_mapping_key, mapping_str)
+            else:
+                # 如果新配置中没有 mapping，则从 .env 中移除该变量
+                unset_key(self._dotenv_path, model_mapping_key)
+            
+            logger.info(f"Successfully updated configuration for provider '{provider_id}' in .env.")
+
+        except Exception as e:
+            raise IOError(f"Failed to write updated provider config to .env for '{provider_id}': {e}") from e
+
     # --- [新增] ---
     def add_provider_config(self, provider_id: str, config: Dict[str, Any]):
         """

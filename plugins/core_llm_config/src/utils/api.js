@@ -66,14 +66,31 @@ export async function deleteKey(providerName, keySuffix) {
 }
 
 
+// [修改] 为 addProvider 调整 payload
 export async function addProvider(providerConfig) {
-    const response = await fetch(`${BASE_URL}/providers`, {
+    const { id, ...payload } = providerConfig;
+    const response = await fetch(`${BASE_URL}/providers?id=${id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(providerConfig),
+        body: JSON.stringify(payload),
     });
     if (!response.ok) {
         const err = await response.json().catch(() => ({ detail: "Failed to create provider." }));
+        throw new Error(err.detail || `HTTP Error ${response.status}`);
+    }
+    return response.json();
+}
+
+// --- [新增] 更新提供商的 API 函数 ---
+export async function updateProvider(providerId, providerConfig) {
+    const { id, ...payload } = providerConfig; // 从 payload 中移除 id
+    const response = await fetch(`${BASE_URL}/providers/${providerId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({ detail: "Failed to update provider." }));
         throw new Error(err.detail || `HTTP Error ${response.status}`);
     }
     return response.json();

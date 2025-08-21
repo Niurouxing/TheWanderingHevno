@@ -10,8 +10,7 @@ import SyncIcon from '@mui/icons-material/Sync';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever'; // For deleting a provider
 import { KeyStatusTable } from './components/KeyStatusTable';
 import { ProviderDetails } from './components/ProviderDetails';
-// [修改] 导入所有 API 和新对话框
-import { fetchProviders, reloadConfig, fetchKeyConfig, addKey, deleteKey, addProvider, deleteProvider } from './utils/api';
+import { fetchProviders, reloadConfig, fetchKeyConfig, addKey, deleteKey, addProvider, deleteProvider, updateProvider } from './utils/api';
 import { ProviderEditDialog } from './components/ProviderEditDialog';
 
 export function LLMConfigPage({ services }) {
@@ -22,6 +21,9 @@ export function LLMConfigPage({ services }) {
     const [error, setError] = useState('');
     const [newKey, setNewKey] = useState('');
     const [isDialogOpen, setIsDialogOpen] = useState(false); // [新增] 对话框状态
+    
+    // --- [新增] 对话框与编辑状态管理 ---
+    const [providerToEdit, setProviderToEdit] = useState(null);
 
     const confirmationService = services?.get('confirmationService');
     const selectedProviderDetails = providers.find(p => p.id === selectedProvider);
@@ -123,21 +125,44 @@ export function LLMConfigPage({ services }) {
         }
     };
 
-    // --- [新增] 处理添加提供商的逻辑 ---
+    // --- [新增] 打开编辑对话框的处理器 ---
+    const handleOpenEditDialog = (provider) => {
+        setProviderToEdit(provider);
+        setIsDialogOpen(true);
+    };
+
+    // --- [新增] 打开新增对话框的处理器 ---
+    const handleOpenAddDialog = () => {
+        setProviderToEdit(null); // 传入 null 表示是新增模式
+        setIsDialogOpen(true);
+    };
+
+    // --- [修改] 保存处理器，现在能处理新增和更新 ---
     const handleSaveProvider = async (providerConfig) => {
         setLoading(prev => ({ ...prev, action: true }));
         setError('');
         try {
-            await addProvider(providerConfig);
+            if (providerToEdit && providerToEdit.id) {
+                // 更新模式
+                await updateProvider(providerToEdit.id, providerConfig);
+            } else {
+                // 新增模式
+                await addProvider(providerConfig);
+            }
             setIsDialogOpen(false);
-            await loadProviders(); // 重新加载列表
+            setProviderToEdit(null);
+            // 重新加载列表，并选中刚刚编辑或添加的提供商
+            await loadProviders();
+            setSelectedProvider(providerConfig.id);
+
         } catch (e) {
-            setError(`创建提供商失败: ${e.message}`);
+            // 不关闭对话框，让用户看到错误
+            setError(`保存提供商失败: ${e.message}`);
         } finally {
             setLoading(prev => ({ ...prev, action: false }));
         }
     };
-
+    
     // --- [新增] 处理删除提供商的逻辑 ---
     const handleDeleteProvider = async (providerId) => {
         if (!confirmationService) return;
@@ -171,11 +196,11 @@ export function LLMConfigPage({ services }) {
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
                 <Typography variant="h4" component="div">LLM 提供商配置</Typography>
                 <Box sx={{display: 'flex', gap: 1}}>
-                    {/* --- [新增] 添加提供商按钮 --- */}
                     <Button
                         variant="contained"
                         startIcon={<AddIcon />}
-                        onClick={() => setIsDialogOpen(true)}
+                        // [修改] 调用新的处理器
+                        onClick={handleOpenAddDialog}
                         disabled={isActionInProgress}
                     >
                         添加提供商
@@ -214,7 +239,8 @@ export function LLMConfigPage({ services }) {
                 {selectedProvider && selectedProviderDetails ? (
                     <>
                         <Box sx={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start'}}>
-                             <ProviderDetails provider={selectedProviderDetails} />
+                             {/* [修改] 传入 onEdit 处理器 */}
+                             <ProviderDetails provider={selectedProviderDetails} onEdit={() => handleOpenEditDialog(selectedProviderDetails)} />
                              {/* --- [新增] 删除提供商按钮 --- */}
                              {!["gemini"].includes(selectedProviderDetails.id) && (
                                 <Tooltip title={`删除提供商 '${selectedProviderDetails.id}'`}>
@@ -242,12 +268,13 @@ export function LLMConfigPage({ services }) {
                 )}
             </Paper>
 
-            {/* --- [新增] 渲染对话框 --- */}
+            {/* [修改] 渲染对话框并传入正确的 props */}
             <ProviderEditDialog
                 open={isDialogOpen}
                 onClose={() => setIsDialogOpen(false)}
                 onSave={handleSaveProvider}
                 existingProviderIds={providers.map(p => p.id)}
+                providerToEdit={providerToEdit}
             />
         </Box>
     );

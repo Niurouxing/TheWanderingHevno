@@ -5,7 +5,7 @@ import os
 from typing import List, Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.core.dependencies import Service
 from backend.core.contracts import Container
@@ -37,9 +37,14 @@ class KeyConfigResponse(BaseModel):
 class AddKeyRequest(BaseModel):
     key: str = Field(..., min_length=10, description="要添加的完整 API 密钥。")
 
-# --- [新增] Pydantic 模型用于请求体验证 ---
+# --- [修改] 分离创建和更新请求的模型 ---
 class ProviderConfigRequest(BaseModel):
     id: str = Field(..., pattern=r"^[a-zA-Z0-9_]+$", description="提供商的唯一ID，只允许字母、数字和下划线。")
+    type: Literal["openai_compatible"] = Field(..., description="提供商的类型。")
+    base_url: str = Field(..., description="API的基础URL。")
+    model_mapping: Dict[str, str] = Field(default_factory=dict, description="模型别名映射。")
+
+class ProviderConfigPayload(BaseModel):
     type: Literal["openai_compatible"] = Field(..., description="提供商的类型。")
     base_url: str = Field(..., description="API的基础URL。")
     model_mapping: Dict[str, str] = Field(default_factory=dict, description="模型别名映射。")
@@ -48,6 +53,7 @@ class ProviderConfigRequest(BaseModel):
 class ProviderInfo(BaseModel):
     id: str
     type: str # 'gemini', 'mock', 'openai_compatible' 等
+    base_url: Optional[str] = None # 只有自定义提供商才有base_url
     model_mapping: Dict[str, str] = Field(default_factory=dict)
     
 class ProvidersListResponse(BaseModel):
@@ -65,12 +71,21 @@ async def list_registered_providers(
     获取后端当前已注册的所有 LLM 提供商的列表及其元数据。
     """
     provider_infos = []
+    # 获取自定义提供商的配置信息
+    custom_configs = parse_provider_configs_from_env()
+    
     for provider_id in provider_registry.get_all_provider_names():
         provider_instance: LLMProvider = provider_registry.get(provider_id)
         if provider_instance:
+            # 获取自定义提供商的详细配置
+            base_url = None
+            if provider_id in custom_configs:
+                base_url = custom_configs[provider_id].get('base_url')
+            
             provider_infos.append(ProviderInfo(
                 id=provider_id,
                 type=provider_instance.__class__.__name__, # e.g., "GeminiProvider"
+                base_url=base_url,
                 # 假设所有 provider 都有 model_mapping 属性，没有则为空字典
                 model_mapping=getattr(provider_instance, 'model_mapping', {})
             ))
@@ -134,10 +149,11 @@ async def reload_llm_configuration(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# --- [新增] 创建新提供商的端点 ---
+# --- [修改] 创建提供商端点，使用查询参数传递id ---
 @config_api_router.post("/providers", status_code=201)
 async def create_provider(
-    request: ProviderConfigRequest,
+    request_body: ProviderConfigPayload,
+    id: str = Query(..., regex=r"^[a-zA-Z0-9_]+$", description="提供商的唯一ID"),
     key_manager: KeyPoolManager = Depends(Service("key_pool_manager")),
     container: Container = Depends(Service("container"))
 ):
@@ -145,17 +161,46 @@ async def create_provider(
     创建一个新的自定义 LLM 提供商，并将其配置写入 .env 文件。
     """
     try:
-        # Pydantic 模型已经确保了 config 字典的结构正确
-        key_manager.add_provider_config(request.id, request.model_dump())
+        # 将 id 和请求体合并成完整的配置
+        full_config = request_body.model_dump()
+        key_manager.add_provider_config(id, full_config)
         
         # 写入成功后，触发一次热重载以使新提供商生效
         await reload_llm_configuration(container)
         
-        return {"message": f"Provider '{request.id}' created and reloaded successfully."}
+        return {"message": f"Provider '{id}' created and reloaded successfully."}
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e)) # 409 Conflict for existing resource
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# --- [新增] 更新提供商的端点 ---
+@config_api_router.put("/providers/{provider_id}", status_code=200)
+async def update_provider(
+    provider_id: str,
+    request: ProviderConfigPayload, # 使用不含 id 的 Pydantic 模型
+    key_manager: KeyPoolManager = Depends(Service("key_pool_manager")),
+    container: Container = Depends(Service("container"))
+):
+    """
+    更新一个现有的自定义 LLM 提供商在 .env 文件中的配置。
+    """
+    if provider_id in ["gemini", "mock"]:
+        raise HTTPException(status_code=403, detail=f"Cannot modify built-in provider '{provider_id}'.")
+    
+    try:
+        # 调用 KeyPoolManager 中的新方法来处理 .env 文件的更新
+        key_manager.update_provider_config(provider_id, request.model_dump())
+        
+        # 更新成功后，触发热重载以使更改生效
+        await reload_llm_configuration(container)
+        
+        return {"message": f"Provider '{provider_id}' updated and reloaded successfully."}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) # 404 Not Found
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # --- [新增] 删除提供商的端点 ---
 @config_api_router.delete("/providers/{provider_id}", status_code=200)

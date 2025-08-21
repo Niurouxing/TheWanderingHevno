@@ -1,17 +1,31 @@
 // plugins/core_llm_config/src/components/ProviderDetails.jsx
 
 import React from 'react';
-import { Box, Typography, Chip } from '@mui/material';
+import { Box, Typography, Chip, IconButton, Tooltip } from '@mui/material';
+// [新增] 导入编辑图标
+import EditIcon from '@mui/icons-material/Edit';
 
-export function ProviderDetails({ provider }) {
+// [修改] 添加 onEdit 回调函数
+export function ProviderDetails({ provider, onEdit }) {
     if (!provider) return null;
 
     return (
         <Box>
-            <Typography variant="h6" gutterBottom>
-                提供商详情: {provider.id}
-            </Typography>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="h6" component="div">
+                    提供商详情: {provider.id}
+                </Typography>
+                {/* [新增] 编辑按钮 */}
+                {!['gemini', 'mock'].includes(provider.id) && (
+                    <Tooltip title="编辑此提供商">
+                        <IconButton onClick={onEdit} size="small">
+                            <EditIcon fontSize="small" />
+                        </IconButton>
+                    </Tooltip>
+                )}
+            </Box>
+            
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mt: 1 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     <Typography variant="body2" color="text.secondary">类型:</Typography>
                     <Chip size="small" label={provider.type} />
