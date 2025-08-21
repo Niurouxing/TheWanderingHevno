@@ -5,9 +5,8 @@ import {
     Select, MenuItem, FormControl, InputLabel, Tooltip, IconButton
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
-import RefreshIcon from '@mui/icons-material/Refresh';
 import SyncIcon from '@mui/icons-material/Sync';
-import DeleteForeverIcon from '@mui/icons-material/DeleteForever'; // For deleting a provider
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import { KeyStatusTable } from './components/KeyStatusTable';
 import { ProviderDetails } from './components/ProviderDetails';
 import { fetchProviders, reloadConfig, fetchKeyConfig, addKey, deleteKey, addProvider, deleteProvider, updateProvider } from './utils/api';
@@ -20,33 +19,31 @@ export function LLMConfigPage({ services }) {
     const [loading, setLoading] = useState({ providers: true, keys: false, action: false });
     const [error, setError] = useState('');
     const [newKey, setNewKey] = useState('');
-    const [isDialogOpen, setIsDialogOpen] = useState(false); // [新增] 对话框状态
-    
-    // --- [新增] 对话框与编辑状态管理 ---
+    const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [providerToEdit, setProviderToEdit] = useState(null);
 
     const confirmationService = services?.get('confirmationService');
     const selectedProviderDetails = providers.find(p => p.id === selectedProvider);
     
-    // --- [修改] 在加载时过滤掉 'mock' 提供商 ---
-    const loadProviders = useCallback(async (selectFirst = false) => {
+    // --- [核心修复 1/4] 简化 loadProviders 函数 ---
+    // 它现在只负责获取和设置列表，不再管理选中状态。
+    // 它的 useCallback 依赖为空，确保它在组件生命周期中是稳定的。
+    const loadProviders = useCallback(async () => {
         setLoading(prev => ({ ...prev, providers: true }));
         setError('');
+        let fetchedProviders = [];
         try {
             const data = await fetchProviders();
-            const filteredProviders = data.filter(p => p.id !== 'mock'); // <-- 核心过滤逻辑
-            setProviders(filteredProviders);
-            if (selectFirst && filteredProviders.length > 0) {
-                setSelectedProvider(filteredProviders[0].id);
-            } else if (filteredProviders.length === 0) {
-                setSelectedProvider('');
-                setKeyConfig(null);
-            }
+            fetchedProviders = data.filter(p => p.id !== 'mock');
+            setProviders(fetchedProviders);
         } catch (e) {
             setError(`加载提供商列表失败: ${e.message}`);
+            setProviders([]); // 出错时清空列表
         } finally {
             setLoading(prev => ({ ...prev, providers: false }));
         }
+        // 返回获取到的数据，以便调用者可以立即使用
+        return fetchedProviders;
     }, []);
 
     // [修改] 加载选中提供商的密钥配置
@@ -65,15 +62,24 @@ export function LLMConfigPage({ services }) {
         }
     }, [selectedProvider]);
     
-    // 初始加载
+    // --- [核心修复 2/4] 拆分 useEffect ---
+    // 这个 Effect 只在组件首次挂载时运行，用于初始数据加载。
     useEffect(() => {
-        loadProviders(true); // 首次加载并选中第一个
-    }, [loadProviders]);
+        const initialLoad = async () => {
+            const data = await loadProviders();
+            if (data.length > 0) {
+                setSelectedProvider(data[0].id);
+            }
+        };
+        initialLoad();
+    }, [loadProviders]); // loadProviders 是稳定的，所以这只运行一次
 
-    // 当选择的提供商改变时，加载其密钥
+    // 这个 Effect 行为正确，保持不变。它在选中项改变时加载密钥数据。
     useEffect(() => {
         if (selectedProvider) {
             loadKeyData();
+        } else {
+            setKeyConfig(null); // 如果没有选中项，清空密钥数据
         }
     }, [selectedProvider, loadKeyData]);
 
@@ -82,7 +88,10 @@ export function LLMConfigPage({ services }) {
         setError('');
         try {
             await reloadConfig();
-            await loadProviders(true); // 重载后，重新获取提供商列表并选中第一个
+            const data = await loadProviders();
+            if (data.length > 0) {
+                setSelectedProvider(data[0].id);
+            }
         } catch (e) {
             setError(`重载失败: ${e.message}`);
         } finally {
@@ -138,6 +147,7 @@ export function LLMConfigPage({ services }) {
     };
 
     // --- [修改] 保存处理器，现在能处理新增和更新 ---
+    // --- [核心修复 3/4] 在事件处理器中编排状态 ---
     const handleSaveProvider = async (providerConfig) => {
         setLoading(prev => ({ ...prev, action: true }));
         setError('');
@@ -151,7 +161,8 @@ export function LLMConfigPage({ services }) {
             }
             setIsDialogOpen(false);
             setProviderToEdit(null);
-            // 重新加载列表，并选中刚刚编辑或添加的提供商
+            
+            // 操作成功后，重新加载列表，并显式设置选中项为刚刚保存的那个
             await loadProviders();
             setSelectedProvider(providerConfig.id);
 
@@ -164,6 +175,7 @@ export function LLMConfigPage({ services }) {
     };
     
     // --- [新增] 处理删除提供商的逻辑 ---
+    // --- [核心修复 4/4] 在事件处理器中编排状态 ---
     const handleDeleteProvider = async (providerId) => {
         if (!confirmationService) return;
         const confirmed = await confirmationService.confirm({
@@ -176,12 +188,14 @@ export function LLMConfigPage({ services }) {
         setError('');
         try {
             await deleteProvider(providerId);
-            // 如果删除的是当前选中的提供商，则清空选择
-            if(selectedProvider === providerId) {
-                setSelectedProvider('');
-                setKeyConfig(null);
+            
+            // 操作成功后，重新加载列表
+            const newList = await loadProviders();
+
+            // 如果删除的是当前选中的提供商，则智能地选择下一个
+            if (selectedProvider === providerId) {
+                setSelectedProvider(newList.length > 0 ? newList[0].id : '');
             }
-            await loadProviders(true); // 重新加载并选中第一个
         } catch (e) {
             setError(`删除提供商失败: ${e.message}`);
         } finally {
@@ -239,10 +253,9 @@ export function LLMConfigPage({ services }) {
                 {selectedProvider && selectedProviderDetails ? (
                     <>
                         <Box sx={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start'}}>
-                             {/* [修改] 传入 onEdit 处理器 */}
-                             <ProviderDetails provider={selectedProviderDetails} onEdit={() => handleOpenEditDialog(selectedProviderDetails)} />
-                             {/* --- [新增] 删除提供商按钮 --- */}
-                             {!["gemini"].includes(selectedProviderDetails.id) && (
+                        <ProviderDetails provider={selectedProviderDetails} onEdit={() => handleOpenEditDialog(selectedProviderDetails)} />
+                        {/* --- [新增] 删除提供商按钮 --- */}
+                        {!["gemini"].includes(selectedProviderDetails.id) && (
                                 <Tooltip title={`删除提供商 '${selectedProviderDetails.id}'`}>
                                     <span>
                                         <IconButton onClick={() => handleDeleteProvider(selectedProviderDetails.id)} color="error" disabled={isActionInProgress}>

@@ -202,27 +202,37 @@ async def update_provider(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# --- [新增] 删除提供商的端点 ---
+# --- [修复] 删除提供商的端点 ---
 @config_api_router.delete("/providers/{provider_id}", status_code=200)
 async def delete_provider(
     provider_id: str,
     key_manager: KeyPoolManager = Depends(Service("key_pool_manager")),
-    container: Container = Depends(Service("container"))
+    provider_registry: ProviderRegistry = Depends(Service("provider_registry")),
+    # [移除] 不再需要 container 和 reload_llm_configuration
 ):
     """
-    从 .env 文件中删除一个自定义 LLM 提供商的所有配置。
+    从 .env 文件中删除一个自定义 LLM 提供商的所有配置，并立即更新内存状态。
     """
-    # 添加一个保护，防止删除内置提供商
     if provider_id in ["gemini", "mock"]:
         raise HTTPException(status_code=403, detail=f"Cannot delete built-in provider '{provider_id}'.")
     try:
+        # 1. 从 .env 文件中移除配置
         key_manager.remove_provider_config(provider_id)
-        # 删除成功后，触发一次热重载以移除该提供商
-        await reload_llm_configuration(container)
-        return {"message": f"Provider '{provider_id}' removed and configuration reloaded."}
+        
+        # 2. 从内存中的 KeyPoolManager 注销
+        key_manager.unregister_provider(provider_id)
+
+        # 3. 从内存中的 ProviderRegistry 注销
+        #    这一步将直接触发能力图谱的重建（见下一步的修改）
+        provider_registry.unregister(provider_id)
+        
+        logger.info(f"Provider '{provider_id}' has been fully removed from .env file and in-memory services.")
+        
+        return {"message": f"Provider '{provider_id}' removed successfully."}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
+        logger.exception(f"An error occurred while deleting provider '{provider_id}'.")
         raise HTTPException(status_code=500, detail=str(e))
 
 

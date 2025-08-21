@@ -40,12 +40,13 @@ class ProviderRegistry:
         return list(self._providers.keys())
 
     def unregister(self, name: str):
-        """从注册表中注销一个提供商并重建能力图谱。"""
+        """从注册表中注销一个提供商并立即重建能力图谱。"""
         if name in self._providers:
             self._providers.pop(name, None)
             self._provider_env_vars.pop(name, None)
             logger.info(f"LLM Provider instance '{name}' unregistered.")
-            # 关键：注销后必须重建图谱
+            # --- [核心修复] ---
+            # 在注销后，立即重建能力图谱，以确保状态一致。
             self.build_capability_map()
         else:
             logger.warning(f"Attempted to unregister a non-existent provider: '{name}'.")
