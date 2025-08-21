@@ -71,10 +71,14 @@ def create_main_execution_context(
     if run_vars:
         initial_run_vars.update(run_vars)
         
+    mutable_moment = deepcopy(snapshot.moment)
+
+    mutable_moment['_log_info'] = []
+        
     shared_context = SharedContext(
         definition_state=deepcopy(sandbox.definition),
         lore_state=deepcopy(sandbox.lore),
-        moment_state=deepcopy(snapshot.moment),
+        moment_state=mutable_moment,
         
         session_info={
             "start_time": snapshot.created_at,
