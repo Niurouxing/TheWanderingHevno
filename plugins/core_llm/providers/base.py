@@ -1,7 +1,7 @@
 # plugins/core_llm/providers/base.py
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from ..contracts import LLMResponse, LLMError
 
@@ -55,3 +55,15 @@ class LLMProvider(ABC):
         :return: 一个标准的 LLMError 对象。
         """
         pass
+
+    # --- [新方法] ---
+    def get_underlying_model(self, model_name: str) -> Optional[str]:
+        """
+        如果此提供商的某个模型是另一个已知模型的代理，
+        此方法应返回其"真实"的、规范的名称 (例如 'gemini/gemini-1.5-pro')。
+        这允许系统的其他部分（如图逻辑）能够针对模型的真实能力进行调整，
+        即使它通过一个自定义端点被调用。
+        
+        默认情况下，模型就是它自己，所以返回 None。
+        """
+        return None

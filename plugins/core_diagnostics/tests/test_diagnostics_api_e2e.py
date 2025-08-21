@@ -37,5 +37,5 @@ class TestDiagnosticsAPI:
         assert core_api_plugin["version"] == "1.0.0"
 
         # 验证 'llm_providers' 报告器（由 core_llm 提供）工作正常
-        gemini_provider = next((p for p in report["llm_providers"] if p.get("name") == "gemini"), None)
-        assert gemini_provider is not None
+        assert "gemini" in report["llm_providers"]
+        assert "mock" in report["llm_providers"]

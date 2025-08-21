@@ -6,7 +6,7 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Dict, Optional, AsyncIterator
+from typing import List, Dict, Optional, AsyncIterator, Any
 from dotenv import find_dotenv, get_key, set_key, unset_key, load_dotenv
 import logging
 
@@ -218,3 +218,39 @@ class KeyPoolManager:
         pool = self.get_pool(provider_name)
         if pool:
             await pool.mark_as_banned(key_string)
+
+    # --- [新方法] 用于管理自定义提供商的非密钥配置 ---
+    def get_custom_provider_config(self) -> Dict[str, Any]:
+        """从 .env 文件读取自定义提供商的配置。"""
+        load_dotenv(dotenv_path=self._dotenv_path, override=True)
+        return {
+            "base_url": os.getenv("OPENAI_CUSTOM_BASE_URL"),
+            "model_mapping": os.getenv("OPENAI_CUSTOM_MODEL_MAPPING"),
+        }
+
+    def set_custom_provider_config(self, base_url: Optional[str], model_mapping: Optional[str]):
+        """向 .env 文件写入自定义提供商的配置并重载所有密钥池。"""
+        # --- 核心修复：确保在写入前从 os.environ 中移除，防止旧值污染 ---
+        if "OPENAI_CUSTOM_BASE_URL" in os.environ: 
+            del os.environ["OPENAI_CUSTOM_BASE_URL"]
+        if "OPENAI_CUSTOM_MODEL_MAPPING" in os.environ: 
+            del os.environ["OPENAI_CUSTOM_MODEL_MAPPING"]
+
+        if base_url:
+            set_key(self._dotenv_path, "OPENAI_CUSTOM_BASE_URL", base_url)
+            logger.info(f"Set OPENAI_CUSTOM_BASE_URL in .env file.")
+        else:
+            unset_key(self._dotenv_path, "OPENAI_CUSTOM_BASE_URL")
+            logger.info(f"Unset OPENAI_CUSTOM_BASE_URL from .env file.")
+            
+        if model_mapping:
+            set_key(self._dotenv_path, "OPENAI_CUSTOM_MODEL_MAPPING", model_mapping)
+            logger.info(f"Set OPENAI_CUSTOM_MODEL_MAPPING in .env file.")
+        else:
+            unset_key(self._dotenv_path, "OPENAI_CUSTOM_MODEL_MAPPING")
+            logger.info(f"Unset OPENAI_CUSTOM_MODEL_MAPPING from .env file.")
+
+        # 重新加载所有提供商的配置和密钥
+        for provider_name in list(self._provider_env_vars.keys()):
+            self.reload_keys(provider_name)
+        logger.info("All provider pools have been reloaded after config change.")
