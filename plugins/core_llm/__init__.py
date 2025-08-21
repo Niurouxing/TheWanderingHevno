@@ -3,7 +3,7 @@
 import logging
 import os
 import json
-from typing import List, Dict, Type
+from typing import List, Dict, Any, Type
 from fastapi import APIRouter, Depends
 
 # 从平台核心导入接口和类型
@@ -21,6 +21,7 @@ from .providers.mock import MockProvider
 # 导入我们新创建的 provider
 from .providers.openai_compatible import OpenAICompatibleProvider
 from .config_api import config_api_router
+from .factory import ProviderFactory # <-- 导入新工厂
 
 logger = logging.getLogger(__name__)
 
@@ -49,60 +50,85 @@ def _create_key_pool_manager() -> KeyPoolManager:
 
 
 # --- 钩子实现 (Hook Implementations) ---
+def _parse_provider_configs_from_env() -> Dict[str, Dict[str, Any]]:
+    """从环境变量中解析所有自定义供应商的配置。"""
+    configs = {}
+    provider_ids_str = os.getenv("HEVNO_LLM_PROVIDERS", "")
+    if not provider_ids_str:
+        return configs
+        
+    provider_ids = [pid.strip() for pid in provider_ids_str.split(',') if pid.strip()]
+
+    for pid in provider_ids:
+        prefix = f"PROVIDER_{pid.upper()}_"
+        mapping_str = os.getenv(f"{prefix}MODEL_MAPPING", "")
+        model_mapping = {}
+        if mapping_str:
+            try:
+                model_mapping = dict(
+                    item.split(":", 1) for item in mapping_str.split(",") if ":" in item
+                )
+            except ValueError:
+                logger.warning(f"Could not parse model_mapping for {pid}: {mapping_str}")
+
+
+        configs[pid] = {
+            "type": os.getenv(f"{prefix}TYPE"),
+            "base_url": os.getenv(f"{prefix}BASE_URL"),
+            "keys_env_var": os.getenv(f"{prefix}KEYS_ENV"),
+            "model_mapping": model_mapping
+        }
+    return configs
 
 async def populate_llm_services(container: Container, hook_manager: HookManager):
     """
-    钩子实现：监听 'services_post_register'。
-    现在它负责实例化所有 providers 并填充注册表。
+    钩子实现：现在会动态注册多个自定义供应商。
     """
     logger.debug("Async task: Populating LLM services...")
     provider_registry: ProviderRegistry = container.resolve("provider_registry")
     key_manager: KeyPoolManager = container.resolve("key_pool_manager")
 
-    # 1. 注册内置的 Gemini 提供商
+    # 1. 注册内置提供商 (保持不变)
     gemini_provider = GeminiProvider()
-    gemini_env_var = "GEMINI_API_KEYS"
-    provider_registry.register("gemini", gemini_provider, gemini_env_var)
-    key_manager.register_provider("gemini", gemini_env_var)
-
-    # 2. 注册内置的 Mock 提供商
+    provider_registry.register("gemini", gemini_provider, "GEMINI_API_KEYS")
+    key_manager.register_provider("gemini", "GEMINI_API_KEYS")
+    
+    # 注册内置的 Mock 提供商
     mock_provider = MockProvider()
     mock_env_var = "MOCK_API_KEYS_DUMMY"
     provider_registry.register("mock", mock_provider, mock_env_var)
-    # Mock provider 不需要密钥池，但注册一下无妨
     key_manager.register_provider("mock", mock_env_var)
 
-    # 3. 【新】动态注册自定义 OpenAI 兼容提供商
-    custom_provider_name = "openai_custom"
-    custom_base_url = os.getenv("OPENAI_CUSTOM_BASE_URL")
-    custom_env_var = "OPENAI_CUSTOM_API_KEYS"
+    # 2. 动态注册自定义提供商
+    custom_configs = _parse_provider_configs_from_env()
+    for provider_id, config in custom_configs.items():
+        if not all([config["type"], config["base_url"], config["keys_env_var"]]):
+            logger.warning(f"Skipping custom provider '{provider_id}' due to missing configuration.")
+            continue
 
-    if custom_base_url:
-        logger.info(f"检测到自定义提供商配置，URL: {custom_base_url}")
-        
-        # 解析模型映射
-        mapping_str = os.getenv("OPENAI_CUSTOM_MODEL_MAPPING", "")
-        model_mapping = {}
-        if mapping_str:
-            try:
-                # 优先尝试解析为JSON
-                model_mapping = json.loads(mapping_str)
-                if not isinstance(model_mapping, dict):
-                    raise ValueError("JSON must be an object.")
-            except (json.JSONDecodeError, ValueError):
-                # 如果JSON解析失败，回退到 key:value,key:value 格式
-                model_mapping = dict(
-                    item.split(":", 1) for item in mapping_str.split(",") if ":" in item
-                )
-            logger.info(f"加载自定义模型映射: {model_mapping}")
+        # a. 为每个 provider 创建并注册一个单例工厂
+        factory = ProviderFactory(initial_config=config)
+        container.register(f"provider_factory_{provider_id}", lambda f=factory: f, singleton=True)
 
-        custom_provider = OpenAICompatibleProvider(
-            base_url=custom_base_url,
-            model_mapping=model_mapping
+        # b. 注册 provider 服务本身，但它不是单例！
+        #    它的工厂函数从单例 ProviderFactory 中获取实例。
+        #    这确保了每次解析都能拿到最新的实例。
+        container.register(
+            provider_id,
+            lambda c, pid=provider_id: c.resolve(f"provider_factory_{pid}").get_provider(),
+            singleton=False # <-- 关键！
         )
-        provider_registry.register(custom_provider_name, custom_provider, custom_env_var)
-        key_manager.register_provider(custom_provider_name, custom_env_var)
-    
+
+        # c. 将 provider 实例注册到 ProviderRegistry 中
+        #    注意：我们在这里解析一次以完成初始注册
+        try:
+            provider_instance = container.resolve(provider_id)
+            provider_registry.register(provider_id, provider_instance, config["keys_env_var"])
+            key_manager.register_provider(provider_id, config["keys_env_var"])
+            logger.info(f"Dynamically registered custom provider '{provider_id}'.")
+        except Exception as e:
+            logger.error(f"Failed to register custom provider '{provider_id}': {e}")
+
     logger.info(f"LLM Provider Registry populated. Providers: {provider_registry.get_all_provider_names()}")
 
 
