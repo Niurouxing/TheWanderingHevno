@@ -22,6 +22,7 @@ from .providers.mock import MockProvider
 from .providers.openai_compatible import OpenAICompatibleProvider
 from .config_api import config_api_router
 from .factory import ProviderFactory # <-- 导入新工厂
+from .utils import parse_provider_configs_from_env # <-- 导入新工具函数
 
 logger = logging.getLogger(__name__)
 
@@ -50,35 +51,6 @@ def _create_key_pool_manager() -> KeyPoolManager:
 
 
 # --- 钩子实现 (Hook Implementations) ---
-def _parse_provider_configs_from_env() -> Dict[str, Dict[str, Any]]:
-    """从环境变量中解析所有自定义供应商的配置。"""
-    configs = {}
-    provider_ids_str = os.getenv("HEVNO_LLM_PROVIDERS", "")
-    if not provider_ids_str:
-        return configs
-        
-    provider_ids = [pid.strip() for pid in provider_ids_str.split(',') if pid.strip()]
-
-    for pid in provider_ids:
-        prefix = f"PROVIDER_{pid.upper()}_"
-        mapping_str = os.getenv(f"{prefix}MODEL_MAPPING", "")
-        model_mapping = {}
-        if mapping_str:
-            try:
-                model_mapping = dict(
-                    item.split(":", 1) for item in mapping_str.split(",") if ":" in item
-                )
-            except ValueError:
-                logger.warning(f"Could not parse model_mapping for {pid}: {mapping_str}")
-
-
-        configs[pid] = {
-            "type": os.getenv(f"{prefix}TYPE"),
-            "base_url": os.getenv(f"{prefix}BASE_URL"),
-            "keys_env_var": os.getenv(f"{prefix}KEYS_ENV"),
-            "model_mapping": model_mapping
-        }
-    return configs
 
 async def populate_llm_services(container: Container, hook_manager: HookManager):
     """
@@ -100,7 +72,7 @@ async def populate_llm_services(container: Container, hook_manager: HookManager)
     key_manager.register_provider("mock", mock_env_var)
 
     # 2. 动态注册自定义提供商
-    custom_configs = _parse_provider_configs_from_env()
+    custom_configs = parse_provider_configs_from_env() # <-- 使用导入的函数
     for provider_id, config in custom_configs.items():
         if not all([config["type"], config["base_url"], config["keys_env_var"]]):
             logger.warning(f"Skipping custom provider '{provider_id}' due to missing configuration.")

@@ -39,7 +39,17 @@ class ProviderRegistry:
     def get_all_provider_names(self) -> List[str]:
         return list(self._providers.keys())
 
-    # --- 【新方法】 ---
+    def unregister(self, name: str):
+        """从注册表中注销一个提供商并重建能力图谱。"""
+        if name in self._providers:
+            self._providers.pop(name, None)
+            self._provider_env_vars.pop(name, None)
+            logger.info(f"LLM Provider instance '{name}' unregistered.")
+            # 关键：注销后必须重建图谱
+            self.build_capability_map()
+        else:
+            logger.warning(f"Attempted to unregister a non-existent provider: '{name}'.")
+
     def build_capability_map(self):
         """
         遍历所有已注册的供应商，构建从规范模型名称到供应商列表的映射。

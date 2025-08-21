@@ -219,7 +219,15 @@ class KeyPoolManager:
         if pool:
             await pool.mark_as_banned(key_string)
 
-    # --- [新方法] 用于管理自定义提供商的非密钥配置 ---
+    def unregister_provider(self, provider_name: str):
+        """从管理器中注销一个提供商及其密钥池。"""
+        if provider_name in self._pools:
+            self._pools.pop(provider_name, None)
+            self._provider_env_vars.pop(provider_name, None)
+            logger.info(f"Unregistered provider '{provider_name}' and its key pool from KeyPoolManager.")
+        else:
+            logger.warning(f"Attempted to unregister a non-existent provider from KeyPoolManager: '{provider_name}'.")
+    
     def get_custom_provider_config(self) -> Dict[str, Any]:
         """从 .env 文件读取自定义提供商的配置。"""
         load_dotenv(dotenv_path=self._dotenv_path, override=True)
