@@ -17,7 +17,7 @@ async def provide_own_routers(routers: List[APIRouter]) -> List[APIRouter]:
     """
     logger.info("--> [core_api] 'collect_api_routers' hook triggered. Importing routers...")
     
-    # 【重点】只从一个文件中导入，不再需要 base_router
+    # 【重点】只从一个文件中导入，不再需要 base_route
     from .system_router import system_api_router, frontend_assets_router
     
     logger.debug(f"[core_api] Appending system_api_router (prefix='{system_api_router.prefix}', {len(system_api_router.routes)} routes)")
