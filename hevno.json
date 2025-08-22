@@ -15,6 +15,9 @@
     "sandbox_explorer": { "source": "local" },
     "sandbox_editor": { "source": "local" },
     "core_llm_config": { "source": "local" },
-    "core_runner_ui": { "source": "local" }
+    "core_runner_ui": { "source": "local" },
+    "panel_conversation_stream": { "source": "local" },
+    "panel_debug_moment": { "source": "local" },
+    "panel_snapshot_history": { "source": "local" }
     }
 }
