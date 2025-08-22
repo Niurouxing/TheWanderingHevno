@@ -489,7 +489,7 @@ plugins/
 
 ##### 示例1：动态生成 NPC 对话
 
-根据玩家的声望 (`moment.player_reputation`)，NPC 会有不同的反应。这个例子展示了如何使用宏动态构建发送给 LLM 的指令，并利用 `contents` 列表来组织对话。
+这个例子展示了如何使用宏动态构建发送给 LLM 的指令。它已被更新，以使用 `llm.default` 运行时新的、更结构化的 `contents` 列表格式。
 
 ```json
 {
@@ -500,10 +500,12 @@ plugins/
       "model": "gemini/gemini-1.5-pro",
       "contents": [
         {
+          "type": "MESSAGE_PART",
           "role": "system",
           "content": "你是一名角色扮演游戏中的NPC。根据我提供的上下文，生成一句符合角色身份和当前情境的对话。"
         },
         {
+          "type": "MESSAGE_PART",
           "role": "user",
           "content": "{{
             rep = moment.player_reputation
@@ -520,6 +522,7 @@ plugins/
   }]
 }
 ```
+> **注意**: `llm.default` 运行时的 `config.contents` 字段现在是一个结构化列表，支持 `MESSAGE_PART` 和 `INJECT_MESSAGES` 两种类型。更多详情请参阅新增的 **5.4 `core_llm` 插件**章节。
 
 ##### 示例2：在一个节点内完成“计算伤害并更新状态”
 
@@ -971,6 +974,143 @@ uvicorn backend.main:app --reload
 
 通过这个系统，Hevno 的世界可以像乐高积木一样被无限组合和扩展。当您开发包含新运行时的插件时，请务_务必_为其运行时类提供一个内嵌的 `ConfigModel` Pydantic模型，以确保您的运行时能够无缝集成到图形编辑器中。我们期待看到您创造的精彩插件！
 
+### 5.4 `core_llm` 插件：扩展 LLM 网关
+
+`core_llm` 插件是 Hevno 的核心组件之一，它提供了一个强大的、可扩展的 LLM 网关。它不仅负责与各种 LLM API 进行通信，还内置了密钥管理、自动重试、故障转移和动态提供商注册等高级功能。
+
+#### 5.4.1 `llm.default` 运行时参考
+
+这是与 LLM 交互最主要、最强大的方式。它通过一个结构化的 `contents` 列表来编排最终发送给模型的请求，允许静态内容和动态注入（如对话历史）的无缝结合。
+
+##### **配置 (`config`)**
+
+*   `model` (`string`, 必需): 要使用的模型名称，采用 `'提供商ID/模型ID'` 的标准格式 (例如, `'gemini/gemini-1.5-pro'` 或 `'my_local_llm/llama3-70b'`)。
+*   `contents` (`list`, 必需): 一个有序列表，定义了最终消息的结构。列表中的每一项都是一个具有 `type` 字段的对象：
+    *   **`MESSAGE_PART` 对象**: 用于定义单个、静态的消息部分。
+        *   `type`: 固定为 `"MESSAGE_PART"`。
+        *   `role` (`string`): 消息的角色 (如 `'system'`, `'user'`, `'model'`)。
+        *   `content` (`any`): 消息内容，支持宏。
+        *   `is_enabled` (`bool`, 可选): 一个布尔值或返回布尔值的宏，用于条件性地包含此部分。
+    *   **`INJECT_MESSAGES` 对象**: 用于将一个消息列表（通常来自 `memoria.query`）动态地"展开"并注入到当前位置。
+        *   `type`: 固定为 `"INJECT_MESSAGES"`。
+        *   `source` (`any`): 一个宏，其求值结果**必须**是一个符合 `[{"role": "...", "content": "..."}, ...]` 格式的列表。
+        *   `is_enabled` (`bool`, 可选): 条件性地注入此消息列表。
+*   `temperature`, `max_output_tokens`, `top_p`, `top_k` (可选): 标准的 LLM 生成参数。
+*   `include_thoughts` (`bool`, 可选): 是否启用模型的思考链功能（仅部分模型支持）。
+*   `thinking_budget` (`int`, 可选): 为思考过程分配的最大 token 数量。
+
+##### **协同示例：标准的聊天机器人流程**
+
+这个例子完美地展示了 `memoria.query` 和 `llm.default` 如何协同工作，构建一个包含对话历史的 LLM 请求。
+
+```json
+[
+    {
+      "id": "get_chat_history",
+      "run": [{
+        "runtime": "memoria.query",
+        "config": {
+          "stream": "chat_history",
+          "latest": 10,
+          "format": "message_list" 
+        }
+      }]
+    },
+    {
+      "id": "generate_response",
+      "depends_on": ["get_chat_history"],
+      "run": [{
+        "runtime": "llm.default",
+        "config": {
+          "model": "gemini/gemini-1.5-pro",
+          "contents": [
+            {
+              "type": "MESSAGE_PART",
+              "role": "system",
+              "content": "你是一个乐于助人的AI助手。"
+            },
+            {
+              "type": "INJECT_MESSAGES",
+              "source": "{{ nodes.get_chat_history.output }}"
+            },
+            {
+              "type": "MESSAGE_PART",
+              "role": "user",
+              "content": "{{ run.triggering_input.user_message }}"
+            }
+          ]
+        }
+      }]
+    }
+]
+```
+
+#### 5.4.2 添加自定义 LLM 提供商
+
+Hevno Engine 允许您通过环境变量动态注册任何与 OpenAI API 兼容的自定义 LLM 服务。这使得接入本地运行的模型（如通过 Ollama, vLLM, LiteLLM 部署的 Llama, Mistral 等）或私有云服务变得极其简单。
+
+##### **工作原理**
+
+您只需在项目根目录的 `.env` 文件中定义您的提供商。Hevno 在启动时会自动发现并注册它们。
+
+1.  **声明提供商列表**:
+    在 `.env` 中添加一个名为 `HEVNO_LLM_PROVIDERS` 的变量，其值为一个逗号分隔的、您自定义的提供商 ID 列表。
+
+2.  **为每个提供商定义配置**:
+    对于列表中的每个 ID，您需要定义一组以 `PROVIDER_<ID大写>_` 为前缀的变量：
+    *   `PROVIDER_<ID>_TYPE`: 提供商类型。目前仅支持 `"openai_compatible"`。
+    *   `PROVIDER_<ID>_BASE_URL`: 您的 LLM 服务的 API 入口地址 (例如 `http://localhost:8000/v1`)。
+    *   `PROVIDER_<ID>_KEYS_ENV`: 一个**新的环境变量名**，您将在这个变量中存储该服务的 API 密钥。
+    *   `PROVIDER_<ID>_MODEL_MAPPING` (可选): 一个逗号分隔的 `代理名称:规范名称` 列表。这允许您在图中使用统一的、与提供商无关的名称（如 `meta/llama3-70b-instruct`），并让 Hevno 自动将其映射到您的本地服务所期望的模型名称（如 `llama3-70b`）。
+
+##### **示例：添加一个本地 Llama 3 模型**
+
+假设您在本地 `http://localhost:11434` 通过 Ollama 运行 Llama 3，并希望在 Hevno 中通过 ID `ollama_local` 来使用它。
+
+**1. 编辑您的 `.env` 文件:**
+
+```env
+# 1. 将你的新提供商ID 'ollama_local' 添加到主列表中
+HEVNO_LLM_PROVIDERS=ollama_local
+
+# 2. 为 'ollama_local' 定义详细配置
+PROVIDER_OLLAMA_LOCAL_TYPE="openai_compatible"
+PROVIDER_OLLAMA_LOCAL_BASE_URL="http://localhost:11434/v1"
+PROVIDER_OLLAMA_LOCAL_KEYS_ENV="OLLAMA_API_KEYS"
+
+# 3. (可选但推荐) 定义模型映射
+#    这让您可以在图中使用 'meta/llama3-8b-instruct' 来调用本地的 'llama3' 模型
+PROVIDER_OLLAMA_LOCAL_MODEL_MAPPING="llama3:meta/llama3-8b-instruct"
+
+# 4. 在新定义的环境变量中提供API密钥 (Ollama通常不需要，但变量必须存在)
+OLLAMA_API_KEYS="ollama"
+```
+
+**2. 在图中使用新提供商:**
+
+现在，您可以像使用任何内置提供商一样，在图定义中通过其 ID 和规范模型名称来调用它。
+
+```json
+{
+  "id": "ask_local_llama",
+  "run": [{
+    "runtime": "llm.default",
+    "config": {
+      "model": "ollama_local/meta/llama3-8b-instruct",
+      "contents": [
+        {
+          "type": "MESSAGE_PART",
+          "role": "user",
+          "content": "请用中文介绍一下你自己。"
+        }
+      ]
+    }
+  }]
+}
+```
+引擎在执行时，会自动将对 `ollama_local/meta/llama3-8b-instruct` 的请求路由到 `http://localhost:11434/v1`，并使用模型名称 `llama3`。
+
+---
 
 
 ## 6. 统一资源 API：读写世界状态的唯一入口
