@@ -74,13 +74,13 @@ export function MomentInspectorPanel({ services }) {
                 border: '1px solid rgba(255, 255, 255, 0.12)',
                 boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
                 position: 'relative',
+                willChange: 'transform',
             }}
         >
-            {/* --- [核心修改] 缩小了拖拽区的高度 --- */}
             <Box
                 className="drag-handle"
                 sx={{
-                    height: '30px', // 从 40px 减小到 30px
+                    height: '30px',
                     width: '100%',
                     cursor: 'move',
                     flexShrink: 0,
@@ -89,7 +89,6 @@ export function MomentInspectorPanel({ services }) {
                 }}
             />
             
-            {/* --- [核心修改] 调整了滚动区和遮罩以实现无缝渐变 --- */}
             <Box sx={{ 
                 flexGrow: 1, 
                 overflow: 'auto',

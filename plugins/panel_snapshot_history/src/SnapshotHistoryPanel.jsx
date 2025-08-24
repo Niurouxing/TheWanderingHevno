@@ -110,6 +110,7 @@ export function SnapshotHistoryPanel({ services }) {
                 border: '1px solid rgba(255, 255, 255, 0.12)', // 柔和的边缘
                 boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)', // 增加深度
                 position: 'relative', // 为了伪元素定位
+                willChange: 'transform',
             }}
         >
             {/* --- 不可见的拖拽区域 --- */}

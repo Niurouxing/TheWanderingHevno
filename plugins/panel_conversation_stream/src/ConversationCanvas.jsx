@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { Box, TextField, IconButton, Typography, CircularProgress } from '@mui/material';
 import SendRoundedIcon from '@mui/icons-material/SendRounded';
 
-// [改动] Message 组件现在将样式逻辑拆分到容器和文本上
+
 const Message = React.memo(({ msg }) => {
 
     // 负责字体和颜色
@@ -41,7 +41,7 @@ const Message = React.memo(({ msg }) => {
 
     return (
         <Box sx={getContainerStyle()}>
-            <Typography variant="body1" sx={{ lineHeight: 1.7, ...getTypographyStyle() }}>
+            <Typography variant="body1" sx={{ lineHeight: 1.7, whiteSpace: 'pre-line', ...getTypographyStyle() }}>
                 {msg.content}
             </Typography>
         </Box>

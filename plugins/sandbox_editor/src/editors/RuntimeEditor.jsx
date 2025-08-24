@@ -24,8 +24,9 @@ import {
 import { SortableRuntimeItem } from '../components/SortableRuntimeItem';
 import { RuntimeConfigForm } from './RuntimeConfigForm';
 
-// 导入 schema 管理器中的 getAllSchemas 和 getSchemaForRuntime
+// [修改] 导入 schema 管理器和我们导出的辅助函数
 import { getSchemaForRuntime, getAllSchemas } from '../utils/schemaManager';
+import { isStringArrayField } from '../components/SchemaField';
 
 const NEW_RUNTIME_SYMBOL = Symbol('new_runtime');
 
@@ -77,13 +78,38 @@ export function RuntimeEditor({ runList, onRunListChange }) {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
+  // --- [核心修改] ---
+  // 在展开编辑时，"治愈"可能格式不正确的数据
   const handleToggleExpand = (index) => {
     if (editingRun === index) {
       setEditingRun(null);
       setDraftData(null);
     } else {
+      const originalRun = runs[index];
+      const originalConfig = originalRun.config || {};
+      const schema = getSchemaForRuntime(originalRun.runtime);
+      const healedConfig = { ...originalConfig };
+
+      // [新增] 数据治愈逻辑
+      if (schema && schema.properties) {
+        for (const key in schema.properties) {
+          const fieldSchema = schema.properties[key];
+          if (isStringArrayField(fieldSchema)) {
+            const value = originalConfig[key];
+            if (typeof value === 'string') { // 如果它是一个字符串...
+              // ...就修复它！
+              healedConfig[key] = value.split(',').map(s => s.trim()).filter(Boolean); 
+            } else if (value === undefined || value === null) {
+              // 确保它至少是个空数组
+              healedConfig[key] = []; 
+            }
+          }
+        }
+      }
+      
       setEditingRun(index);
-      setDraftData({ ...runs[index] });
+      // 使用"治愈"过的数据来设置编辑草稿
+      setDraftData({ ...originalRun, config: healedConfig });
     }
   };
 
@@ -113,11 +139,26 @@ export function RuntimeEditor({ runList, onRunListChange }) {
       alert("Runtime type is required.");
       return;
     }
+    
+    // [重要] 在保存时，确保配置中没有空的数组（如果是可选的）
+    // 这部分逻辑是可选的，但更健壮
+    const finalConfig = { ...draftData.config };
+    if (currentSchema && currentSchema.properties) {
+        for (const key in currentSchema.properties) {
+            const fieldSchema = currentSchema.properties[key];
+            if (isStringArrayField(fieldSchema) && Array.isArray(finalConfig[key]) && finalConfig[key].length === 0) {
+                // 如果后端期望 `null` 或 `undefined` 而不是 `[]`，可以在这里删除
+                // delete finalConfig[key];
+            }
+        }
+    }
+    const finalDraft = { ...draftData, config: finalConfig };
+
     let newRuns;
     if (editingRun === NEW_RUNTIME_SYMBOL) {
-      newRuns = [...runs, draftData];
+      newRuns = [...runs, finalDraft];
     } else {
-      newRuns = runs.map((run, i) => (i === editingRun ? draftData : run));
+      newRuns = runs.map((run, i) => (i === editingRun ? finalDraft : run));
     }
     setRuns(newRuns);
     onRunListChange(newRuns);

@@ -6,11 +6,29 @@ import { CodexInvokeEditor } from './CodexInvokeEditor.jsx';
 import { LlmContentsEditor } from './LlmContentsEditor.jsx';
 import { LlmModelEditor } from './LlmModelEditor.jsx';
 
-//接收新的 runtimeType prop
+// [新增] 导入 isStringArrayField 辅助函数，父组件需要用它来做判断
+import { isStringArrayField } from '../components/SchemaField';
+
 export function RuntimeConfigForm({ runtimeType, schema, config, onConfigChange }) {
   
+  // --- [核心修改] 创建一个更智能的 handleChange，它知道如何处理来自 SchemaField 的原始值 ---
   const handleChange = (key, value) => {
-    const newConfig = { ...config, [key]: value };
+    const fieldSchema = schema.properties[key];
+    let finalValue = value;
+
+    // 检查这个字段是否期望一个字符串数组
+    if (fieldSchema && isStringArrayField(fieldSchema)) {
+      // 如果是，并且收到的值是字符串，就将其转换为数组
+      if (typeof value === 'string') {
+        finalValue = value.split(',').map(item => item.trim()).filter(Boolean);
+      } else if (!Array.isArray(value)) {
+        // 提供一个回退，以防收到意外的类型
+        finalValue = [];
+      }
+    }
+    
+    // 用格式正确的值更新 config 对象
+    const newConfig = { ...config, [key]: finalValue };
     onConfigChange(newConfig);
   };
   
@@ -26,16 +44,8 @@ export function RuntimeConfigForm({ runtimeType, schema, config, onConfigChange 
     <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
       <Typography variant="subtitle2">配置</Typography>
       
-      {/* 
-        [核心修改] 
-        我们不再是简单地循环所有属性。
-        而是循环所有属性，并对每个属性进行判断：
-        - 如果是特殊情况，渲染自定义组件。
-        - 否则，渲染通用的 SchemaField。
-      */}
       {Object.entries(schema.properties).map(([key, propSchema]) => {
 
-        // --- 特殊情况 1: llm.default 的 'contents' 字段 ---
         if (runtimeType === 'llm.default' && key === 'contents') {
           return (
             <LlmContentsEditor 
@@ -46,7 +56,6 @@ export function RuntimeConfigForm({ runtimeType, schema, config, onConfigChange 
           );
         }
 
-        // --- [新增] 特殊情况 2: llm.default 的 'model' 字段 ---
         if (runtimeType === 'llm.default' && key === 'model') {
             return (
                 <LlmModelEditor
@@ -58,19 +67,17 @@ export function RuntimeConfigForm({ runtimeType, schema, config, onConfigChange 
             );
         }
 
-        // --- 特殊情况 3: codex.invoke 的 'from' 字段 ---
         if (runtimeType === 'codex.invoke' && key === 'from') {
           return (
             <CodexInvokeEditor
               key={key}
-              value={config.from || []} // 确保传递一个数组
+              value={config.from || []}
               onChange={(newValue) => handleChange('from', newValue)}
             />
           );
         }
         
-        // --- 默认情况: 渲染通用的 SchemaField ---
-        // 这将处理所有其他字段，例如 llm.default 的 'model' 和 'temperature'
+        // 将新的、更智能的 handleChange 传递给 SchemaField
         return (
           <SchemaField
             key={key}

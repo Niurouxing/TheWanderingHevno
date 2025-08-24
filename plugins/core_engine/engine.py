@@ -283,7 +283,18 @@ class ExecutionEngine(SubGraphRunner):
                     context=NodeExecutionStartContext(node=node, execution_context=context)
                 )
                 output = await self._execute_node(node, context)
+                
                 if isinstance(output, dict) and "error" in output:
+                    # --- [新增日志] 开始 ---
+                    # 这是处理"软失败"的地方 (运行时返回了错误字典)
+                    failed_runtime = output.get('runtime', 'unknown')
+                    error_msg = output.get('error', 'Unknown error')
+                    logger.error(
+                        f"Node '{node_id}' failed in runtime '{failed_runtime}'. Reason: {error_msg}",
+                        exc_info=False # 我们不希望在这里看到完整的堆栈跟踪，因为这是预期的失败
+                    )
+                    # --- [新增日志] 结束 ---
+
                     run.set_node_state(node_id, NodeState.FAILED)
 
                     await self.hook_manager.trigger(
@@ -308,9 +319,12 @@ class ExecutionEngine(SubGraphRunner):
                 run.set_node_result(node_id, output)
 
             except Exception as e:
+                # --- [优化日志] 开始 ---
+                # 这是处理"硬失败"的地方 (引擎捕获了意外的Python异常)
+                logger.exception(f"UNHANDLED EXCEPTION in node '{node_id}'. The execution engine caught a critical error.")
+                # --- [优化日志] 结束 ---
+
                 error_message = f"Worker-level error for node {node_id}: {type(e).__name__}: {e}"
-                import traceback
-                traceback.print_exc()
                 run.set_node_state(node_id, NodeState.FAILED)
                 run.set_node_result(node_id, {"error": error_message})
 
