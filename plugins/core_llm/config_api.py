@@ -35,7 +35,7 @@ class KeyConfigResponse(BaseModel):
     keys: List[ApiKeyStatus]
 
 class AddKeyRequest(BaseModel):
-    key: str = Field(..., min_length=10, description="要添加的完整 API 密钥。")
+    key: str = Field(..., min_length=1, description="要添加的完整 API 密钥。")
 
 # --- [修改] 分离创建和更新请求的模型 ---
 class ProviderConfigRequest(BaseModel):
