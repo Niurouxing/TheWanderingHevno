@@ -32,7 +32,7 @@ export function MemoriaEditor({ sandboxId, basePath, memoriaData, onBack, confir
       }
       const entriesWithInternalIds = (value.entries || []).map((entry, index) => ({
         ...entry,
-        _internal_id: `${key}_${Date.now()}_${index}`,
+        _internal_id: `${key}_${entry.id || Date.now()}_${index}`,
       }));
       initialStreams[key] = { ...value, entries: entriesWithInternalIds };
     });
@@ -77,7 +77,7 @@ export function MemoriaEditor({ sandboxId, basePath, memoriaData, onBack, confir
     }
     setStreams(prev => ({ ...prev, [name]: { config: {}, entries: [] } }));
     setNewStreamName('');
-    setExpandedStreams(prev => ({ ...prev, [name]: true })); // Automatically expand new stream
+    setExpandedStreams(prev => ({ ...prev, [name]: true }));
   };
 
   const handleDeleteStream = async (streamName) => {
@@ -99,17 +99,39 @@ export function MemoriaEditor({ sandboxId, basePath, memoriaData, onBack, confir
     });
   };
 
+  // 修改 handleAddEntry 以创建完整的 MemoryEntry 对象并更新全局序列号
   const handleAddEntry = (streamName) => {
+    // 1. 计算下一个可用的 sequence_id
+    const nextSequenceId = globalSequence + 1;
+
+    // 2. 创建一个结构完整的、符合后端 Pydantic 模型的新条目
+    const newEntry = {
+      // a. 后端必需字段
+      id: crypto.randomUUID(), // 使用浏览器内置功能生成唯一ID
+      sequence_id: nextSequenceId,
+      content: '新记忆条目，请编辑内容。',
+      level: 'event',
+      tags: [],
+      created_at: new Date().toISOString(), // 生成ISO 8601格式的时间戳
+      metadata: { source: 'sandbox-editor' },
+      
+      // b. 仅供前端使用的内部ID，用于React的key和DND-kit
+      _internal_id: `entry_internal_${Date.now()}`
+    };
+
+    // 3. 更新 streams 状态
     setStreams(prev => {
-      const newEntry = {
-        content: '', level: 'event', tags: [],
-        _internal_id: `${streamName}_${Date.now()}`
-      };
       const updatedEntries = [...prev[streamName].entries, newEntry];
-      setExpandedEntries(exp => ({ ...exp, [newEntry._internal_id]: true }));
       return { ...prev, [streamName]: { ...prev[streamName], entries: updatedEntries } };
     });
+    
+    // 4. 更新全局序列号状态，这至关重要！
+    setGlobalSequence(nextSequenceId);
+
+    // 5. 自动展开新创建的条目以便编辑
+    setExpandedEntries(exp => ({ ...exp, [newEntry._internal_id]: true }));
   };
+
 
   const handleDeleteEntry = (streamName, entryInternalId) => {
     setStreams(prev => {
@@ -125,6 +147,10 @@ export function MemoriaEditor({ sandboxId, basePath, memoriaData, onBack, confir
           let finalValue = value;
           if (field === 'tags' && typeof value === 'string') {
             finalValue = value.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+          }
+          // [新增] 确保 sequence_id 是数字
+          if (field === 'sequence_id') {
+              finalValue = parseInt(value, 10) || 0;
           }
           return { ...entry, [field]: finalValue };
         }
@@ -156,11 +182,14 @@ export function MemoriaEditor({ sandboxId, basePath, memoriaData, onBack, confir
     setExpandedEntries(prev => ({...prev, [entryInternalId]: !prev[entryInternalId] }));
   };
   
+  // 更新表单以包含所有可编辑的字段，尤其是 id 和 sequence_id
   const renderEntryForm = (streamName, entry) => (
-    <Box sx={{ pl: 9, pr: 2, pb: 2, pt: 1, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
-      <TextField label="内容" value={entry.content || ''} onChange={(e) => handleEntryChange(streamName, entry._internal_id, 'content', e.target.value)} multiline fullWidth variant="outlined" sx={{ mb: 2 }} autoFocus/>
-      <TextField label="级别" value={entry.level || 'event'} onChange={(e) => handleEntryChange(streamName, entry._internal_id, 'level', e.target.value)} fullWidth sx={{ mb: 2 }} size="small" variant="outlined"/>
-      <TextField label="标签 (逗号分隔)" value={(entry.tags || []).join(', ')} onChange={(e) => handleEntryChange(streamName, entry._internal_id, 'tags', e.target.value)} fullWidth sx={{ mb: 2 }} variant="outlined" size="small"
+    <Box sx={{ pl: 9, pr: 2, pb: 2, pt: 1, borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <TextField label="ID (唯一标识)" value={entry.id || ''} onChange={(e) => handleEntryChange(streamName, entry._internal_id, 'id', e.target.value)} fullWidth variant="outlined" size="small" required />
+      <TextField label="因果序列号 (Sequence ID)" type="number" value={entry.sequence_id ?? ''} onChange={(e) => handleEntryChange(streamName, entry._internal_id, 'sequence_id', e.target.value)} fullWidth variant="outlined" size="small" required helperText="必须是唯一的、递增的整数"/>
+      <TextField label="内容" value={entry.content || ''} onChange={(e) => handleEntryChange(streamName, entry._internal_id, 'content', e.target.value)} multiline fullWidth variant="outlined" autoFocus/>
+      <TextField label="级别" value={entry.level || 'event'} onChange={(e) => handleEntryChange(streamName, entry._internal_id, 'level', e.target.value)} fullWidth size="small" variant="outlined"/>
+      <TextField label="标签 (逗号分隔)" value={(entry.tags || []).join(', ')} onChange={(e) => handleEntryChange(streamName, entry._internal_id, 'tags', e.target.value)} fullWidth variant="outlined" size="small"
         InputProps={{ startAdornment: (<InputAdornment position="start">{(entry.tags || []).filter(t => t).map((tag, i) => <Chip key={i} label={tag} size="small" sx={{ mr: 0.5 }} />)}</InputAdornment>),}}
       />
     </Box>
