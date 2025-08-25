@@ -78,22 +78,23 @@ def unwrap_dot_accessible_dicts(data: Any) -> Any:
 
 class DotAccessibleDict:
     """
-    一个【递归】代理类，它包装一个字典，并允许通过点符号进行属性访问。
-    所有读取和写入操作都会直接作用于原始的底层字典。
+    一个递归代理类，它包装一个字典，允许通过点符号进行属性访问。
+    此版本确保对嵌套的可变对象（如列表）的修改能够正确地作用于原始数据。
     """
     def __init__(self, data: Dict[str, Any]):
         # 使用 object.__setattr__ 来避免触发我们自己的 __setattr__
         object.__setattr__(self, '_data', data)
 
-    @classmethod
-    def _wrap(cls, value: Any) -> Any:
+    @staticmethod
+    def _wrap_if_dict(value: Any) -> Any:
+        """
+        一个静态辅助方法，仅当值为字典时才进行包装。
+        """
         if isinstance(value, dict):
-            # 避免重复包装
-            if not isinstance(value, cls):
-                return cls(value)
-            return value
-        if isinstance(value, list):
-            return [cls._wrap(item) for item in value]
+            # 避免对已经是代理的对象进行重复包装
+            if isinstance(value, DotAccessibleDict):
+                return value
+            return DotAccessibleDict(value)
         return value
 
     def __contains__(self, key: str) -> bool:
@@ -105,7 +106,9 @@ class DotAccessibleDict:
             
         try:
             value = self._data[name]
-            return self._wrap(value)
+            # 仅当值是字典时才递归包装。
+            # 对于列表、字符串、数字等，直接返回原始对象引用。
+            return self._wrap_if_dict(value)
         except KeyError:
             # 允许调用底层字典的方法，如 .keys(), .items()
             underlying_attr = getattr(self._data, name, None)
@@ -117,6 +120,7 @@ class DotAccessibleDict:
         if name == '_data':
             object.__setattr__(self, name, value)
         else:
+            # 直接在底层字典上设置值
             self._data[name] = value
 
     def __delattr__(self, name: str):
@@ -129,7 +133,9 @@ class DotAccessibleDict:
         return f"DotAccessibleDict({self._data})"
     
     def __getitem__(self, key):
-        return self._wrap(self._data[key])
+        value = self._data[key]
+        # 确保通过方括号访问也能正确工作
+        return self._wrap_if_dict(value)
     
     def __setitem__(self, key, value):
         self._data[key] = value

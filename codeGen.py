@@ -116,8 +116,8 @@ def main(paths, output_file="code_collection.md"):
 
 if __name__ == "__main__":
     paths = [
-        # "./backend", 
-        # "./plugins/core_engine",
+        "./backend", 
+        "./plugins/core_engine",
         # "./plugins/core_api",
         # "./plugins/core_codex",
         # "./plugins/diagnostics",
@@ -128,11 +128,11 @@ if __name__ == "__main__":
         # "./plugins/core_logging",
         # "./plugins/core_persistence",
         # "./plugins/core_diagnostics",
-        "./frontend",
-        "./plugins/core_layout",
-        "./plugins/core_llm_config",
-        "./plugins/sandbox_editor",
-        "./plugins/sandbox_explorer",
+        # "./frontend",
+        # "./plugins/core_layout",
+        # "./plugins/core_llm_config",
+        # "./plugins/sandbox_editor",
+        # "./plugins/sandbox_explorer",
         # "./plugins/core_runner_ui",
         # "./plugins/panel_conversation_stream",
         # "./plugins/panel_snapshot_history",

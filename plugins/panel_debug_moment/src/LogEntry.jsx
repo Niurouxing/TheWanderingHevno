@@ -16,14 +16,19 @@ const LogLogLevels = {
     critical: { icon: <ErrorOutlineOutlinedIcon fontSize="small" />, color: 'error', title: '严重' },
 };
 
-const JsonViewer = ({ data, title }) => (
-    <Box>
-        <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5 }}>{title}</Typography>
-        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: '12px', background: 'rgba(0,0,0,0.2)', padding: '8px', borderRadius: '4px' }}>
-            {JSON.stringify(data, null, 2)}
-        </pre>
-    </Box>
-);
+const JsonViewer = ({ data, title }) => {
+    // [优化] 将JSON对象格式化为字符串，同时将字符串中转义的 `\n` 替换为实际的换行符
+    const formattedJson = JSON.stringify(data, null, 2).replace(/\\n/g, '\n');
+
+    return (
+        <Box>
+            {title && <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5 }}>{title}</Typography>}
+            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: '12px', background: 'rgba(0,0,0,0.2)', padding: '8px', borderRadius: '4px' }}>
+                {formattedJson}
+            </pre>
+        </Box>
+    );
+};
 
 const LLMCallDetails = ({ data }) => {
     if (!data) return <Typography>No data.</Typography>;
@@ -37,7 +42,15 @@ const LLMCallDetails = ({ data }) => {
 
 const SystemLogDetails = ({ data }) => {
      if (!data) return <Typography>No data.</Typography>;
-     return <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '12px' }}>{data.message}</Typography>;
+     
+     try {
+        // [优化] 尝试将日志消息解析为JSON。如果成功，则使用JsonViewer进行格式化显示。
+        const parsedJson = JSON.parse(data.message);
+        return <JsonViewer data={parsedJson} />;
+     } catch (e) {
+        // 如果不是JSON字符串，则按原文格式直接显示，保留换行。
+        return <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '12px' }}>{data.message}</Typography>;
+     }
 };
 
 
