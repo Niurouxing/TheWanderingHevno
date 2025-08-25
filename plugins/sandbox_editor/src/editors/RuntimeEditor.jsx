@@ -1,116 +1,66 @@
 // plugins/sandbox_editor/src/editors/RuntimeEditor.jsx
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { Box, List, Collapse, IconButton, Button, Select, MenuItem, Typography, Paper, ListSubheader, TextField } from '@mui/material';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
-import SaveIcon from '@mui/icons-material/Save';
-import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-} from '@dnd-kit/core';
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable';
+import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { SortableRuntimeItem } from '../components/SortableRuntimeItem';
 import { RuntimeConfigForm } from './RuntimeConfigForm';
-
-// [修改] 导入 schema 管理器和我们导出的辅助函数
 import { getSchemaForRuntime, getAllSchemas } from '../utils/schemaManager';
 import { isStringArrayField } from '../components/SchemaField';
 
-const NEW_RUNTIME_SYMBOL = Symbol('new_runtime');
-
 export function RuntimeEditor({ runList, onRunListChange }) {
   const [runs, setRuns] = useState(runList || []);
-  const [editingRun, setEditingRun] = useState(null);
-  const [draftData, setDraftData] = useState(null);
-  const [currentSchema, setCurrentSchema] = useState(null);
+  const [expandedRuns, setExpandedRuns] = useState({});
 
-  // 使用 useMemo 从 schema 管理器动态生成和缓存运行时列表
-  // 这个列表只会在 schemas 加载完成后计算一次，非常高效。
   const availableRuntimes = useMemo(() => {
     const schemas = getAllSchemas();
-    // 如果 schemas 还没加载好，返回空结构
     if (!schemas) {
         return { groups: {} };
     }
-    
-    // 按名称对所有可用的运行时进行排序和分组
     const runtimeList = Object.keys(schemas).sort();
     const groups = runtimeList.reduce((acc, name) => {
-        // 根据第一个 '.' 前的部分进行分组 (e.g., 'system', 'llm', 'memoria')
         const groupName = name.split('.')[0]; 
-        if (!acc[groupName]) {
-            acc[groupName] = [];
-        }
+        if (!acc[groupName]) acc[groupName] = [];
         acc[groupName].push(name);
         return acc;
     }, {});
-
     return { groups };
-  }, []); // 空依赖数组意味着它只在组件挂载时运行一次
+  }, []);
 
   useEffect(() => {
     setRuns(runList || []);
   }, [runList]);
-  
-  useEffect(() => {
-      if (draftData && draftData.runtime) {
-          const schema = getSchemaForRuntime(draftData.runtime);
-          setCurrentSchema(schema);
-      } else {
-          setCurrentSchema(null);
-      }
-  }, [draftData, draftData?.runtime]);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
-  // --- [核心修改] ---
-  // 在展开编辑时，"治愈"可能格式不正确的数据
   const handleToggleExpand = (index) => {
-    if (editingRun === index) {
-      setEditingRun(null);
-      setDraftData(null);
-    } else {
-      const originalRun = runs[index];
-      const originalConfig = originalRun.config || {};
-      const schema = getSchemaForRuntime(originalRun.runtime);
-      const healedConfig = { ...originalConfig };
+    const runToExpand = runs[index];
+    const originalConfig = runToExpand.config || {};
+    const schema = getSchemaForRuntime(runToExpand.runtime);
+    const healedConfig = { ...originalConfig };
 
-      // [新增] 数据治愈逻辑
-      if (schema && schema.properties) {
+    if (schema && schema.properties) {
         for (const key in schema.properties) {
-          const fieldSchema = schema.properties[key];
-          if (isStringArrayField(fieldSchema)) {
-            const value = originalConfig[key];
-            if (typeof value === 'string') { // 如果它是一个字符串...
-              // ...就修复它！
-              healedConfig[key] = value.split(',').map(s => s.trim()).filter(Boolean); 
-            } else if (value === undefined || value === null) {
-              // 确保它至少是个空数组
-              healedConfig[key] = []; 
+            const fieldSchema = schema.properties[key];
+            if (isStringArrayField(fieldSchema)) {
+                const value = originalConfig[key];
+                if (typeof value === 'string') healedConfig[key] = value.split(',').map(s => s.trim()).filter(Boolean);
+                else if (value === undefined || value === null) healedConfig[key] = [];
             }
-          }
         }
-      }
-      
-      setEditingRun(index);
-      // 使用"治愈"过的数据来设置编辑草稿
-      setDraftData({ ...originalRun, config: healedConfig });
+        if (JSON.stringify(healedConfig) !== JSON.stringify(originalConfig)) {
+            const newRuns = [...runs];
+            newRuns[index] = { ...runToExpand, config: healedConfig };
+            setRuns(newRuns);
+            onRunListChange(newRuns);
+        }
     }
+    setExpandedRuns(prev => ({...prev, [index]: !prev[index]}));
   };
 
   const handleDragEnd = (event) => {
@@ -118,7 +68,6 @@ export function RuntimeEditor({ runList, onRunListChange }) {
     if (active.id !== over.id) {
       const oldI = parseInt(active.id, 10);
       const newI = parseInt(over.id, 10);
-
       const newOrderedRuns = arrayMove(runs, oldI, newI);
       setRuns(newOrderedRuns);
       onRunListChange(newOrderedRuns);
@@ -126,45 +75,9 @@ export function RuntimeEditor({ runList, onRunListChange }) {
   };
 
   const handleAddClick = () => {
-    if (editingRun !== null) {
-      alert("Please save or discard the current runtime first.");
-      return;
-    }
-    setEditingRun(NEW_RUNTIME_SYMBOL);
-    setDraftData({ runtime: '', config: {} });
-  };
-  
-  const handleSave = () => {
-    if (!draftData.runtime) {
-      alert("Runtime type is required.");
-      return;
-    }
-    
-    // [重要] 在保存时，确保配置中没有空的数组（如果是可选的）
-    // 这部分逻辑是可选的，但更健壮
-    const finalConfig = { ...draftData.config };
-    if (currentSchema && currentSchema.properties) {
-        for (const key in currentSchema.properties) {
-            const fieldSchema = currentSchema.properties[key];
-            if (isStringArrayField(fieldSchema) && Array.isArray(finalConfig[key]) && finalConfig[key].length === 0) {
-                // 如果后端期望 `null` 或 `undefined` 而不是 `[]`，可以在这里删除
-                // delete finalConfig[key];
-            }
-        }
-    }
-    const finalDraft = { ...draftData, config: finalConfig };
-
-    let newRuns;
-    if (editingRun === NEW_RUNTIME_SYMBOL) {
-      newRuns = [...runs, finalDraft];
-    } else {
-      newRuns = runs.map((run, i) => (i === editingRun ? finalDraft : run));
-    }
+    const newRuns = [...runs, { runtime: '', config: {} }];
     setRuns(newRuns);
-    onRunListChange(newRuns);
-    
-    setEditingRun(null);
-    setDraftData(null);
+    setExpandedRuns(prev => ({...prev, [newRuns.length - 1]: true }));
   };
 
   const handleDelete = (index) => {
@@ -173,116 +86,73 @@ export function RuntimeEditor({ runList, onRunListChange }) {
     onRunListChange(newRuns);
   };
   
-  const handleDiscard = () => {
-      setEditingRun(null);
-      setDraftData(null);
+  const handleRunChange = (index, updatedRun) => {
+    const newRuns = [...runs];
+    newRuns[index] = updatedRun;
+    setRuns(newRuns);
+    onRunListChange(newRuns);
   }
-
-  const handleDraftChange = (field, value) => {
-      setDraftData(prev => ({...prev, [field]: value}));
-  }
-
-  const renderRunForm = () => {
-    if (!draftData) return null;
-    const isNew = editingRun === NEW_RUNTIME_SYMBOL;
-    return (
-      <Paper sx={{ p: 2, m: 1, border: `1px solid`, borderColor: 'primary.main' }}>
-         <Typography variant="h6" sx={{mb: 2}}>{isNew ? "添加指令" : "编辑指令"}</Typography>
-        <Select
-          value={draftData.runtime}
-          onChange={(e) => handleDraftChange('runtime', e.target.value)}
-          fullWidth
-          size="small"
-          displayEmpty
-          sx={{ mb: 2 }}
-        >
-          <MenuItem value="" disabled><em>选择指令类型</em></MenuItem>
-
-          {Object.entries(availableRuntimes.groups)
-            // 对分组进行排序，确保 'system' 总是靠后
-            .sort(([groupA], [groupB]) => {
-                if (groupA === 'system') return 1;
-                if (groupB === 'system') return -1;
-                return groupA.localeCompare(groupB);
-            })
-            .map(([groupName, runtimes]) => ([
-                // 为每个分组渲染一个子标题
-                <ListSubheader key={groupName}>
-                    {groupName.charAt(0).toUpperCase() + groupName.slice(1)}
-                </ListSubheader>,
-                // 渲染该分组下的所有运行时
-                runtimes.map(runtimeName => (
-                    <MenuItem key={runtimeName} value={runtimeName}>{runtimeName}</MenuItem>
-                ))
-            ]))
-          }
-        </Select>
-
-        {draftData.runtime && (
-          <TextField
-            label="as (可选命名空间)"
-            value={draftData.config?.as || ''}
-            onChange={(e) => {
-              const newConfig = { ...draftData.config, as: e.target.value };
-              if (!e.target.value) {
-                delete newConfig.as;
-              }
-              handleDraftChange('config', newConfig);
-            }}
-            fullWidth
-            size="small"
-            sx={{ mb: 2 }}
-            helperText="为该指令的输出指定一个名称，以便后续指令引用。"
-          />
-        )}
-        
-        {draftData.runtime && (
-          <RuntimeConfigForm
-            runtimeType={draftData.runtime}
-            schema={currentSchema}
-            config={draftData.config || {}}
-            onConfigChange={(newConfig) => handleDraftChange('config', newConfig)}
-          />
-        )}
-        <Box sx={{mt: 2, display: 'flex', gap: 1}}>
-            <Button variant="contained" startIcon={<SaveIcon />} onClick={handleSave}>
-                {isNew ? "添加" : "保存"}
-            </Button>
-            <Button variant="outlined" onClick={handleDiscard}>
-                取消
-            </Button>
-        </Box>
-      </Paper>
-    );
-  };
 
   return (
     <Paper variant="outlined" sx={{ mt: 2, p:1 }}>
       <Box sx={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
         <Typography variant="subtitle1" gutterBottom component="div">指令列表</Typography>
-        <Button variant="outlined" startIcon={<AddIcon />} onClick={handleAddClick} size="small" sx={{ mb: 1 }} disabled={editingRun !== null}>
+        <Button variant="outlined" startIcon={<AddIcon />} onClick={handleAddClick} size="small" sx={{ mb: 1 }}>
             添加指令
         </Button>
       </Box>
 
-      {editingRun !== null ? renderRunForm() : (
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-            <SortableContext items={runs.map((_, i) => i.toString())} strategy={verticalListSortingStrategy}>
-              <List disablePadding>
-                {runs.map((run, index) => (
-                  <SortableRuntimeItem
-                    key={index}
-                    id={index.toString()}
-                    run={run}
-                    onEdit={() => handleToggleExpand(index)}
-                    onDelete={() => handleDelete(index)}
-                  />
-                ))}
-                {runs.length === 0 && <Typography color="text.secondary" sx={{p:2, textAlign: 'center'}}>No runtimes defined.</Typography>}
-              </List>
-            </SortableContext>
-          </DndContext>
-      )}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={runs.map((_, i) => i.toString())} strategy={verticalListSortingStrategy}>
+          <List disablePadding>
+            {runs.map((run, index) => (
+              <SortableRuntimeItem
+                key={index}
+                id={index.toString()}
+                run={run}
+                onEdit={() => handleToggleExpand(index)}
+                onDelete={() => handleDelete(index)}
+              >
+                  <Collapse in={!!expandedRuns[index]}>
+                    <Paper sx={{ p: 2, m: 1, border: `1px solid`, borderColor: 'action.disabled' }}>
+                        <Select
+                            value={run.runtime}
+                            onChange={(e) => handleRunChange(index, { ...run, runtime: e.target.value })}
+                            fullWidth size="small" displayEmpty sx={{ mb: 2 }}
+                        >
+                          <MenuItem value="" disabled><em>选择指令类型</em></MenuItem>
+                          {Object.entries(availableRuntimes.groups)
+                            .sort(([groupA], [groupB]) => groupA.localeCompare(groupB))
+                            .map(([groupName, runtimes]) => ([
+                                <ListSubheader key={groupName}>{groupName.charAt(0).toUpperCase() + groupName.slice(1)}</ListSubheader>,
+                                runtimes.map(runtimeName => <MenuItem key={runtimeName} value={runtimeName}>{runtimeName}</MenuItem>)
+                            ]))
+                          }
+                        </Select>
+                        {run.runtime && <TextField label="as (可选命名空间)" value={run.config?.as || ''}
+                            onChange={(e) => {
+                              const newConfig = { ...run.config, as: e.target.value };
+                              if (!e.target.value) delete newConfig.as;
+                              handleRunChange(index, { ...run, config: newConfig });
+                            }}
+                            fullWidth size="small" sx={{ mb: 2 }} helperText="为该指令的输出指定一个名称，以便后续指令引用。"
+                          />
+                        }
+                        {run.runtime && <RuntimeConfigForm
+                            runtimeType={run.runtime}
+                            schema={getSchemaForRuntime(run.runtime)}
+                            config={run.config || {}}
+                            onConfigChange={(newConfig) => handleRunChange(index, { ...run, config: newConfig })}
+                          />
+                        }
+                    </Paper>
+                  </Collapse>
+              </SortableRuntimeItem>
+            ))}
+            {runs.length === 0 && <Typography color="text.secondary" sx={{p:2, textAlign: 'center'}}>No runtimes defined.</Typography>}
+          </List>
+        </SortableContext>
+      </DndContext>
     </Paper>
   );
 }

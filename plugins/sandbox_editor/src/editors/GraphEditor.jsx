@@ -1,11 +1,7 @@
 // plugins/sandbox_editor/src/editors/GraphEditor.jsx
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Box, Typography, List, Collapse, IconButton, Button, TextField, Alert, Chip, InputAdornment } from '@mui/material';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
-import SaveIcon from '@mui/icons-material/Save';
-import DownloadIcon from '@mui/icons-material/Download';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -13,6 +9,7 @@ import { SortableNodeItem } from '../components/SortableNodeItem';
 import { RuntimeEditor } from './RuntimeEditor';
 import { mutate } from '../utils/api';
 import { exportAsJson, importFromJson } from '../utils/fileUtils';
+import { debounce } from '../utils/debounce';
 
 export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack, confirmationService }) {
     const [nodes, setNodes] = useState([]);
@@ -40,14 +37,12 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack,
             await mutate(sandboxId, [{
                 type: 'UPSERT',
                 path: `${basePath}/nodes`,
-                value: nodesToSave, // 只保存干净的数据到后端
+                value: nodesToSave,
             }]);
-            // 确认最终状态
             setNodes(optimisticState);
         } catch (e) {
             setErrorMessage(`Failed to save graph changes: ${e.message}`);
-            // 如果失败，回滚到操作前的状态 (此处的 'nodes' 是闭包捕获的旧状态)
-            setNodes(nodes);
+            throw e;
         }
     };
     
@@ -58,48 +53,27 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack,
             const newIndex = nodes.findIndex(n => n._internal_id === over.id);
             if (oldIndex === -1 || newIndex === -1) return;
 
+            const originalNodes = [...nodes];
             const reorderedNodes = arrayMove(nodes, oldIndex, newIndex);
             const nodesToSave = reorderedNodes.map(({_internal_id, ...rest}) => rest);
-            await syncNodes(nodesToSave, reorderedNodes);
+            await syncNodes(nodesToSave, reorderedNodes).catch(() => setNodes(originalNodes));
         }
-    };
-    
-    const handleSaveAllNodes = async () => {
-        const ids = new Set();
-        for (const node of nodes) {
-            if (!node.id || node.id.trim() === '') {
-                setErrorMessage(`Error: A node has an empty ID.`);
-                return;
-            }
-            if (ids.has(node.id)) {
-                setErrorMessage(`Error: Duplicate node ID "${node.id}" found.`);
-                return;
-            }
-            ids.add(node.id);
-        }
-        const nodesToSave = nodes.map(({_internal_id, ...rest}) => rest);
-        await syncNodes(nodesToSave, nodes);
-        alert('Graph saved!');
     };
     
     const handleDeleteNode = async (internalIdToDelete) => {
-        if (!confirmationService) {
-            console.error('ConfirmationService not available');
-            return;
-        }
-        
         const confirmed = await confirmationService.confirm({
             title: '删除节点确认',
             message: '你确定要删除这个节点吗？',
         });
         if (!confirmed) return;
         
+        const originalNodes = [...nodes];
         const updatedNodes = nodes.filter(n => n._internal_id !== internalIdToDelete);
         const nodesToSave = updatedNodes.map(({_internal_id, ...rest}) => rest);
-        await syncNodes(nodesToSave, updatedNodes);
+        await syncNodes(nodesToSave, updatedNodes).catch(() => setNodes(originalNodes));
     };
 
-    const handleAddNode = () => {
+    const handleAddNode = async () => {
         const newInternalId = `new_node_internal_${Date.now()}`;
         const newNode = { 
             _internal_id: newInternalId,
@@ -108,12 +82,16 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack,
             run: [], 
             metadata: {} 
         };
-        setNodes(prev => [...prev, newNode]);
-        // 使用 _internal_id 作为 key 来展开
+        const originalNodes = [...nodes];
+        const updatedNodes = [...nodes, newNode];
+
+        const nodesToSave = updatedNodes.map(({_internal_id, ...rest}) => rest);
+        await syncNodes(nodesToSave, updatedNodes).catch(() => setNodes(originalNodes));
+        
         setExpandedNodes(prev => ({...prev, [newInternalId]: true}));
         setTimeout(() => {
              newNodeFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        }, 100)
+        }, 100);
     };
 
     const handleExportNode = (internalIdToExport) => {
@@ -122,45 +100,37 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack,
             setErrorMessage('无法找到要导出的节点。');
             return;
         }
-
-        // 在导出前，移除仅用于UI的 _internal_id
         const { _internal_id, ...cleanNode } = nodeToExport;
-        
         exportAsJson(cleanNode, `${cleanNode.id}.json`);
     };
 
     const handleImportNode = async () => {
         try {
             const { data: importedNode } = await importFromJson();
+            if (typeof importedNode !== 'object' || Array.isArray(importedNode) || importedNode === null) throw new Error("导入的文件必须是一个有效的JSON对象。");
+            if (!importedNode.id) throw new Error("导入的节点缺少必需的 'id' 字段。");
+            if (nodes.some(n => n.id === importedNode.id)) throw new Error(`ID为 "${importedNode.id}" 的节点已存在。`);
 
-            // 验证导入的数据
-            if (typeof importedNode !== 'object' || Array.isArray(importedNode) || importedNode === null) {
-                throw new Error("导入的文件必须是一个有效的JSON对象。");
-            }
-            if (!importedNode.id) {
-                throw new Error("导入的节点缺少必需的 'id' 字段。");
-            }
-
-            // 检查ID冲突
-            if (nodes.some(n => n.id === importedNode.id)) {
-                throw new Error(`ID为 "${importedNode.id}" 的节点已存在。请先在文件中修改ID后再导入。`);
-            }
-
-            // 为新节点添加UI所需的内部ID
-            const newNode = {
-                ...importedNode,
-                _internal_id: `${importedNode.id}_${Date.now()}_imported`
-            };
-
-            setNodes(prev => [...prev, newNode]);
-
-            alert(`成功导入节点 "${newNode.id}"。\n\n请记得点击"全部保存"以持久化更改。`);
-
+            const newNode = { ...importedNode, _internal_id: `${importedNode.id}_${Date.now()}_imported` };
+            const originalNodes = [...nodes];
+            const updatedNodes = [...nodes, newNode];
+            const nodesToSave = updatedNodes.map(({_internal_id, ...rest}) => rest);
+            await syncNodes(nodesToSave, updatedNodes).catch(() => setNodes(originalNodes));
+            alert(`成功导入节点 "${newNode.id}"。更改已自动保存。`);
         } catch (e) {
             setErrorMessage(`导入节点失败: ${e.message}`);
         }
     };
     
+    const debouncedSync = useCallback(debounce(async (nodesToSave, optimisticState) => {
+        const originalNodes = [...nodes];
+        try {
+            await syncNodes(nodesToSave, optimisticState);
+        } catch (e) {
+            setNodes(originalNodes);
+        }
+    }, 500), [sandboxId, basePath]);
+
     const handleNodeChange = (index, field, value) => {
         const updatedNodes = [...nodes];
         let finalValue = value;
@@ -169,6 +139,14 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack,
         }
         updatedNodes[index] = { ...updatedNodes[index], [field]: finalValue };
         setNodes(updatedNodes);
+
+        const nodesToSave = updatedNodes.map(({_internal_id, ...rest}) => rest);
+        
+        if (field === 'id' || field === 'depends_on') {
+            debouncedSync(nodesToSave, updatedNodes);
+        } else {
+            syncNodes(nodesToSave, updatedNodes).catch(() => setNodes(nodes));
+        }
     };
 
     const toggleNodeExpand = (internalId) => {
@@ -201,10 +179,8 @@ export function GraphEditor({ sandboxId, basePath, graphName, graphData, onBack,
             <Box sx={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
                 <Button variant="outlined" onClick={onBack}>返回概览</Button>
                 <Typography variant="h5" component="div" sx={{flexGrow: 1}}>正在编辑Graph: {graphName}</Typography>
-                {/* [修改] 将导入按钮改为导入单个节点 */}
                 <Button variant="outlined" startIcon={<UploadFileIcon />} onClick={handleImportNode}>导入节点</Button>
-                <Button variant="outlined" startIcon={<AddIcon />} onClick={handleAddNode}>添加节点</Button>
-                <Button variant="contained" color="success" startIcon={<SaveIcon />} onClick={handleSaveAllNodes}>全部保存</Button>
+                <Button variant="contained" startIcon={<AddIcon />} onClick={handleAddNode}>添加节点</Button>
             </Box>
             {errorMessage && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErrorMessage('')}>{errorMessage}</Alert>}
 

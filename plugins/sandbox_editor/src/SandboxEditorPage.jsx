@@ -118,10 +118,11 @@ export function SandboxEditorPage({ services }) {
         
         try {
             await mutate(currentSandboxId, [{ type: 'UPSERT', path, value: newValue }]);
-            setEditingGeneric(null);
+            // setEditingGeneric(null); // <-- [核心改动] 移除这一行
             await loadSandboxData();
         } catch (err) {
             console.error(`Failed to save value for path "${path}":`, err);
+            // 将错误抛出，以便对话框可以捕获并显示它
             throw err;
         }
     };

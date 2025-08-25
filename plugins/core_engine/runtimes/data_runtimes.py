@@ -134,15 +134,36 @@ class RegexRuntime(RuntimeInterface):
     async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
         try:
             validated_config = self.ConfigModel.model_validate(config)
-            text = validated_config.text
+            text = str(validated_config.text or "") # 确保 text 是字符串
             pattern = validated_config.pattern
             mode = validated_config.mode
+
+            # 打印调试信息
+            print(f"RegexRuntime executing with text: {text}, pattern: {pattern}, mode: {mode}")
             
             if mode == "search":
-                match = re.search(pattern, text)
+                match = re.search(pattern, text, re.DOTALL) # 添加 re.DOTALL 使 . 也能匹配换行符
+
+                print(f"RegexRuntime search match: {match}")
                 if not match:
                     return {"output": None}
-                return {"output": match.groupdict() or match.group(0)}
+                
+                # --- [核心修正] ---
+                # 优先级 1: 如果有命名捕获组，返回字典
+                if match.groupdict():
+                    print(f"RegexRuntime search match (groupdict): {match.groupdict()}")
+                    return {"output": match.groupdict()}
+                
+                # 优先级 2: 如果有匿名捕获组，返回第一个组的内容
+                # match.groups() 返回所有匿名组的元组
+                if match.groups():
+                    print(f"RegexRuntime search match (groups): {match.groups()}")
+                    return {"output": match.groups()[0]} # groups()[0] 等价于 group(1)
+                
+
+                # 优先级 3: 如果都没有，返回完整的匹配 (group 0)
+                print(f"RegexRuntime search match (full match): {match.group(0)}")
+                return {"output": match.group(0)}
             
             elif mode == "find_all":
                 return {"output": re.findall(pattern, text)}

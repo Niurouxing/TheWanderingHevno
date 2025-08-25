@@ -13,9 +13,9 @@ services:
       - ./cli.py:/app/cli.py
       - ./.env:/app/.env.host
     expose:
-      - "8000"
+      - "4399"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      test: ["CMD", "curl", "-f", "http://localhost:4399/"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -35,7 +35,7 @@ services:
       - ./package.json:/app/package.json:delegated
       - node_modules_volume:/app/node_modules:delegated
     environment:
-      - VITE_API_URL=http://backend:8000
+      - VITE_API_URL=http://backend:4399
     depends_on:
       backend:
         condition: service_healthy

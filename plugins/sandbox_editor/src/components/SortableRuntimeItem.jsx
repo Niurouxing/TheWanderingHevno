@@ -7,7 +7,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
-export function SortableRuntimeItem({ id, run, onEdit, onDelete }) {
+export function SortableRuntimeItem({ id, run, onEdit, onDelete, children }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
 
   const style = {
@@ -15,14 +15,15 @@ export function SortableRuntimeItem({ id, run, onEdit, onDelete }) {
     transition,
     zIndex: isDragging ? 1 : 0,
     position: 'relative',
-    backgroundColor: isDragging ? 'rgba(255, 255, 255, 0.1)' : 'transparent'
+    backgroundColor: isDragging ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
+    display: 'flex',
+    flexDirection: 'column'
   };
 
   return (
     <div ref={setNodeRef} style={style}>
       <ListItem
-        // --- [FIX] Removed the "button" prop and the top-level onClick handler ---
-        sx={{ pl: 2, borderBottom: '1px dashed rgba(255, 255, 255, 0.08)' }}
+        sx={{ pl: 2, borderBottom: '1px dashed rgba(255, 255, 255, 0.08)', width: '100%' }}
         secondaryAction={
             <>
                 <IconButton size="small" edge="end" aria-label="edit" onClick={onEdit}>
@@ -39,9 +40,10 @@ export function SortableRuntimeItem({ id, run, onEdit, onDelete }) {
         </ListItemIcon>
         <ListItemText 
             primary={<Chip label={run.runtime || 'Untitled'} size="small" variant="outlined" />} 
-            secondary={`Config keys: ${Object.keys(run.config || {}).length}`} 
+            secondary={run.config?.as ? `as: ${run.config.as}` : `Config keys: ${Object.keys(run.config || {}).length}`}
         />
       </ListItem>
+      {children}
     </div>
   );
 }

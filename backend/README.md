@@ -1059,7 +1059,7 @@ Hevno Engine 允许您通过环境变量动态注册任何与 OpenAI API 兼容�
 2.  **为每个提供商定义配置**:
     对于列表中的每个 ID，您需要定义一组以 `PROVIDER_<ID大写>_` 为前缀的变量：
     *   `PROVIDER_<ID>_TYPE`: 提供商类型。目前仅支持 `"openai_compatible"`。
-    *   `PROVIDER_<ID>_BASE_URL`: 您的 LLM 服务的 API 入口地址 (例如 `http://localhost:8000/v1`)。
+    *   `PROVIDER_<ID>_BASE_URL`: 您的 LLM 服务的 API 入口地址 (例如 `http://localhost:4399/v1`)。
     *   `PROVIDER_<ID>_KEYS_ENV`: 一个**新的环境变量名**，您将在这个变量中存储该服务的 API 密钥。
     *   `PROVIDER_<ID>_MODEL_MAPPING` (可选): 一个逗号分隔的 `代理名称:规范名称` 列表。这允许您在图中使用统一的、与提供商无关的名称（如 `meta/llama3-70b-instruct`），并让 Hevno 自动将其映射到您的本地服务所期望的模型名称（如 `llama3-70b`）。
 

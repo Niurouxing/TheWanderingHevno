@@ -87,9 +87,9 @@ class MemoriaQueryRuntime(RuntimeInterface):
             default="ascending", 
             description="返回结果的排序顺序，基于因果序列号。"
         )
-        format: Literal["raw_entries", "message_list"] = Field(
+        format: Literal["raw_entries", "message_list", "aggregated_message"] = Field(
             default="raw_entries", 
-            description="定义输出格式。'message_list' 专为 llm.default 设计。"
+            description="定义输出格式。'message_list' 专为 llm.default 设计，'aggregated_message' 将内容拼接为单个字符串。"
         )
 
     @classmethod
@@ -98,6 +98,7 @@ class MemoriaQueryRuntime(RuntimeInterface):
 
     async def execute(self, config: Dict[str, Any], context: ExecutionContext, **kwargs) -> Dict[str, Any]:
         try:
+            # (这里省略了您添加的日志代码，但假设它们都存在)
             validated_config = self.ConfigModel.model_validate(config)
             stream_name = validated_config.stream
             
@@ -110,10 +111,12 @@ class MemoriaQueryRuntime(RuntimeInterface):
 
             results = stream.entries
             
-            if validated_config.levels is not None:
+            # [已修正] 只有在列表为真（非None且非空）时才进行过滤
+            if validated_config.levels: 
                 results = [entry for entry in results if entry.level in validated_config.levels]
 
-            if validated_config.tags is not None:
+            # [已修正] 只有在列表为真（非None且非空）时才进行过滤
+            if validated_config.tags:
                 tags_set = set(validated_config.tags)
                 results = [entry for entry in results if tags_set.intersection(entry.tags)]
 
@@ -124,13 +127,24 @@ class MemoriaQueryRuntime(RuntimeInterface):
             reverse = (validated_config.order == "descending")
             results.sort(key=lambda e: e.sequence_id, reverse=reverse)
 
+            # --- [核心修改] 处理返回格式 ---
             if validated_config.format == "message_list":
                 message_list = [
                     {"role": entry.level, "content": entry.content}
                     for entry in results if entry.level in ["user", "model"]
                 ]
                 return {"output": message_list}
+            
+            # --- [新增] 实现 aggregated_message 模式 ---
+            elif validated_config.format == "aggregated_message":
+                # 提取所有过滤后条目的 content 字段
+                content_list = [entry.content for entry in results]
+                # 使用双换行符将它们拼接成一个字符串，这通常能更好地分隔不同的思想或事件
+                aggregated_text = "\n\n".join(content_list)
+                return {"output": aggregated_text}
+
             else: # "raw_entries"
                 return {"output": [entry.model_dump() for entry in results]}
         except Exception as e:
+            logger.error(f"[MemoriaQuery] Error in memoria.query: {e}", exc_info=True)
             return {"error": f"Error in memoria.query: {e}"}

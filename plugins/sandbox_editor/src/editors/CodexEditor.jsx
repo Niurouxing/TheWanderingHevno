@@ -1,14 +1,14 @@
 // plugins/sandbox_editor/src/editors/CodexEditor.jsx
-import React, { useState, useEffect } from 'react';
-import { Box, Typography, List, ListItem, ListItemText, ListItemIcon, Collapse, IconButton, Button, Switch, TextField, MenuItem, Select, Chip, InputAdornment, Alert } from '@mui/material';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Box, Typography, List, Collapse, IconButton, Button, Switch, TextField, MenuItem, Select, Chip, InputAdornment, Alert } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
-import SaveIcon from '@mui/icons-material/Save';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { SortableEntryItem } from '../components/SortableEntryItem';
 import { mutate } from '../utils/api';
+import { debounce } from '../utils/debounce';
 
 export function CodexEditor({ sandboxId, basePath, codexName, codexData, onBack, confirmationService }) {
   const [entries, setEntries] = useState([]);
@@ -32,56 +32,44 @@ export function CodexEditor({ sandboxId, basePath, codexName, codexData, onBack,
 
   const syncEntries = async (entriesToSave, optimisticState) => {
     setErrorMessage('');
-    // 乐观更新UI，使用包含 _internal_id 的状态
-    setEntries(optimisticState || entries.map((e, i) => ({...e, _internal_id: entries[i]._internal_id || `temp_${Date.now()}` })));
+    setEntries(optimisticState);
     try {
       await mutate(sandboxId, [{
         type: 'UPSERT',
         path: `${basePath}/entries`,
-        value: entriesToSave // 只保存干净的数据到后端
+        value: entriesToSave
       }]);
-      // 确认最终状态 (如果 optimisticState 提供了，则使用它)
-      if (optimisticState) {
-          setEntries(optimisticState);
-      }
+      setEntries(optimisticState);
     } catch (e) {
       setErrorMessage(`Failed to save changes: ${e.message}`);
-      // 如果失败，回滚到操作前的状态 (此处的 'entries' 是闭包捕获的旧状态)
-      setEntries(entries);
+      throw e;
     }
   };
 
   const handleDragEnd = async (event) => {
     const { active, over } = event;
     if (active.id !== over.id) {
-      // --- [修复 2/7] 使用 _internal_id 来查找索引 ---
       const oldIndex = entries.findIndex(e => e._internal_id === active.id);
       const newIndex = entries.findIndex(e => e._internal_id === over.id);
       if (oldIndex === -1 || newIndex === -1) return;
 
       const reorderedEntries = arrayMove(entries, oldIndex, newIndex);
-      // 在保存到后端前，移除内部ID
       const entriesToSave = reorderedEntries.map(({_internal_id, ...rest}) => rest);
-      await syncEntries(entriesToSave, reorderedEntries);
+      await syncEntries(entriesToSave, reorderedEntries).catch(() => setEntries(entries));
     }
   };
 
   const handleDelete = async (internalIdToDelete) => {
-    if (!confirmationService) {
-      console.error('ConfirmationService not available');
-      return;
-    }
-    
     const confirmed = await confirmationService.confirm({
       title: '删除条目确认',
       message: '你确定要删除这个条目吗？',
     });
     if (!confirmed) return;
     
-    // --- [修复 3/7] 使用 _internal_id 进行过滤 ---
+    const originalEntries = [...entries];
     const updatedEntries = entries.filter(e => e._internal_id !== internalIdToDelete);
     const entriesToSave = updatedEntries.map(({_internal_id, ...rest}) => rest);
-    await syncEntries(entriesToSave, updatedEntries);
+    await syncEntries(entriesToSave, updatedEntries).catch(() => setEntries(originalEntries));
   };
   
   const handleToggleEnabled = async (internalId, is_enabled) => {
@@ -106,8 +94,7 @@ export function CodexEditor({ sandboxId, basePath, codexName, codexData, onBack,
     }
   };
 
-  const handleAddEntry = () => {
-      // --- [修复 4/7] 添加条目时，同时创建 _internal_id ---
+  const handleAddEntry = async () => {
       const newInternalId = `new_entry_internal_${Date.now()}`;
       const newEntry = {
         _internal_id: newInternalId,
@@ -118,31 +105,24 @@ export function CodexEditor({ sandboxId, basePath, codexName, codexData, onBack,
         keywords: [], 
         is_enabled: true,
       };
+      const originalEntries = [...entries];
       const updatedEntries = [...entries, newEntry];
-      setEntries(updatedEntries);
-      // 使用 _internal_id 作为 key 来展开
       setExpanded(prev => ({...prev, [newInternalId]: true}));
+      
+      const entriesToSave = updatedEntries.map(({_internal_id, ...rest}) => rest);
+      await syncEntries(entriesToSave, updatedEntries).catch(() => setEntries(originalEntries));
   };
 
-  const handleSaveAll = async () => {
-    const ids = new Set();
-    for (const entry of entries) {
-      if (!entry.id || entry.id.trim() === '') {
-        setErrorMessage(`Error: An entry has an empty ID.`);
-        return;
-      }
-      if (ids.has(entry.id)) {
-        setErrorMessage(`Error: Duplicate ID "${entry.id}" found.`);
-        return;
-      }
-      ids.add(entry.id);
+  const debouncedSave = useCallback(debounce(async (updatedEntries) => {
+    const entriesToSave = updatedEntries.map(({_internal_id, ...rest}) => rest);
+    const originalEntries = [...entries];
+    try {
+        await syncEntries(entriesToSave, updatedEntries);
+    } catch (e) {
+        setEntries(originalEntries);
     }
-    // 在保存前，移除所有内部ID
-    const entriesToSave = entries.map(({_internal_id, ...rest}) => rest);
-    await syncEntries(entriesToSave, entries); // 传入乐观状态以保持UI
-    alert('All changes saved!');
-  };
-  
+  }, 500), [sandboxId, basePath]);
+
   const handleEntryChange = (index, field, value) => {
       const updatedEntries = [...entries];
       const entry = updatedEntries[index];
@@ -156,6 +136,13 @@ export function CodexEditor({ sandboxId, basePath, codexName, codexData, onBack,
       
       updatedEntries[index] = { ...entry, [field]: finalValue };
       setEntries(updatedEntries);
+
+      if (field === 'id' || field === 'content' || field === 'keywords') {
+         debouncedSave(updatedEntries);
+      } else {
+         const entriesToSave = updatedEntries.map(({_internal_id, ...rest}) => rest);
+         syncEntries(entriesToSave, updatedEntries).catch(() => setEntries(entries));
+      }
   };
 
   // --- [修复 5/7] 使用 _internal_id 来切换展开状态 ---
@@ -195,11 +182,8 @@ export function CodexEditor({ sandboxId, basePath, codexName, codexData, onBack,
         <Typography variant="h5" gutterBottom component="div" sx={{flexGrow: 1, m: 0}}>
           正在编辑Codex: {codexName}
         </Typography>
-        <Button variant="outlined" color="primary" startIcon={<AddIcon />} onClick={handleAddEntry}>
+        <Button variant="contained" color="primary" startIcon={<AddIcon />} onClick={handleAddEntry}>
           添加条目
-        </Button>
-        <Button variant="contained" color="success" startIcon={<SaveIcon />} onClick={handleSaveAll}>
-          全部保存
         </Button>
       </Box>
       
@@ -207,19 +191,17 @@ export function CodexEditor({ sandboxId, basePath, codexName, codexData, onBack,
 
       <Box sx={{ flexGrow: 1, overflowY: 'auto' }}>
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          {/* --- [修复 6/7] 使用 _internal_id 作为 dnd-kit 的 ID 来源 --- */}
           <SortableContext items={entries.map(e => e._internal_id)} strategy={verticalListSortingStrategy}>
             <List>
               {entries.map((entry, index) => (
-                // --- [修复 7/7] 使用 _internal_id 作为 React key 和组件的唯一标识 ---
                 <SortableEntryItem
                   key={entry._internal_id}
                   id={entry._internal_id}
                   entry={entry}
                   expanded={!!expanded[entry._internal_id]}
                   onToggleExpand={() => toggleExpand(entry._internal_id)}
-                  onToggleEnabled={(id, enabled) => handleToggleEnabled(entry._internal_id, enabled)} // 传递内部ID
-                  onDelete={() => handleDelete(entry._internal_id)} // 传递内部ID
+                  onToggleEnabled={(id, enabled) => handleToggleEnabled(entry._internal_id, enabled)}
+                  onDelete={() => handleDelete(entry._internal_id)}
                 >
                   <Collapse in={!!expanded[entry._internal_id]} timeout="auto" unmountOnExit>
                     {renderEntryForm(entry, index)}

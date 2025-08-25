@@ -295,18 +295,18 @@ REM --- 5. 启动后端和前端服务 ---
 echo [5/5] Starting backend and frontend services...
 echo -----------------------------------------------------------------
 
-echo Starting Python backend server on http://localhost:8000
-start "Backend" /B uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+echo Starting Python backend server on http://localhost:4399
+start "Backend" /B uvicorn backend.main:app --host 127.0.0.1 --port 4399 --reload
 
 echo Starting Node.js frontend server on http://localhost:5173
 REM 设置 VITE_API_URL 环境变量，指向本地后端服务
-start "Frontend" /B cmd /c "set VITE_API_URL=http://127.0.0.1:8000&& npm run dev"
+start "Frontend" /B cmd /c "set VITE_API_URL=http://127.0.0.1:4399&& npm run dev"
 
 echo.
 echo =================================================================
 echo  All services have been started!
 echo.
-echo  - Backend API should be available at: http://localhost:8000
+echo  - Backend API should be available at: http://localhost:4399
 echo  - Frontend Dev Server is running at: http://localhost:5173
 echo.
 echo  You can close this window to stop all processes.
