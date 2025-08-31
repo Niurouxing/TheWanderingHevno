@@ -21,6 +21,12 @@ class RuntimeInstruction(BaseModel):
 class GenericNode(BaseModel):
     id: str
     run: List[RuntimeInstruction]
+    
+    skip: Any = Field(
+        default=False,
+        description="一个布尔值或可求值为布尔值的宏。如果为 true，节点的 'run' 指令将被完全跳过，节点会立即成功并返回一个空输出。"
+    )
+    
     depends_on: Optional[List[str]] = Field(default=None)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 

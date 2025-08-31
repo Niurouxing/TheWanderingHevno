@@ -15,7 +15,7 @@ from .contracts import (
     BeforeConfigEvaluationContext, AfterMacroEvaluationContext,
     SnapshotStoreInterface,
     SandboxStoreInterface,
-    RuntimeInterface, SubGraphRunner
+    RuntimeInterface, SubGraphRunner, MacroEvaluationServiceInterface
 )
 from .dependency_parser import build_dependency_graph_async
 from .registry import RuntimeRegistry
@@ -27,6 +27,8 @@ from .state import (
 )
 from .graph_resolver import GraphResolver
 from .contracts import RuntimeInterface, SubGraphRunner
+
+logger = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
@@ -359,6 +361,31 @@ class ExecutionEngine(SubGraphRunner):
                 queue.put_nowait(sub_id)
 
     async def _execute_node(self, node: GenericNode, context: ExecutionContext) -> Dict[str, Any]:
+        
+        # 在执行任何指令之前，首先检查 skip 条件
+        if node.skip: # 只有当 skip 不为 False, None, 或空字符串时才进行求值
+            try:
+                # 从上下文中获取宏服务
+                macro_service: MacroEvaluationServiceInterface = context.shared.services.macro_evaluation_service
+                
+                # 构建用于求值的上下文（此时没有 pipe 变量）
+                eval_context = macro_service.build_context(context)
+                lock = context.shared.global_write_lock
+                
+                # 求值 skip 字段
+                should_skip = await macro_service.evaluate(node.skip, eval_context, lock)
+                
+                if bool(should_skip):
+                    logger.debug(f"Node '{node.id}' was skipped due to its 'skip' condition evaluating to True.")
+                    # 如果需要跳过，则直接返回一个空的成功结果
+                    # 这使得下游节点可以正常继续执行
+                    return {} 
+            except Exception as e:
+                # 如果 skip 宏本身求值失败，则视为节点执行失败
+                error_message = f"Failed to evaluate 'skip' condition for node '{node.id}': {type(e).__name__}: {e}"
+                logger.error(error_message, exc_info=True)
+                return {"error": error_message, "runtime": "engine.pre_check"}
+
         pipeline_state: Dict[str, Any] = {}
         if not node.run: return {}
         
