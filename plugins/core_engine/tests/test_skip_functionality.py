@@ -249,3 +249,95 @@ class TestSkipFunctionality:
         
         output = final_snapshot.run_output
         assert output["normal_node"]["output"] == "normal execution"
+    
+    async def test_skip_falsy_values(
+        self, 
+        test_engine_setup: Tuple[ExecutionEngineInterface, Container, HookManager],
+        sandbox_factory: callable
+    ):
+        """测试各种falsy值的skip行为"""
+        collection = GraphCollection.model_validate({
+            "main": {
+                "nodes": [
+                    {
+                        "id": "skip_none", 
+                        "skip": None,
+                        "run": [{"runtime": "system.io.input", "config": {"value": "should execute"}}]
+                    },
+                    {
+                        "id": "skip_empty_string", 
+                        "skip": "",
+                        "run": [{"runtime": "system.io.input", "config": {"value": "should execute"}}]
+                    },
+                    {
+                        "id": "skip_zero", 
+                        "skip": 0,
+                        "run": [{"runtime": "system.io.input", "config": {"value": "should execute"}}]
+                    },
+                    {
+                        "id": "skip_empty_list", 
+                        "skip": [],
+                        "run": [{"runtime": "system.io.input", "config": {"value": "should execute"}}]
+                    }
+                ]
+            }
+        })
+        
+        engine, container, _ = test_engine_setup
+        sandbox = await sandbox_factory(graph_collection=collection)
+        
+        updated_sandbox = await engine.step(sandbox, {})
+        snapshot_store = container.resolve("snapshot_store")
+        final_snapshot = snapshot_store.get(updated_sandbox.head_snapshot_id)
+        
+        output = final_snapshot.run_output
+        
+        # All falsy values should result in normal execution
+        assert output["skip_none"]["output"] == "should execute"
+        assert output["skip_empty_string"]["output"] == "should execute"
+        assert output["skip_zero"]["output"] == "should execute"
+        assert output["skip_empty_list"]["output"] == "should execute"
+    
+    async def test_skip_complex_macro_expressions(
+        self, 
+        test_engine_setup: Tuple[ExecutionEngineInterface, Container, HookManager],
+        sandbox_factory: callable
+    ):
+        """测试skip字段中的复杂宏表达式"""
+        collection = GraphCollection.model_validate({
+            "main": {
+                "nodes": [
+                    {
+                        "id": "setup", 
+                        "run": [{"runtime": "system.execute", "config": {"code": "moment.player_level = 5; moment.boss_defeated = True"}}]
+                    },
+                    {
+                        "id": "complex_skip", 
+                        "depends_on": ["setup"],
+                        "skip": "{{ moment.player_level < 10 and moment.boss_defeated }}",
+                        "run": [{"runtime": "system.io.input", "config": {"value": "should not execute"}}]
+                    },
+                    {
+                        "id": "string_skip", 
+                        "depends_on": ["setup"],
+                        "skip": "{{ 'active' if moment.player_level > 10 else 'inactive' }}",
+                        "run": [{"runtime": "system.io.input", "config": {"value": "should not execute"}}]
+                    }
+                ]
+            }
+        })
+        
+        engine, container, _ = test_engine_setup
+        sandbox = await sandbox_factory(graph_collection=collection)
+        
+        updated_sandbox = await engine.step(sandbox, {})
+        snapshot_store = container.resolve("snapshot_store")
+        final_snapshot = snapshot_store.get(updated_sandbox.head_snapshot_id)
+        
+        output = final_snapshot.run_output
+        
+        # Complex boolean expression should evaluate to True (skip)
+        assert output["complex_skip"] == {}
+        
+        # String expressions evaluate to non-empty string which is truthy (skip)
+        assert output["string_skip"] == {}
