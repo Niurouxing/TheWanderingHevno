@@ -9,7 +9,7 @@ import SyncIcon from '@mui/icons-material/Sync';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import { KeyStatusTable } from './components/KeyStatusTable';
 import { ProviderDetails } from './components/ProviderDetails';
-import { fetchProviders, reloadConfig, fetchKeyConfig, addKey, deleteKey, addProvider, deleteProvider, updateProvider } from './utils/api';
+import { fetchProviders, reloadConfig, fetchKeyConfig, addKey, deleteKey, updateKeyConcurrency, addProvider, deleteProvider, updateProvider } from './utils/api';
 import { ProviderEditDialog } from './components/ProviderEditDialog';
 
 export function LLMConfigPage({ services }) {
@@ -99,12 +99,12 @@ export function LLMConfigPage({ services }) {
         }
     };
 
-    const handleAddKey = async () => {
-        if (!newKey.trim() || !selectedProvider) return;
+    const handleAddKey = async (keyEntry) => {
+        if (!keyEntry || !keyEntry.trim() || !selectedProvider) return;
         setLoading(prev => ({ ...prev, action: true }));
         setError('');
         try {
-            await addKey(selectedProvider, newKey.trim());
+            await addKey(selectedProvider, keyEntry.trim());
             setNewKey('');
             await loadKeyData();
         } catch (e) {
@@ -129,6 +129,20 @@ export function LLMConfigPage({ services }) {
             await loadKeyData();
         } catch (e) {
             setError(`删除失败: ${e.message}`);
+        } finally {
+            setLoading(prev => ({ ...prev, action: false }));
+        }
+    };
+
+    const handleUpdateKeyConcurrency = async (keySuffix, newConcurrency) => {
+        if (!selectedProvider) return;
+        setLoading(prev => ({ ...prev, action: true }));
+        setError('');
+        try {
+            await updateKeyConcurrency(selectedProvider, keySuffix, newConcurrency);
+            await loadKeyData();
+        } catch (e) {
+            setError(`更新并发数失败: ${e.message}`);
         } finally {
             setLoading(prev => ({ ...prev, action: false }));
         }
@@ -273,6 +287,7 @@ export function LLMConfigPage({ services }) {
                             setNewKey={setNewKey}
                             onAddKey={handleAddKey}
                             onDeleteKey={handleDeleteKey}
+                            onUpdateKeyConcurrency={handleUpdateKeyConcurrency}
                             onRefresh={loadKeyData}
                         />
                     </>
@@ -294,7 +309,15 @@ export function LLMConfigPage({ services }) {
 }
 
 // --- [新增] 提取密钥管理部分为一个独立的组件以保持整洁 ---
-function KeyManagementSection({ providerId, keyConfig, loading, newKey, setNewKey, onAddKey, onDeleteKey, onRefresh }) {
+function KeyManagementSection({ providerId, keyConfig, loading, newKey, setNewKey, onAddKey, onDeleteKey, onUpdateKeyConcurrency, onRefresh }) {
+    const [concurrency, setConcurrency] = useState(1);
+
+    const handleAddKeyWithConcurrency = () => {
+        const keyEntry = concurrency > 1 ? `${newKey}:${concurrency}` : newKey;
+        onAddKey(keyEntry);
+        setConcurrency(1); // 重置并发数
+    };
+
     return (
         <>
             <Box>
@@ -302,17 +325,61 @@ function KeyManagementSection({ providerId, keyConfig, loading, newKey, setNewKe
                 {loading && !keyConfig ? (
                     <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}><CircularProgress /></Box>
                 ) : (
-                    <KeyStatusTable keys={keyConfig?.keys || []} onDelete={onDeleteKey} isDeleting={loading} />
+                    <KeyStatusTable 
+                        keys={keyConfig?.keys || []} 
+                        onDelete={onDeleteKey} 
+                        onUpdateConcurrency={onUpdateKeyConcurrency}
+                        isDeleting={loading} 
+                    />
                 )}
             </Box>
             <Box>
                 <Typography variant="h6" gutterBottom>为 "{providerId}" 添加新密钥</Typography>
-                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-                    <TextField fullWidth label="新 API 密钥" value={newKey} onChange={(e) => setNewKey(e.target.value)} placeholder="在此处粘贴完整的 API 密钥" variant="outlined" size="small" onKeyPress={(e) => e.key === 'Enter' && onAddKey()} disabled={loading} />
-                    <Button variant="contained" onClick={onAddKey} disabled={loading || !newKey.trim()}>
+                <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                    <TextField 
+                        fullWidth 
+                        label="新 API 密钥" 
+                        value={newKey} 
+                        onChange={(e) => setNewKey(e.target.value)} 
+                        placeholder="在此处粘贴完整的 API 密钥" 
+                        variant="outlined" 
+                        size="small" 
+                        onKeyPress={(e) => e.key === 'Enter' && handleAddKeyWithConcurrency()} 
+                        disabled={loading}
+                        sx={{ flex: '1 1 300px', minWidth: '300px' }}
+                    />
+                    <Box sx={{ display: 'flex', flexDirection: 'column', width: '120px' }}>
+                        <TextField
+                            type="number"
+                            label="最大并发数"
+                            value={concurrency}
+                            onChange={(e) => setConcurrency(Math.max(1, parseInt(e.target.value) || 1))}
+                            inputProps={{ min: 1, max: 100 }}
+                            variant="outlined"
+                            size="small"
+                            disabled={loading}
+                            sx={{ width: '100%' }}
+                        />
+                        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, fontSize: '0.7rem' }}>
+                            范围: 1-100
+                        </Typography>
+                    </Box>
+                    <Button 
+                        variant="contained" 
+                        onClick={handleAddKeyWithConcurrency} 
+                        disabled={loading || !newKey.trim()}
+                        sx={{ 
+                            height: '40px', // 明确设置高度与 TextField small size 匹配
+                            minWidth: '40px',
+                            px: 2
+                        }}
+                    >
                         {loading ? <CircularProgress size={24} color="inherit" /> : <AddIcon />}
                     </Button>
                 </Box>
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                    提示：并发数决定了该密钥可以同时处理的请求数量。根据您的 API 服务性能设置合适的值。
+                </Typography>
             </Box>
             <Button variant="outlined" onClick={onRefresh} disabled={loading} sx={{ alignSelf: 'flex-start' }}>
                 刷新密钥状态

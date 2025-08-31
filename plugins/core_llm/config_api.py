@@ -28,6 +28,7 @@ config_api_router = APIRouter(
 class ApiKeyStatus(BaseModel):
     key_suffix: str
     status: str
+    max_concurrency: int = Field(default=1, description="该密钥的最大并发数")
     rate_limit_until: Optional[float] = None
 
 class KeyConfigResponse(BaseModel):
@@ -35,7 +36,10 @@ class KeyConfigResponse(BaseModel):
     keys: List[ApiKeyStatus]
 
 class AddKeyRequest(BaseModel):
-    key: str = Field(..., min_length=1, description="要添加的完整 API 密钥。")
+    key: str = Field(..., min_length=1, description="要添加的 API 密钥。格式可以是 'key_string' 或 'key_string:concurrency_number'，例如 'mykey:10'。如果不指定并发数，默认为1。")
+
+class UpdateKeyConcurrencyRequest(BaseModel):
+    concurrency: int = Field(..., ge=1, le=100, description="新的并发数，范围 1-100")
 
 # --- [修改] 分离创建和更新请求的模型 ---
 class ProviderConfigRequest(BaseModel):
@@ -266,6 +270,21 @@ async def delete_api_key(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to remove key: {e}")
 
+@config_api_router.put("/{provider_name}/keys/{key_suffix}/concurrency", status_code=200)
+async def update_key_concurrency(
+    provider_name: str,
+    key_suffix: str,
+    request: UpdateKeyConcurrencyRequest,
+    key_manager: KeyPoolManager = Depends(Service("key_pool_manager"))
+):
+    try:
+        key_manager.update_key_concurrency(provider_name, key_suffix, request.concurrency)
+        return {"message": f"Key ending in '...{key_suffix}' for provider '{provider_name}' concurrency updated to {request.concurrency}."}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update key concurrency: {e}")
+
 
 def get_key_pool(
     provider_name: str, 
@@ -289,6 +308,7 @@ async def get_key_configuration(
         key_statuses.append(ApiKeyStatus(
             key_suffix=f"...{key_info.key_string[-4:]}",
             status=key_info.status.value,
+            max_concurrency=key_info.max_concurrency,
             rate_limit_until=key_info.rate_limit_until if key_info.rate_limit_until > 0 else None
         ))
     return KeyConfigResponse(provider=provider_name, keys=key_statuses)

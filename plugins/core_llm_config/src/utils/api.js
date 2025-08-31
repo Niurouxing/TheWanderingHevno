@@ -52,8 +52,8 @@ export async function addKey(providerName, key) {
 }
 
 export async function deleteKey(providerName, keySuffix) {
-    // 从 "..." 中提取最后4位
-    const suffix = keySuffix.slice(-4);
+    // 从 "...xxx" 中提取实际的后缀部分
+    const suffix = keySuffix.startsWith('...') ? keySuffix.slice(3) : keySuffix;
     const response = await fetch(`${BASE_URL}/${providerName}/keys/${suffix}`, {
         method: 'DELETE',
     });
@@ -63,6 +63,21 @@ export async function deleteKey(providerName, keySuffix) {
     }
     // DELETE请求成功时通常没有响应体，直接返回成功状态
     return { message: "Delete successful" };
+}
+
+export async function updateKeyConcurrency(providerName, keySuffix, concurrency) {
+    // 从 "...xxx" 中提取实际的后缀部分
+    const suffix = keySuffix.startsWith('...') ? keySuffix.slice(3) : keySuffix;
+    const response = await fetch(`${BASE_URL}/${providerName}/keys/${suffix}/concurrency`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ concurrency }),
+    });
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({ detail: "Failed to update key concurrency." }));
+        throw new Error(err.detail || `HTTP Error ${response.status}`);
+    }
+    return response.json();
 }
 
 

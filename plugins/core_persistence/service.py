@@ -12,9 +12,14 @@ from pathlib import Path
 from typing import Type, TypeVar, Tuple, Dict, Any, List, Optional
 from uuid import UUID
 
+
+
 import aiofiles
 from pydantic import BaseModel, ValidationError
 from PIL import Image, PngImagePlugin
+
+LARGE_ENOUGH_NUMBER = 100
+PngImagePlugin.MAX_TEXT_CHUNK = LARGE_ENOUGH_NUMBER * (1024**2)
 
 # 导入位于后端内核的自定义序列化工具
 from backend.core.serialization import custom_json_decoder_object_hook
